@@ -1,0 +1,155 @@
+//! The constant blocks the render shaders read, laid out exactly like their WGSL structs
+//! (`Frame` in `shaders/render/frame.wgsl`, `ShadowView` in `shadow.wgsl`, `TonemapParams` in
+//! `post/tonemap.wgsl`, `IblParams` in `ibl.wgsl`). Little-endian `#[repr(C)]` fields of `f32`,
+//! `u32` and arrays of them, checked by `pod_struct!` for size and padding.
+
+use humanart_gpu::pod_struct;
+
+use crate::light::{GpuLight, MAX_LIGHTS, MAX_SHADOWED};
+
+/// Bytes the shaders see at each dynamic offset of the uniform ring: the largest block
+/// ([`FrameUniforms`]) rounded up to 256.
+pub const RING_BINDING_SIZE: u32 = 1536;
+
+pod_struct! {
+    /// The per-frame constants (`struct Frame`).
+    #[derive(Debug, PartialEq)]
+    pub struct FrameUniforms(size = 1488, align = 4) {
+        /// World to clip with the TAA jitter.
+        pub view_proj: [f32; 16],
+        /// World to clip without jitter.
+        pub unjittered_view_proj: [f32; 16],
+        /// The previous frame's unjittered world to clip.
+        pub prev_view_proj: [f32; 16],
+        /// Clip to world of the unjittered matrix.
+        pub inv_view_proj: [f32; 16],
+        /// World to shadow clip per atlas layer.
+        pub shadow_view_proj: [[f32; 16]; MAX_SHADOWED],
+        /// Per layer: near, far, half extent, penumbra.
+        pub shadow_params: [[f32; 4]; MAX_SHADOWED],
+        /// Per layer: 0 orthographic, 1 perspective.
+        pub shadow_kind: [f32; 4],
+        /// Eye position, exposure scale.
+        pub eye_exposure: [f32; 4],
+        /// Width, height, 1 / width, 1 / height.
+        pub viewport: [f32; 4],
+        /// Tile origin x, y in the full image; full width, full height.
+        pub tile: [f32; 4],
+        /// Current jitter (pixels), previous jitter.
+        pub jitter: [f32; 4],
+        /// Environment scale (nits), rotation, specular mip count, light count.
+        pub environment: [f32; 4],
+        /// Backdrop radiance; w = 0 flat, 1 environment.
+        pub background: [f32; 4],
+        /// TAA minimum weight, mode (0 TAA, 1 accumulate), frames accumulated, reset.
+        pub taa: [f32; 4],
+        /// Frame index, debug view, shadow map size, flags.
+        pub counters: [u32; 4],
+        /// The lights.
+        pub lights: [GpuLight; MAX_LIGHTS],
+    }
+}
+
+impl FrameUniforms {
+    /// All zero, no lights.
+    pub const ZERO: Self = Self {
+        view_proj: [0.0; 16],
+        unjittered_view_proj: [0.0; 16],
+        prev_view_proj: [0.0; 16],
+        inv_view_proj: [0.0; 16],
+        shadow_view_proj: [[0.0; 16]; MAX_SHADOWED],
+        shadow_params: [[0.0; 4]; MAX_SHADOWED],
+        shadow_kind: [0.0; 4],
+        eye_exposure: [0.0; 4],
+        viewport: [0.0; 4],
+        tile: [0.0; 4],
+        jitter: [0.0; 4],
+        environment: [0.0; 4],
+        background: [0.0; 4],
+        taa: [0.0; 4],
+        counters: [0; 4],
+        lights: [GpuLight::NONE; MAX_LIGHTS],
+    };
+}
+
+pod_struct! {
+    /// The constants of one shadow-map draw (`struct ShadowView`).
+    #[derive(Debug, PartialEq)]
+    pub struct ShadowViewUniforms(size = 64, align = 4) {
+        /// World to shadow clip.
+        pub view_proj: [f32; 16],
+    }
+}
+
+pod_struct! {
+    /// The constants of the display transform (`struct TonemapParams` of `post/tonemap.wgsl`).
+    #[derive(Debug, PartialEq)]
+    pub struct TonemapUniforms(size = 16, align = 4) {
+        /// The exposure scale.
+        pub exposure: f32,
+        /// Padding to 16 bytes.
+        pub pad: [f32; 3],
+    }
+}
+
+pod_struct! {
+    /// The constants of one IBL dispatch (`struct IblParams`).
+    #[derive(Debug, PartialEq)]
+    pub struct IblUniforms(size = 48, align = 4) {
+        /// Face size written, mip, samples, procedural kind.
+        pub ints: [u32; 4],
+        /// Roughness, source face size, source mip count, unused.
+        pub floats: [f32; 4],
+        /// Towards the sun.
+        pub sun: [f32; 4],
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The sizes the WGSL structs have (uniform layout: 16-byte aligned members).
+    #[test]
+    fn blocks_match_their_wgsl_sizes() {
+        assert_eq!(std::mem::size_of::<FrameUniforms>(), 4 * 64 + 4 * 64 + 4 * 16 + 9 * 16 + 8 * 96);
+        assert!(std::mem::size_of::<FrameUniforms>() as u32 <= RING_BINDING_SIZE);
+        assert_eq!(RING_BINDING_SIZE % 256, 0);
+        assert_eq!(std::mem::size_of::<IblUniforms>(), 48);
+    }
+
+    /// The WGSL source declares the members in the same order as the Rust struct.
+    #[test]
+    fn frame_struct_members_match_the_shader() {
+        let text = humanart_shaders::manifest::source("render/frame.wgsl").unwrap();
+        let start = text.find("struct Frame {").unwrap();
+        let body = &text[start..text[start..].find('}').unwrap() + start];
+        let members: Vec<&str> = body
+            .lines()
+            .map(str::trim)
+            .filter(|l| !l.starts_with("//") && l.contains(':'))
+            .map(|l| l.split(':').next().unwrap().trim())
+            .collect();
+        assert_eq!(
+            members,
+            [
+                "view_proj",
+                "unjittered_view_proj",
+                "prev_view_proj",
+                "inv_view_proj",
+                "shadow_view_proj",
+                "shadow_params",
+                "shadow_kind",
+                "eye_exposure",
+                "viewport",
+                "tile",
+                "jitter",
+                "environment",
+                "background",
+                "taa",
+                "counters",
+                "lights",
+            ]
+        );
+    }
+}

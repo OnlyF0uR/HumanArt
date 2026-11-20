@@ -1,0 +1,18 @@
+[package]
+name = "humanart-capture"
+description = "Scan import, registration, texture transfer, appearance fitting and the statistical model builder."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+humanart-core.workspace = true
+humanart-math.workspace = true
+humanart-io.workspace = true
+humanart-model.workspace = true
+humanart-doc.workspace = true
+
+[lints]
+workspace = true

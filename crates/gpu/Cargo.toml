@@ -1,0 +1,21 @@
+[package]
+name = "humanart-gpu"
+description = "wgpu device management, buffers, the pipeline cache, the timestamp profiler, the readback ring and texture streaming."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+humanart-core.workspace = true
+humanart-math = { workspace = true, features = ["linalg"] }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+wgpu = { workspace = true, features = ["dx12", "metal", "vulkan", "gles"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wgpu = { workspace = true, features = ["webgpu"] }
+
+[lints]
+workspace = true

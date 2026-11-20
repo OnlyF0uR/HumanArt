@@ -1,0 +1,5 @@
+# [PLAT-01] The stable toolchain every build uses.
+[toolchain]
+channel = "1.99.0"
+components = ["clippy", "rustfmt"]
+targets = ["wasm32-unknown-unknown"]

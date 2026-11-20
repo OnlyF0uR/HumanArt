@@ -1,0 +1,216 @@
+{
+  "asset": {
+    "version": "2.0",
+    "generator": "make_fixtures.py"
+  },
+  "scenes": [
+    {
+      "nodes": [
+        0
+      ]
+    }
+  ],
+  "nodes": [
+    {
+      "mesh": 0
+    }
+  ],
+  "meshes": [
+    {
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 1
+          },
+          "indices": 0,
+          "targets": [
+            {
+              "POSITION": 2
+            },
+            {
+              "POSITION": 3
+            }
+          ]
+        }
+      ],
+      "weights": [
+        0.25,
+        0.75
+      ],
+      "extras": {
+        "targetNames": [
+          "up",
+          "corner"
+        ]
+      }
+    }
+  ],
+  "animations": [
+    {
+      "channels": [
+        {
+          "sampler": 0,
+          "target": {
+            "node": 0,
+            "path": "weights"
+          }
+        }
+      ],
+      "samplers": [
+        {
+          "input": 4,
+          "output": 5
+        }
+      ]
+    }
+  ],
+  "accessors": [
+    {
+      "bufferView": 0,
+      "componentType": 5121,
+      "count": 6,
+      "type": "SCALAR"
+    },
+    {
+      "bufferView": 1,
+      "componentType": 5126,
+      "count": 4,
+      "type": "VEC3",
+      "min": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "max": [
+        2.0,
+        2.0,
+        0.0
+      ],
+      "sparse": {
+        "count": 2,
+        "indices": {
+          "bufferView": 2,
+          "componentType": 5123
+        },
+        "values": {
+          "bufferView": 3
+        }
+      }
+    },
+    {
+      "bufferView": 4,
+      "componentType": 5126,
+      "count": 4,
+      "type": "VEC3",
+      "min": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "max": [
+        0.0,
+        0.0,
+        0.30000001192092896
+      ]
+    },
+    {
+      "componentType": 5126,
+      "count": 4,
+      "type": "VEC3",
+      "min": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "max": [
+        0.5,
+        0.5,
+        0.0
+      ],
+      "sparse": {
+        "count": 1,
+        "indices": {
+          "bufferView": 5,
+          "componentType": 5125
+        },
+        "values": {
+          "bufferView": 6
+        }
+      }
+    },
+    {
+      "bufferView": 7,
+      "componentType": 5126,
+      "count": 2,
+      "type": "SCALAR",
+      "min": [
+        0.0
+      ],
+      "max": [
+        1.0
+      ]
+    },
+    {
+      "bufferView": 8,
+      "componentType": 5126,
+      "count": 4,
+      "type": "SCALAR"
+    }
+  ],
+  "bufferViews": [
+    {
+      "buffer": 0,
+      "byteOffset": 0,
+      "byteLength": 6,
+      "target": 34963
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 8,
+      "byteLength": 48,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 56,
+      "byteLength": 4
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 60,
+      "byteLength": 24
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 84,
+      "byteLength": 48,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 132,
+      "byteLength": 4
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 136,
+      "byteLength": 12
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 148,
+      "byteLength": 8
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 156,
+      "byteLength": 16
+    }
+  ],
+  "buffers": [
+    {
+      "byteLength": 172,
+      "uri": "sparse%20morph.bin"
+    }
+  ]
+}

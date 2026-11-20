@@ -1,0 +1,26 @@
+[package]
+name = "humanart-runtime"
+description = "The game-facing library: loads a runtime package, evaluates and renders a character on the game's device."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+humanart-core.workspace = true
+humanart-math.workspace = true
+humanart-io.workspace = true
+humanart-model.workspace = true
+humanart-gpu.workspace = true
+humanart-shaders.workspace = true
+humanart-render.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+wgpu = { workspace = true, features = ["dx12", "metal", "vulkan", "gles"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wgpu = { workspace = true, features = ["webgpu"] }
+
+[lints]
+workspace = true

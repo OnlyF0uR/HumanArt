@@ -1,0 +1,25 @@
+[package]
+name = "humanart-render"
+description = "The frame graph and the render passes: skin, eyes, hair, teeth, lighting, post, debug views and stills."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+humanart-core.workspace = true
+humanart-math.workspace = true
+humanart-io.workspace = true
+humanart-model.workspace = true
+humanart-gpu.workspace = true
+humanart-shaders.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+wgpu = { workspace = true, features = ["dx12", "metal", "vulkan", "gles"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wgpu = { workspace = true, features = ["webgpu"] }
+
+[lints]
+workspace = true

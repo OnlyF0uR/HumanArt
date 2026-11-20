@@ -1,0 +1,25 @@
+[package]
+name = "humanart-shaders"
+description = "Every WGSL shader, the shader manifest and the include preprocessor, with naga validation tests."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+humanart-core.workspace = true
+humanart-gpu.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+wgpu = { workspace = true, features = ["dx12", "metal", "vulkan", "gles"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wgpu = { workspace = true, features = ["webgpu"] }
+
+[dev-dependencies]
+# The CPU references the GPU library tests compare against [AC-WP05-2] (tests only).
+humanart-math = { workspace = true, features = ["linalg", "color"] }
+
+[lints]
+workspace = true

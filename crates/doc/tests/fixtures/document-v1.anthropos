@@ -1,0 +1,151 @@
+humanart-character 1
+
+[meta]
+created = 1763500000000
+id = "0123456789abcdef0000000000000001"
+modified = 1763500123456
+name = "Ada \"test\" Lovelace"
+template = "humanart-template"
+template_version = 3
+
+[settings]
+protect_human_edits = true
+
+[author agent.assistant]
+kind = "agent"
+name = "Assistant"
+
+[author human.artist]
+kind = "human"
+name = "Artist"
+
+[params]
+expression.au12_lip_corner_puller.l = 0.6
+eyes.iris.color.l = [0.2,0.1,0.05]
+eyes.iris.heterochromia = "central"
+face.nose.bridge_height = 0.35
+skin.pores.density_map = "332890662c53a239ac1212c073ac5791"
+
+[param_authors]
+expression.au12_lip_corner_puller.l = "agent.assistant"
+eyes.iris.color.l = "human.artist"
+eyes.iris.heterochromia = "agent.assistant"
+face.nose.bridge_height = "human.artist"
+skin.pores.density_map = "human.artist"
+
+[pose]
+neck-01 = [0.0,0.0,0.0,1.0]
+
+[sculpt_layer 0123456789abcdef000000000000000a]
+author = "human.artist"
+blend = "additive"
+created_by_command = "0123456789abcdef0000000000000063"
+locked = false
+name = "Nose tweak"
+opacity = 0.75
+payload = "871ae180fabb0d90a577fdd5977c0baf"
+region = "nasal-tip"
+visible = true
+
+[sculpt_layer 0123456789abcdef000000000000000b]
+author = "agent.assistant"
+blend = "additive"
+created_by_command = null
+locked = true
+name = "Whole body"
+opacity = 1.0
+payload = null
+region = null
+visible = false
+
+[skin_layer 0123456789abcdef0000000000000014]
+author = "agent.assistant"
+blend = "multiply"
+channels = ["albedo_multiply","freckle_mask"]
+locked = false
+name = "Freckles"
+opacity = 0.5
+region = "cheek-L"
+source = {"generator":"freckles","kind":"procedural","params":{"density":0.4,"size":0.002},"seed":42}
+visible = true
+
+[skin_layer 0123456789abcdef0000000000000015]
+author = "human.artist"
+blend = "mix"
+channels = ["normal_detail"]
+locked = true
+name = "Scar"
+opacity = 1.0
+region = null
+source = {"kind":"painted","texture":"f51c0f84208bc235b819195a4dd90bd1"}
+visible = true
+
+[skin_layer 0123456789abcdef0000000000000016]
+author = "human.artist"
+blend = "overlay"
+channels = ["albedo_tint","roughness"]
+locked = false
+name = "Captured"
+opacity = 0.25
+region = null
+source = {"kind":"captured","set":"928c120e9ab73e93229b5f617348fc11"}
+visible = false
+
+[groom 0123456789abcdef000000000000001e]
+author = "human.artist"
+guides = "695727c06714e24c2b11d41752c49a15"
+kind = "scalp"
+locked = false
+maps = {"density":"b84e043e75667f54930ab3978fa28fbd"}
+name = "Short crop"
+params = {"curl_radius":0.01}
+seed = 7
+visible = true
+
+[expression_preset 0123456789abcdef0000000000000028]
+name = "Smile"
+weights = {"expression.au06_cheek_raiser.l":0.5,"expression.au12_lip_corner_puller.l":1.0}
+
+[pose_preset 0123456789abcdef0000000000000029]
+joints = {"neck-01":[0.0,0.0,0.25881904510252074,0.9659258262890683]}
+name = "Head tilt"
+
+[lock 0123456789abcdef0000000000000032]
+kind = "region"
+owner = "human.artist"
+target = "nasal-tip"
+
+[lock 0123456789abcdef0000000000000033]
+kind = "parameter"
+owner = "agent.assistant"
+target = "identity.age"
+
+[pin 0123456789abcdef0000000000000034]
+landmark = "nose.tip"
+owner = "human.artist"
+position = [0.0,1.62,0.11]
+
+[snapshot 0123456789abcdef000000000000003c]
+author = "human.artist"
+created = 1763500100000
+name = "Before nose"
+state = "5f7ecbb60f303d24928863f9c1a0d94b"
+
+[attachment 0123456789abcdef0000000000000046]
+author = "agent.assistant"
+binding = "rigid"
+format = "obj"
+joint = "head"
+materials = "1c859690bdda2fffda981ff4c2a36f34"
+mesh = "4d0fc46c35c7e5eec92364e52ac0deac"
+name = "Glasses"
+rotation = [0.0,0.0,0.0,1.0]
+scale = [1.0,1.0,1.0]
+translation = [0.0,0.05,0.09]
+visible = true
+
+[reference 0123456789abcdef0000000000000050]
+hash = "07a15f3d9f6408bdc3b166d5403a85c3"
+kind = "photo"
+name = "Front photo"
+path = "photos/front.png"

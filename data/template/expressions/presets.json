@@ -1,0 +1,395 @@
+{
+ "format": "humanart-expression-presets",
+ "version": 1,
+ "description": "Expression presets [EXP-07]: neutral; the six basic emotions at three intensities, built from the prototype action-unit sets associated with each emotion in the FACS/EMFACS literature (Ekman and Friesen), with authored per-unit weights (model choices, not measurements); speech-neutral visemes (the 15-viseme set sil, PP, FF, TH, DD, kk, CH, SS, nn, RR, aa, E, ih, oh, ou) with authored control values; and the range-of-motion sweep, which animates every control alone from 0 to 1 and back over 2 x frames_per_control frames. Control names are the control rig's (rig.json); values are in [0, 1].",
+ "sweep": {
+  "frames_per_control": 30
+ },
+ "presets": [
+  {
+   "name": "neutral",
+   "group": "neutral",
+   "controls": {}
+  },
+  {
+   "name": "happiness.low",
+   "group": "emotion",
+   "controls": {
+    "expression.au06_cheek_raiser.l": 0.264,
+    "expression.au06_cheek_raiser.r": 0.264,
+    "expression.au12_lip_corner_puller.l": 0.33,
+    "expression.au12_lip_corner_puller.r": 0.33,
+    "expression.au25_lips_part": 0.099
+   }
+  },
+  {
+   "name": "happiness.medium",
+   "group": "emotion",
+   "controls": {
+    "expression.au06_cheek_raiser.l": 0.528,
+    "expression.au06_cheek_raiser.r": 0.528,
+    "expression.au12_lip_corner_puller.l": 0.66,
+    "expression.au12_lip_corner_puller.r": 0.66,
+    "expression.au25_lips_part": 0.198
+   }
+  },
+  {
+   "name": "happiness.high",
+   "group": "emotion",
+   "controls": {
+    "expression.au06_cheek_raiser.l": 0.8,
+    "expression.au06_cheek_raiser.r": 0.8,
+    "expression.au12_lip_corner_puller.l": 1.0,
+    "expression.au12_lip_corner_puller.r": 1.0,
+    "expression.au25_lips_part": 0.3
+   }
+  },
+  {
+   "name": "sadness.low",
+   "group": "emotion",
+   "controls": {
+    "expression.au01_inner_brow_raiser.l": 0.33,
+    "expression.au01_inner_brow_raiser.r": 0.33,
+    "expression.au04_brow_lowerer.l": 0.198,
+    "expression.au04_brow_lowerer.r": 0.198,
+    "expression.au15_lip_corner_depressor.l": 0.264,
+    "expression.au15_lip_corner_depressor.r": 0.264,
+    "expression.au17_chin_raiser": 0.099
+   }
+  },
+  {
+   "name": "sadness.medium",
+   "group": "emotion",
+   "controls": {
+    "expression.au01_inner_brow_raiser.l": 0.66,
+    "expression.au01_inner_brow_raiser.r": 0.66,
+    "expression.au04_brow_lowerer.l": 0.396,
+    "expression.au04_brow_lowerer.r": 0.396,
+    "expression.au15_lip_corner_depressor.l": 0.528,
+    "expression.au15_lip_corner_depressor.r": 0.528,
+    "expression.au17_chin_raiser": 0.198
+   }
+  },
+  {
+   "name": "sadness.high",
+   "group": "emotion",
+   "controls": {
+    "expression.au01_inner_brow_raiser.l": 1.0,
+    "expression.au01_inner_brow_raiser.r": 1.0,
+    "expression.au04_brow_lowerer.l": 0.6,
+    "expression.au04_brow_lowerer.r": 0.6,
+    "expression.au15_lip_corner_depressor.l": 0.8,
+    "expression.au15_lip_corner_depressor.r": 0.8,
+    "expression.au17_chin_raiser": 0.3
+   }
+  },
+  {
+   "name": "surprise.low",
+   "group": "emotion",
+   "controls": {
+    "expression.au01_inner_brow_raiser.l": 0.33,
+    "expression.au01_inner_brow_raiser.r": 0.33,
+    "expression.au02_outer_brow_raiser.l": 0.33,
+    "expression.au02_outer_brow_raiser.r": 0.33,
+    "expression.au05_upper_lid_raiser.l": 0.165,
+    "expression.au05_upper_lid_raiser.r": 0.165,
+    "expression.au25_lips_part": 0.198,
+    "expression.au26_jaw_drop": 0.231
+   }
+  },
+  {
+   "name": "surprise.medium",
+   "group": "emotion",
+   "controls": {
+    "expression.au01_inner_brow_raiser.l": 0.66,
+    "expression.au01_inner_brow_raiser.r": 0.66,
+    "expression.au02_outer_brow_raiser.l": 0.66,
+    "expression.au02_outer_brow_raiser.r": 0.66,
+    "expression.au05_upper_lid_raiser.l": 0.33,
+    "expression.au05_upper_lid_raiser.r": 0.33,
+    "expression.au25_lips_part": 0.396,
+    "expression.au26_jaw_drop": 0.462
+   }
+  },
+  {
+   "name": "surprise.high",
+   "group": "emotion",
+   "controls": {
+    "expression.au01_inner_brow_raiser.l": 1.0,
+    "expression.au01_inner_brow_raiser.r": 1.0,
+    "expression.au02_outer_brow_raiser.l": 1.0,
+    "expression.au02_outer_brow_raiser.r": 1.0,
+    "expression.au05_upper_lid_raiser.l": 0.5,
+    "expression.au05_upper_lid_raiser.r": 0.5,
+    "expression.au25_lips_part": 0.6,
+    "expression.au26_jaw_drop": 0.7
+   }
+  },
+  {
+   "name": "fear.low",
+   "group": "emotion",
+   "controls": {
+    "expression.au01_inner_brow_raiser.l": 0.33,
+    "expression.au01_inner_brow_raiser.r": 0.33,
+    "expression.au02_outer_brow_raiser.l": 0.264,
+    "expression.au02_outer_brow_raiser.r": 0.264,
+    "expression.au04_brow_lowerer.l": 0.198,
+    "expression.au04_brow_lowerer.r": 0.198,
+    "expression.au05_upper_lid_raiser.l": 0.264,
+    "expression.au05_upper_lid_raiser.r": 0.264,
+    "expression.au07_lid_tightener.l": 0.132,
+    "expression.au07_lid_tightener.r": 0.132,
+    "expression.au20_lip_stretcher.l": 0.264,
+    "expression.au20_lip_stretcher.r": 0.264,
+    "expression.au25_lips_part": 0.165,
+    "expression.au26_jaw_drop": 0.132
+   }
+  },
+  {
+   "name": "fear.medium",
+   "group": "emotion",
+   "controls": {
+    "expression.au01_inner_brow_raiser.l": 0.66,
+    "expression.au01_inner_brow_raiser.r": 0.66,
+    "expression.au02_outer_brow_raiser.l": 0.528,
+    "expression.au02_outer_brow_raiser.r": 0.528,
+    "expression.au04_brow_lowerer.l": 0.396,
+    "expression.au04_brow_lowerer.r": 0.396,
+    "expression.au05_upper_lid_raiser.l": 0.528,
+    "expression.au05_upper_lid_raiser.r": 0.528,
+    "expression.au07_lid_tightener.l": 0.264,
+    "expression.au07_lid_tightener.r": 0.264,
+    "expression.au20_lip_stretcher.l": 0.528,
+    "expression.au20_lip_stretcher.r": 0.528,
+    "expression.au25_lips_part": 0.33,
+    "expression.au26_jaw_drop": 0.264
+   }
+  },
+  {
+   "name": "fear.high",
+   "group": "emotion",
+   "controls": {
+    "expression.au01_inner_brow_raiser.l": 1.0,
+    "expression.au01_inner_brow_raiser.r": 1.0,
+    "expression.au02_outer_brow_raiser.l": 0.8,
+    "expression.au02_outer_brow_raiser.r": 0.8,
+    "expression.au04_brow_lowerer.l": 0.6,
+    "expression.au04_brow_lowerer.r": 0.6,
+    "expression.au05_upper_lid_raiser.l": 0.8,
+    "expression.au05_upper_lid_raiser.r": 0.8,
+    "expression.au07_lid_tightener.l": 0.4,
+    "expression.au07_lid_tightener.r": 0.4,
+    "expression.au20_lip_stretcher.l": 0.8,
+    "expression.au20_lip_stretcher.r": 0.8,
+    "expression.au25_lips_part": 0.5,
+    "expression.au26_jaw_drop": 0.4
+   }
+  },
+  {
+   "name": "anger.low",
+   "group": "emotion",
+   "controls": {
+    "expression.au04_brow_lowerer.l": 0.33,
+    "expression.au04_brow_lowerer.r": 0.33,
+    "expression.au05_upper_lid_raiser.l": 0.165,
+    "expression.au05_upper_lid_raiser.r": 0.165,
+    "expression.au07_lid_tightener.l": 0.264,
+    "expression.au07_lid_tightener.r": 0.264,
+    "expression.au23_lip_tightener": 0.264,
+    "expression.au24_lip_pressor": 0.132
+   }
+  },
+  {
+   "name": "anger.medium",
+   "group": "emotion",
+   "controls": {
+    "expression.au04_brow_lowerer.l": 0.66,
+    "expression.au04_brow_lowerer.r": 0.66,
+    "expression.au05_upper_lid_raiser.l": 0.33,
+    "expression.au05_upper_lid_raiser.r": 0.33,
+    "expression.au07_lid_tightener.l": 0.528,
+    "expression.au07_lid_tightener.r": 0.528,
+    "expression.au23_lip_tightener": 0.528,
+    "expression.au24_lip_pressor": 0.264
+   }
+  },
+  {
+   "name": "anger.high",
+   "group": "emotion",
+   "controls": {
+    "expression.au04_brow_lowerer.l": 1.0,
+    "expression.au04_brow_lowerer.r": 1.0,
+    "expression.au05_upper_lid_raiser.l": 0.5,
+    "expression.au05_upper_lid_raiser.r": 0.5,
+    "expression.au07_lid_tightener.l": 0.8,
+    "expression.au07_lid_tightener.r": 0.8,
+    "expression.au23_lip_tightener": 0.8,
+    "expression.au24_lip_pressor": 0.4
+   }
+  },
+  {
+   "name": "disgust.low",
+   "group": "emotion",
+   "controls": {
+    "expression.au09_nose_wrinkler.l": 0.33,
+    "expression.au09_nose_wrinkler.r": 0.33,
+    "expression.au10_upper_lip_raiser.l": 0.198,
+    "expression.au10_upper_lip_raiser.r": 0.198,
+    "expression.au15_lip_corner_depressor.l": 0.165,
+    "expression.au15_lip_corner_depressor.r": 0.165,
+    "expression.au16_lower_lip_depressor": 0.132,
+    "expression.au17_chin_raiser": 0.099
+   }
+  },
+  {
+   "name": "disgust.medium",
+   "group": "emotion",
+   "controls": {
+    "expression.au09_nose_wrinkler.l": 0.66,
+    "expression.au09_nose_wrinkler.r": 0.66,
+    "expression.au10_upper_lip_raiser.l": 0.396,
+    "expression.au10_upper_lip_raiser.r": 0.396,
+    "expression.au15_lip_corner_depressor.l": 0.33,
+    "expression.au15_lip_corner_depressor.r": 0.33,
+    "expression.au16_lower_lip_depressor": 0.264,
+    "expression.au17_chin_raiser": 0.198
+   }
+  },
+  {
+   "name": "disgust.high",
+   "group": "emotion",
+   "controls": {
+    "expression.au09_nose_wrinkler.l": 1.0,
+    "expression.au09_nose_wrinkler.r": 1.0,
+    "expression.au10_upper_lip_raiser.l": 0.6,
+    "expression.au10_upper_lip_raiser.r": 0.6,
+    "expression.au15_lip_corner_depressor.l": 0.5,
+    "expression.au15_lip_corner_depressor.r": 0.5,
+    "expression.au16_lower_lip_depressor": 0.4,
+    "expression.au17_chin_raiser": 0.3
+   }
+  },
+  {
+   "name": "viseme.sil",
+   "group": "viseme",
+   "controls": {}
+  },
+  {
+   "name": "viseme.PP",
+   "group": "viseme",
+   "controls": {
+    "viseme.lip-closure": 1.0,
+    "expression.au24_lip_pressor": 0.3
+   }
+  },
+  {
+   "name": "viseme.FF",
+   "group": "viseme",
+   "controls": {
+    "viseme.labiodental": 1.0,
+    "expression.au25_lips_part": 0.2
+   }
+  },
+  {
+   "name": "viseme.TH",
+   "group": "viseme",
+   "controls": {
+    "expression.au25_lips_part": 0.5,
+    "expression.au26_jaw_drop": 0.2,
+    "expression.tongue_out": 0.25
+   }
+  },
+  {
+   "name": "viseme.DD",
+   "group": "viseme",
+   "controls": {
+    "expression.au25_lips_part": 0.5,
+    "expression.au26_jaw_drop": 0.25,
+    "expression.tongue_up": 0.5
+   }
+  },
+  {
+   "name": "viseme.kk",
+   "group": "viseme",
+   "controls": {
+    "expression.au25_lips_part": 0.5,
+    "expression.au26_jaw_drop": 0.35
+   }
+  },
+  {
+   "name": "viseme.CH",
+   "group": "viseme",
+   "controls": {
+    "viseme.funnel": 0.7,
+    "expression.au25_lips_part": 0.4
+   }
+  },
+  {
+   "name": "viseme.SS",
+   "group": "viseme",
+   "controls": {
+    "viseme.stretch": 0.6,
+    "expression.au25_lips_part": 0.4
+   }
+  },
+  {
+   "name": "viseme.nn",
+   "group": "viseme",
+   "controls": {
+    "expression.au25_lips_part": 0.4,
+    "expression.au26_jaw_drop": 0.2,
+    "expression.tongue_up": 0.6
+   }
+  },
+  {
+   "name": "viseme.RR",
+   "group": "viseme",
+   "controls": {
+    "viseme.funnel": 0.5,
+    "expression.au18_lip_pucker": 0.3
+   }
+  },
+  {
+   "name": "viseme.aa",
+   "group": "viseme",
+   "controls": {
+    "viseme.jaw-open-wide": 1.0,
+    "expression.au25_lips_part": 0.6
+   }
+  },
+  {
+   "name": "viseme.E",
+   "group": "viseme",
+   "controls": {
+    "viseme.stretch": 0.7,
+    "expression.au26_jaw_drop": 0.4,
+    "expression.au25_lips_part": 0.5
+   }
+  },
+  {
+   "name": "viseme.ih",
+   "group": "viseme",
+   "controls": {
+    "viseme.stretch": 0.5,
+    "expression.au26_jaw_drop": 0.25,
+    "expression.au25_lips_part": 0.4
+   }
+  },
+  {
+   "name": "viseme.oh",
+   "group": "viseme",
+   "controls": {
+    "viseme.jaw-open-round": 1.0,
+    "viseme.funnel": 0.4
+   }
+  },
+  {
+   "name": "viseme.ou",
+   "group": "viseme",
+   "controls": {
+    "viseme.pucker": 1.0,
+    "expression.au25_lips_part": 0.2
+   }
+  }
+ ]
+}

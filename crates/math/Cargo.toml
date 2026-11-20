@@ -1,0 +1,21 @@
+[package]
+name = "humanart-math"
+description = "Vectors, matrices, quaternions, f16, colour science, dense and sparse solvers, geometry and curves."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+humanart-core.workspace = true
+
+# Temporary build isolation while the modules are written in parallel; all become unconditional.
+[features]
+default = ["linalg", "solve", "color"]
+linalg = []
+solve = []
+color = []
+
+[lints]
+workspace = true

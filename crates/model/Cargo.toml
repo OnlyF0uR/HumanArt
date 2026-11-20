@@ -1,0 +1,20 @@
+[package]
+name = "humanart-model"
+description = "The character model: template topology, regions, UVs, identity, expression, skeleton and skinning data, and the CPU reference evaluation."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+humanart-core.workspace = true
+humanart-math = { workspace = true, features = ["linalg", "solve"] }
+humanart-io = { workspace = true, features = ["json", "lz", "obj", "ply"] }
+
+[dev-dependencies]
+# why: the template generator's test previews write PNGs.
+humanart-io = { workspace = true, features = ["png"] }
+
+[lints]
+workspace = true

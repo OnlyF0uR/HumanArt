@@ -1,0 +1,187 @@
+{
+  "asset": {
+    "version": "2.0",
+    "generator": "make_fixtures.py"
+  },
+  "extensionsUsed": [
+    "KHR_materials_emissive_strength",
+    "KHR_materials_ior",
+    "KHR_materials_specular",
+    "KHR_texture_transform"
+  ],
+  "scene": 0,
+  "scenes": [
+    {
+      "name": "scene",
+      "nodes": [
+        0
+      ]
+    }
+  ],
+  "nodes": [
+    {
+      "name": "tri",
+      "mesh": 0,
+      "translation": [
+        0.0,
+        1.5,
+        0.0
+      ],
+      "rotation": [
+        0.0,
+        0.0,
+        0.6,
+        0.8
+      ]
+    }
+  ],
+  "meshes": [
+    {
+      "name": "triangle",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 1,
+            "TEXCOORD_0": 2
+          },
+          "indices": 0,
+          "material": 0
+        }
+      ]
+    }
+  ],
+  "materials": [
+    {
+      "name": "skin",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [
+          0.8,
+          0.6,
+          0.5,
+          1.0
+        ],
+        "metallicFactor": 0.0,
+        "roughnessFactor": 0.5,
+        "baseColorTexture": {
+          "index": 0,
+          "extensions": {
+            "KHR_texture_transform": {
+              "offset": [
+                0.5,
+                0.0
+              ],
+              "scale": [
+                2.0,
+                2.0
+              ]
+            }
+          }
+        }
+      },
+      "doubleSided": true,
+      "extensions": {
+        "KHR_materials_emissive_strength": {
+          "emissiveStrength": 2.0
+        },
+        "KHR_materials_ior": {
+          "ior": 1.4
+        },
+        "KHR_materials_specular": {
+          "specularFactor": 0.5
+        }
+      },
+      "extras": {
+        "humanart": {
+          "subsurfaceRadius": [
+            1.0,
+            0.2,
+            0.1
+          ]
+        }
+      }
+    }
+  ],
+  "textures": [
+    {
+      "sampler": 0,
+      "source": 0
+    }
+  ],
+  "images": [
+    {
+      "uri": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAFoEvQfAAAADUlEQVR42mN8d9UwAQAHAwJWp2cZgQAAACB0RVh0Q29tbWVudABtYWRlIGJ5IG1ha2VfZml4dHVyZXMucHk0zX4UAAAAAElFTkSuQmCC"
+    }
+  ],
+  "samplers": [
+    {
+      "magFilter": 9729,
+      "minFilter": 9987,
+      "wrapS": 33071,
+      "wrapT": 33648
+    }
+  ],
+  "accessors": [
+    {
+      "bufferView": 0,
+      "componentType": 5123,
+      "count": 3,
+      "type": "SCALAR"
+    },
+    {
+      "bufferView": 1,
+      "componentType": 5126,
+      "count": 3,
+      "type": "VEC3",
+      "min": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "max": [
+        1.0,
+        1.0,
+        0.0
+      ]
+    },
+    {
+      "bufferView": 2,
+      "componentType": 5126,
+      "count": 3,
+      "type": "VEC2"
+    }
+  ],
+  "bufferViews": [
+    {
+      "buffer": 0,
+      "byteOffset": 0,
+      "byteLength": 6,
+      "target": 34963
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 8,
+      "byteLength": 36,
+      "target": 34962
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 44,
+      "byteLength": 24,
+      "target": 34962
+    }
+  ],
+  "buffers": [
+    {
+      "byteLength": 68,
+      "uri": "data:application/octet-stream;base64,AAABAAIAAAAAAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8="
+    }
+  ],
+  "extras": {
+    "humanart": {
+      "regions": [
+        1,
+        2
+      ]
+    }
+  }
+}

@@ -1,0 +1,15 @@
+# Everything is stored and checked out with LF, so text formats round-trip byte-identically
+# [DOC-21] and shell scripts run in Git Bash, Linux and macOS alike.
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.ttf binary
+*.hdr binary
+*.exr binary
+*.ktx2 binary
+*.glb binary
+*.antmpl binary
+*.anchar binary
+*.anthair binary
+*.bin binary
+*.ply binary

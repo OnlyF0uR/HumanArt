@@ -1,0 +1,91 @@
+{
+  "asset": {
+    "version": "2.0",
+    "generator": "make_fixtures.py"
+  },
+  "extensionsUsed": [
+    "KHR_mesh_quantization"
+  ],
+  "extensionsRequired": [
+    "KHR_mesh_quantization"
+  ],
+  "scenes": [
+    {
+      "nodes": [
+        0
+      ]
+    }
+  ],
+  "nodes": [
+    {
+      "mesh": 0,
+      "scale": [
+        0.001,
+        0.001,
+        0.001
+      ]
+    }
+  ],
+  "meshes": [
+    {
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 0,
+            "NORMAL": 1,
+            "TEXCOORD_0": 2
+          }
+        }
+      ]
+    }
+  ],
+  "accessors": [
+    {
+      "bufferView": 0,
+      "componentType": 5122,
+      "count": 3,
+      "type": "VEC3",
+      "min": [
+        0,
+        0,
+        -500
+      ],
+      "max": [
+        1000,
+        1000,
+        32767
+      ]
+    },
+    {
+      "bufferView": 0,
+      "byteOffset": 8,
+      "componentType": 5120,
+      "normalized": true,
+      "count": 3,
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 0,
+      "byteOffset": 12,
+      "componentType": 5123,
+      "normalized": true,
+      "count": 3,
+      "type": "VEC2"
+    }
+  ],
+  "bufferViews": [
+    {
+      "buffer": 0,
+      "byteOffset": 0,
+      "byteLength": 48,
+      "byteStride": 16,
+      "target": 34962
+    }
+  ],
+  "buffers": [
+    {
+      "byteLength": 48,
+      "uri": "data:application/octet-stream;base64,AAAAAAAAAAAAAH8AAAAAAOgDAAAM/gAAAIAAAP//AAAAAOgD/38AAFpaAAAAAACA"
+    }
+  ]
+}

@@ -1,0 +1,976 @@
+{
+ "controls": [
+  "expression.au01_inner_brow_raiser.l",
+  "expression.au01_inner_brow_raiser.r",
+  "expression.au02_outer_brow_raiser.l",
+  "expression.au02_outer_brow_raiser.r",
+  "expression.au04_brow_lowerer.l",
+  "expression.au04_brow_lowerer.r",
+  "expression.au05_upper_lid_raiser.l",
+  "expression.au05_upper_lid_raiser.r",
+  "expression.au06_cheek_raiser.l",
+  "expression.au06_cheek_raiser.r",
+  "expression.au07_lid_tightener.l",
+  "expression.au07_lid_tightener.r",
+  "expression.au09_nose_wrinkler.l",
+  "expression.au09_nose_wrinkler.r",
+  "expression.au10_upper_lip_raiser.l",
+  "expression.au10_upper_lip_raiser.r",
+  "expression.au11_nasolabial_deepener.l",
+  "expression.au11_nasolabial_deepener.r",
+  "expression.au12_lip_corner_puller.l",
+  "expression.au12_lip_corner_puller.r",
+  "expression.au13_sharp_lip_puller.l",
+  "expression.au13_sharp_lip_puller.r",
+  "expression.au14_dimpler.l",
+  "expression.au14_dimpler.r",
+  "expression.au15_lip_corner_depressor.l",
+  "expression.au15_lip_corner_depressor.r",
+  "expression.au16_lower_lip_depressor",
+  "expression.au17_chin_raiser",
+  "expression.au18_lip_pucker",
+  "expression.au20_lip_stretcher.l",
+  "expression.au20_lip_stretcher.r",
+  "expression.au22_lip_funneler",
+  "expression.au23_lip_tightener",
+  "expression.au24_lip_pressor",
+  "expression.au25_lips_part",
+  "expression.au26_jaw_drop",
+  "expression.au27_mouth_stretch",
+  "expression.au28_lip_suck",
+  "expression.au29_jaw_thrust",
+  "expression.au30_jaw_sideways.l",
+  "expression.au30_jaw_sideways.r",
+  "expression.au31_jaw_clencher",
+  "expression.au32_lip_bite",
+  "expression.au33_cheek_blow.l",
+  "expression.au33_cheek_blow.r",
+  "expression.au34_cheek_puff.l",
+  "expression.au34_cheek_puff.r",
+  "expression.au35_cheek_suck.l",
+  "expression.au35_cheek_suck.r",
+  "expression.au38_nostril_dilator.l",
+  "expression.au38_nostril_dilator.r",
+  "expression.au39_nostril_compressor.l",
+  "expression.au39_nostril_compressor.r",
+  "expression.au41_lid_droop.l",
+  "expression.au41_lid_droop.r",
+  "expression.au42_slit.l",
+  "expression.au42_slit.r",
+  "expression.au43_eyes_closed.l",
+  "expression.au43_eyes_closed.r",
+  "expression.au44_squint.l",
+  "expression.au44_squint.r",
+  "expression.au45_blink",
+  "expression.au46_wink.l",
+  "expression.au46_wink.r",
+  "expression.tongue_out",
+  "expression.tongue_up",
+  "expression.tongue_down",
+  "expression.tongue_curl",
+  "expression.tongue_side.l",
+  "expression.tongue_side.r",
+  "expression.lip_roll_upper",
+  "expression.lip_roll_lower",
+  "expression.mouth_shrug",
+  "expression.corner_narrow.l",
+  "expression.corner_narrow.r",
+  "expression.corner_wide.l",
+  "expression.corner_wide.r",
+  "expression.nostril_flare.l",
+  "expression.nostril_flare.r",
+  "expression.brow_ridge_compress",
+  "expression.eyelid_crease_depth.l",
+  "expression.eyelid_crease_depth.r",
+  "viseme.lip-closure",
+  "viseme.funnel",
+  "viseme.pucker",
+  "viseme.stretch",
+  "viseme.jaw-open-round",
+  "viseme.jaw-open-wide",
+  "viseme.labiodental"
+ ],
+ "nodes": [
+  {
+   "name": "w.AU01-L",
+   "op": "clamp",
+   "input": "expression.au01_inner_brow_raiser.l",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.AU01-R",
+   "op": "clamp",
+   "input": "expression.au01_inner_brow_raiser.r",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.AU02-L",
+   "op": "clamp",
+   "input": "expression.au02_outer_brow_raiser.l",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.AU02-R",
+   "op": "clamp",
+   "input": "expression.au02_outer_brow_raiser.r",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.AU04-L",
+   "op": "clamp",
+   "input": "expression.au04_brow_lowerer.l",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.AU04-R",
+   "op": "clamp",
+   "input": "expression.au04_brow_lowerer.r",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.AU05-L",
+   "op": "clamp",
+   "input": "expression.au05_upper_lid_raiser.l",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.AU05-R",
+   "op": "clamp",
+   "input": "expression.au05_upper_lid_raiser.r",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.AU06-L",
+   "op": "clamp",
+   "input": "expression.au06_cheek_raiser.l",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.AU06-R",
+   "op": "clamp",
+   "input": "expression.au06_cheek_raiser.r",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.AU07-L",
+   "op": "clamp",
+   "input": "expression.au07_lid_tightener.l",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.AU07-R",
+   "op": "clamp",
+   "input": "expression.au07_lid_tightener.r",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.AU09-L",
+   "op": "clamp",
+   "input": "expression.au09_nose_wrinkler.l",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.AU09-R",
+   "op": "clamp",
+   "input": "expression.au09_nose_wrinkler.r",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.AU10-L",
+   "op": "clamp",
+   "input": "expression.au10_upper_lip_raiser.l",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.AU10-R",
+   "op": "clamp",
+   "input": "expression.au10_upper_lip_raiser.r",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.AU11-L",
+   "op": "clamp",
+   "input": "expression.au11_nasolabial_deepener.l",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.AU11-R",
+   "op": "clamp",
+   "input": "expression.au11_nasolabial_deepener.r",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.AU12-L",
+   "op": "clamp",
+   "input": "expression.au12_lip_corner_puller.l",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.AU12-R",
+   "op": "clamp",
+   "input": "expression.au12_lip_corner_puller.r",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.AU13-L",
+   "op": "clamp",
+   "input": "expression.au13_sharp_lip_puller.l",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.AU13-R",
+   "op": "clamp",
+   "input": "expression.au13_sharp_lip_puller.r",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.AU14-L",
+   "op": "clamp",
+   "input": "expression.au14_dimpler.l",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.AU14-R",
+   "op": "clamp",
+   "input": "expression.au14_dimpler.r",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.AU15-L",
+   "op": "clamp",
+   "input": "expression.au15_lip_corner_depressor.l",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.AU15-R",
+   "op": "clamp",
+   "input": "expression.au15_lip_corner_depressor.r",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.AU16",
+   "op": "clamp",
+   "input": "expression.au16_lower_lip_depressor",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.AU17",
+   "op": "clamp",
+   "input": "expression.au17_chin_raiser",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.AU18",
+   "op": "clamp",
+   "input": "expression.au18_lip_pucker",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.AU20-L",
+   "op": "clamp",
+   "input": "expression.au20_lip_stretcher.l",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.AU20-R",
+   "op": "clamp",
+   "input": "expression.au20_lip_stretcher.r",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.AU22",
+   "op": "clamp",
+   "input": "expression.au22_lip_funneler",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.AU23",
+   "op": "clamp",
+   "input": "expression.au23_lip_tightener",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.AU24",
+   "op": "clamp",
+   "input": "expression.au24_lip_pressor",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.AU25",
+   "op": "clamp",
+   "input": "expression.au25_lips_part",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "au26.sum",
+   "op": "linear",
+   "inputs": [
+    [
+     "expression.au26_jaw_drop",
+     1.0
+    ],
+    [
+     "expression.tongue_out",
+     0.5
+    ]
+   ],
+   "bias": 0
+  },
+  {
+   "name": "w.AU26",
+   "op": "clamp",
+   "input": "au26.sum",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.AU27",
+   "op": "clamp",
+   "input": "expression.au27_mouth_stretch",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.AU28",
+   "op": "clamp",
+   "input": "expression.au28_lip_suck",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.AU29",
+   "op": "clamp",
+   "input": "expression.au29_jaw_thrust",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.AU30-L",
+   "op": "clamp",
+   "input": "expression.au30_jaw_sideways.l",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.AU30-R",
+   "op": "clamp",
+   "input": "expression.au30_jaw_sideways.r",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.AU31",
+   "op": "clamp",
+   "input": "expression.au31_jaw_clencher",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.AU32",
+   "op": "clamp",
+   "input": "expression.au32_lip_bite",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.AU33-L",
+   "op": "clamp",
+   "input": "expression.au33_cheek_blow.l",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.AU33-R",
+   "op": "clamp",
+   "input": "expression.au33_cheek_blow.r",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.AU34-L",
+   "op": "clamp",
+   "input": "expression.au34_cheek_puff.l",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.AU34-R",
+   "op": "clamp",
+   "input": "expression.au34_cheek_puff.r",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.AU35-L",
+   "op": "clamp",
+   "input": "expression.au35_cheek_suck.l",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.AU35-R",
+   "op": "clamp",
+   "input": "expression.au35_cheek_suck.r",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.AU38-L",
+   "op": "clamp",
+   "input": "expression.au38_nostril_dilator.l",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.AU38-R",
+   "op": "clamp",
+   "input": "expression.au38_nostril_dilator.r",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.AU39-L",
+   "op": "clamp",
+   "input": "expression.au39_nostril_compressor.l",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.AU39-R",
+   "op": "clamp",
+   "input": "expression.au39_nostril_compressor.r",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.AU41-L",
+   "op": "clamp",
+   "input": "expression.au41_lid_droop.l",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.AU41-R",
+   "op": "clamp",
+   "input": "expression.au41_lid_droop.r",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.AU42-L",
+   "op": "clamp",
+   "input": "expression.au42_slit.l",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.AU42-R",
+   "op": "clamp",
+   "input": "expression.au42_slit.r",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.AU43-L",
+   "op": "clamp",
+   "input": "expression.au43_eyes_closed.l",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "ib.AU43-L",
+   "op": "curve",
+   "input": "w.AU43-L",
+   "points": [
+    [
+     0,
+     0
+    ],
+    [
+     0.5,
+     1
+    ],
+    [
+     1,
+     0
+    ]
+   ]
+  },
+  {
+   "name": "w.AU43-R",
+   "op": "clamp",
+   "input": "expression.au43_eyes_closed.r",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "ib.AU43-R",
+   "op": "curve",
+   "input": "w.AU43-R",
+   "points": [
+    [
+     0,
+     0
+    ],
+    [
+     0.5,
+     1
+    ],
+    [
+     1,
+     0
+    ]
+   ]
+  },
+  {
+   "name": "w.AU44-L",
+   "op": "clamp",
+   "input": "expression.au44_squint.l",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.AU44-R",
+   "op": "clamp",
+   "input": "expression.au44_squint.r",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.AU45",
+   "op": "clamp",
+   "input": "expression.au45_blink",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "ib.AU45",
+   "op": "curve",
+   "input": "w.AU45",
+   "points": [
+    [
+     0,
+     0
+    ],
+    [
+     0.5,
+     1
+    ],
+    [
+     1,
+     0
+    ]
+   ]
+  },
+  {
+   "name": "w.AU46-L",
+   "op": "clamp",
+   "input": "expression.au46_wink.l",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "ib.AU46-L",
+   "op": "curve",
+   "input": "w.AU46-L",
+   "points": [
+    [
+     0,
+     0
+    ],
+    [
+     0.5,
+     1
+    ],
+    [
+     1,
+     0
+    ]
+   ]
+  },
+  {
+   "name": "w.AU46-R",
+   "op": "clamp",
+   "input": "expression.au46_wink.r",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "ib.AU46-R",
+   "op": "curve",
+   "input": "w.AU46-R",
+   "points": [
+    [
+     0,
+     0
+    ],
+    [
+     0.5,
+     1
+    ],
+    [
+     1,
+     0
+    ]
+   ]
+  },
+  {
+   "name": "w.ctl.tongue-out",
+   "op": "clamp",
+   "input": "expression.tongue_out",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.ctl.tongue-up",
+   "op": "clamp",
+   "input": "expression.tongue_up",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.ctl.tongue-down",
+   "op": "clamp",
+   "input": "expression.tongue_down",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.ctl.tongue-curl",
+   "op": "clamp",
+   "input": "expression.tongue_curl",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.ctl.tongue-side-L",
+   "op": "clamp",
+   "input": "expression.tongue_side.l",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.ctl.tongue-side-R",
+   "op": "clamp",
+   "input": "expression.tongue_side.r",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.ctl.lip-roll-upper",
+   "op": "clamp",
+   "input": "expression.lip_roll_upper",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.ctl.lip-roll-lower",
+   "op": "clamp",
+   "input": "expression.lip_roll_lower",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.ctl.mouth-shrug",
+   "op": "clamp",
+   "input": "expression.mouth_shrug",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.ctl.corner-narrow-L",
+   "op": "clamp",
+   "input": "expression.corner_narrow.l",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.ctl.corner-narrow-R",
+   "op": "clamp",
+   "input": "expression.corner_narrow.r",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.ctl.corner-wide-L",
+   "op": "clamp",
+   "input": "expression.corner_wide.l",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.ctl.corner-wide-R",
+   "op": "clamp",
+   "input": "expression.corner_wide.r",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.ctl.nostril-flare-L",
+   "op": "clamp",
+   "input": "expression.nostril_flare.l",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.ctl.nostril-flare-R",
+   "op": "clamp",
+   "input": "expression.nostril_flare.r",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.ctl.brow-ridge-compress",
+   "op": "clamp",
+   "input": "expression.brow_ridge_compress",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.ctl.eyelid-crease-L",
+   "op": "clamp",
+   "input": "expression.eyelid_crease_depth.l",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.ctl.eyelid-crease-R",
+   "op": "clamp",
+   "input": "expression.eyelid_crease_depth.r",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.viseme.lip-closure",
+   "op": "clamp",
+   "input": "viseme.lip-closure",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.viseme.funnel",
+   "op": "clamp",
+   "input": "viseme.funnel",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.viseme.pucker",
+   "op": "clamp",
+   "input": "viseme.pucker",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.viseme.stretch",
+   "op": "clamp",
+   "input": "viseme.stretch",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.viseme.jaw-open-round",
+   "op": "clamp",
+   "input": "viseme.jaw-open-round",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.viseme.jaw-open-wide",
+   "op": "clamp",
+   "input": "viseme.jaw-open-wide",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "w.viseme.labiodental",
+   "op": "clamp",
+   "input": "viseme.labiodental",
+   "min": 0,
+   "max": 1
+  },
+  {
+   "name": "jaw.open.sum",
+   "op": "linear",
+   "inputs": [
+    [
+     "w.AU26",
+     0.2
+    ],
+    [
+     "w.AU27",
+     0.28
+    ],
+    [
+     "w.viseme.jaw-open-round",
+     0.12
+    ],
+    [
+     "w.viseme.jaw-open-wide",
+     0.24
+    ]
+   ],
+   "bias": 0
+  },
+  {
+   "name": "jaw.open",
+   "op": "clamp",
+   "input": "jaw.open.sum",
+   "min": -0.05,
+   "max": 0.5
+  },
+  {
+   "name": "jaw.yaw.sum",
+   "op": "linear",
+   "inputs": [
+    [
+     "w.AU30-L",
+     0.08
+    ],
+    [
+     "w.AU30-R",
+     -0.08
+    ]
+   ],
+   "bias": 0
+  },
+  {
+   "name": "jaw.yaw",
+   "op": "clamp",
+   "input": "jaw.yaw.sum",
+   "min": -0.12,
+   "max": 0.12
+  }
+ ],
+ "outputs": {
+  "AU01-L": "w.AU01-L",
+  "AU01-R": "w.AU01-R",
+  "AU02-L": "w.AU02-L",
+  "AU02-R": "w.AU02-R",
+  "AU04-L": "w.AU04-L",
+  "AU04-R": "w.AU04-R",
+  "AU05-L": "w.AU05-L",
+  "AU05-R": "w.AU05-R",
+  "AU06-L": "w.AU06-L",
+  "AU06-R": "w.AU06-R",
+  "AU07-L": "w.AU07-L",
+  "AU07-R": "w.AU07-R",
+  "AU09-L": "w.AU09-L",
+  "AU09-R": "w.AU09-R",
+  "AU10-L": "w.AU10-L",
+  "AU10-R": "w.AU10-R",
+  "AU11-L": "w.AU11-L",
+  "AU11-R": "w.AU11-R",
+  "AU12-L": "w.AU12-L",
+  "AU12-R": "w.AU12-R",
+  "AU13-L": "w.AU13-L",
+  "AU13-R": "w.AU13-R",
+  "AU14-L": "w.AU14-L",
+  "AU14-R": "w.AU14-R",
+  "AU15-L": "w.AU15-L",
+  "AU15-R": "w.AU15-R",
+  "AU16": "w.AU16",
+  "AU17": "w.AU17",
+  "AU18": "w.AU18",
+  "AU20-L": "w.AU20-L",
+  "AU20-R": "w.AU20-R",
+  "AU22": "w.AU22",
+  "AU23": "w.AU23",
+  "AU24": "w.AU24",
+  "AU25": "w.AU25",
+  "AU26": "w.AU26",
+  "AU27": "w.AU27",
+  "AU28": "w.AU28",
+  "AU29": "w.AU29",
+  "AU30-L": "w.AU30-L",
+  "AU30-R": "w.AU30-R",
+  "AU31": "w.AU31",
+  "AU32": "w.AU32",
+  "AU33-L": "w.AU33-L",
+  "AU33-R": "w.AU33-R",
+  "AU34-L": "w.AU34-L",
+  "AU34-R": "w.AU34-R",
+  "AU35-L": "w.AU35-L",
+  "AU35-R": "w.AU35-R",
+  "AU38-L": "w.AU38-L",
+  "AU38-R": "w.AU38-R",
+  "AU39-L": "w.AU39-L",
+  "AU39-R": "w.AU39-R",
+  "AU41-L": "w.AU41-L",
+  "AU41-R": "w.AU41-R",
+  "AU42-L": "w.AU42-L",
+  "AU42-R": "w.AU42-R",
+  "AU43-L": "w.AU43-L",
+  "AU43-L.inbetween-50": "ib.AU43-L",
+  "AU43-R": "w.AU43-R",
+  "AU43-R.inbetween-50": "ib.AU43-R",
+  "AU44-L": "w.AU44-L",
+  "AU44-R": "w.AU44-R",
+  "AU45": "w.AU45",
+  "AU45.inbetween-50": "ib.AU45",
+  "AU46-L": "w.AU46-L",
+  "AU46-L.inbetween-50": "ib.AU46-L",
+  "AU46-R": "w.AU46-R",
+  "AU46-R.inbetween-50": "ib.AU46-R",
+  "ctl.tongue-out": "w.ctl.tongue-out",
+  "ctl.tongue-up": "w.ctl.tongue-up",
+  "ctl.tongue-down": "w.ctl.tongue-down",
+  "ctl.tongue-curl": "w.ctl.tongue-curl",
+  "ctl.tongue-side-L": "w.ctl.tongue-side-L",
+  "ctl.tongue-side-R": "w.ctl.tongue-side-R",
+  "ctl.lip-roll-upper": "w.ctl.lip-roll-upper",
+  "ctl.lip-roll-lower": "w.ctl.lip-roll-lower",
+  "ctl.mouth-shrug": "w.ctl.mouth-shrug",
+  "ctl.corner-narrow-L": "w.ctl.corner-narrow-L",
+  "ctl.corner-narrow-R": "w.ctl.corner-narrow-R",
+  "ctl.corner-wide-L": "w.ctl.corner-wide-L",
+  "ctl.corner-wide-R": "w.ctl.corner-wide-R",
+  "ctl.nostril-flare-L": "w.ctl.nostril-flare-L",
+  "ctl.nostril-flare-R": "w.ctl.nostril-flare-R",
+  "ctl.brow-ridge-compress": "w.ctl.brow-ridge-compress",
+  "ctl.eyelid-crease-L": "w.ctl.eyelid-crease-L",
+  "ctl.eyelid-crease-R": "w.ctl.eyelid-crease-R",
+  "viseme.lip-closure": "w.viseme.lip-closure",
+  "viseme.funnel": "w.viseme.funnel",
+  "viseme.pucker": "w.viseme.pucker",
+  "viseme.stretch": "w.viseme.stretch",
+  "viseme.jaw-open-round": "w.viseme.jaw-open-round",
+  "viseme.jaw-open-wide": "w.viseme.jaw-open-wide",
+  "viseme.labiodental": "w.viseme.labiodental"
+ }
+}

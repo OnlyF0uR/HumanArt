@@ -1,0 +1,33 @@
+[package]
+name = "humanart-io"
+description = "In-house codecs and containers: JSON, PNG, JPEG, Radiance HDR, EXR, KTX2, glTF/GLB, OBJ, PLY, TrueType, compression."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+humanart-core.workspace = true
+humanart-math = { workspace = true, features = ["linalg"] }
+
+# ADR-007: one feature per codec family. A feature is enabled only once its module exists.
+[features]
+default = ["json", "lz", "deflate", "png", "jpeg", "hdr", "exr", "ktx2", "gltf", "obj", "ply", "ttf", "bc", "mip"]
+json = []
+lz = []
+deflate = []
+png = ["deflate"]
+jpeg = []
+hdr = []
+exr = ["deflate"]
+ktx2 = ["lz"]
+gltf = ["json"]
+obj = []
+ply = []
+ttf = []
+bc = []
+mip = []
+
+[lints]
+workspace = true

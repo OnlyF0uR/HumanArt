@@ -1,0 +1,4 @@
+doc-valid-idents = ["WebGPU", "OpenEXR", "TrueType", "OpenType", "JetBrains", "glTF", "KTX2", "CIEDE2000", "CIELAB", "sRGB", "DirectX", "macOS", "GitHub", "FACS", ".."]
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-dbg-in-tests = true

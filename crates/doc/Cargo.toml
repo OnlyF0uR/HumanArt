@@ -1,0 +1,17 @@
+[package]
+name = "humanart-doc"
+description = "The parameter registry, the character document, layers, commands, history, proposals and locks."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[dependencies]
+humanart-core.workspace = true
+humanart-math = { workspace = true, features = ["linalg"] }
+humanart-io = { workspace = true, features = ["json", "lz"] }
+humanart-model.workspace = true
+
+[lints]
+workspace = true

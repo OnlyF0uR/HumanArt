@@ -1,0 +1,172 @@
+{
+ "drivers": [
+  {
+   "name": "forehead.raise",
+   "region": "forehead",
+   "expressions": [
+    [
+     "AU01-L",
+     0.35
+    ],
+    [
+     "AU01-R",
+     0.35
+    ],
+    [
+     "AU02-L",
+     0.2
+    ],
+    [
+     "AU02-R",
+     0.2
+    ]
+   ],
+   "compression": 8.0,
+   "stretch": 6.0
+  },
+  {
+   "name": "glabella.L",
+   "region": "brow-L",
+   "expressions": [
+    [
+     "AU04-L",
+     0.8
+    ],
+    [
+     "ctl.brow-ridge-compress",
+     0.5
+    ],
+    [
+     "AU09-L",
+     0.3
+    ]
+   ],
+   "compression": 8.0,
+   "stretch": 6.0
+  },
+  {
+   "name": "glabella.R",
+   "region": "brow-R",
+   "expressions": [
+    [
+     "AU04-R",
+     0.8
+    ],
+    [
+     "ctl.brow-ridge-compress",
+     0.5
+    ],
+    [
+     "AU09-R",
+     0.3
+    ]
+   ],
+   "compression": 8.0,
+   "stretch": 6.0
+  },
+  {
+   "name": "crows-feet.L",
+   "region": "outer-canthus-L",
+   "expressions": [
+    [
+     "AU06-L",
+     0.7
+    ],
+    [
+     "AU44-L",
+     0.3
+    ],
+    [
+     "AU46-L",
+     0.6
+    ],
+    [
+     "AU12-L",
+     0.2
+    ]
+   ],
+   "compression": 8.0,
+   "stretch": 6.0
+  },
+  {
+   "name": "crows-feet.R",
+   "region": "outer-canthus-R",
+   "expressions": [
+    [
+     "AU06-R",
+     0.7
+    ],
+    [
+     "AU44-R",
+     0.3
+    ],
+    [
+     "AU46-R",
+     0.6
+    ],
+    [
+     "AU12-R",
+     0.2
+    ]
+   ],
+   "compression": 8.0,
+   "stretch": 6.0
+  },
+  {
+   "name": "nasolabial.L",
+   "region": "cheek-L",
+   "expressions": [
+    [
+     "AU12-L",
+     0.6
+    ],
+    [
+     "AU11-L",
+     0.6
+    ],
+    [
+     "AU10-L",
+     0.4
+    ],
+    [
+     "AU13-L",
+     0.4
+    ],
+    [
+     "AU09-L",
+     0.3
+    ]
+   ],
+   "compression": 8.0,
+   "stretch": 6.0
+  },
+  {
+   "name": "nasolabial.R",
+   "region": "cheek-R",
+   "expressions": [
+    [
+     "AU12-R",
+     0.6
+    ],
+    [
+     "AU11-R",
+     0.6
+    ],
+    [
+     "AU10-R",
+     0.4
+    ],
+    [
+     "AU13-R",
+     0.4
+    ],
+    [
+     "AU09-R",
+     0.3
+    ]
+   ],
+   "compression": 8.0,
+   "stretch": 6.0
+  }
+ ]
+}

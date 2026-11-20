@@ -1,0 +1,34 @@
+[package]
+name = "humanart-cli"
+description = "The headless HumanArt command line: render, bench, export, serve and the offline tools."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "humanart-cli"
+path = "src/main.rs"
+
+[dependencies]
+humanart-core.workspace = true
+humanart-math.workspace = true
+humanart-io.workspace = true
+humanart-model.workspace = true
+humanart-doc.workspace = true
+humanart-gpu.workspace = true
+humanart-shaders.workspace = true
+humanart-render.workspace = true
+humanart-tools.workspace = true
+humanart-capture.workspace = true
+humanart-agent.workspace = true
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+wgpu = { workspace = true, features = ["dx12", "metal", "vulkan", "gles"] }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wgpu = { workspace = true, features = ["webgpu"] }
+
+[lints]
+workspace = true

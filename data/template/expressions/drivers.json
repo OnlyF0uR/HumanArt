@@ -1,0 +1,167 @@
+{
+ "format": "humanart-joint-drivers",
+ "version": 1,
+ "description": "Joint drivers of the expression control rig [EXP-01] [EXP-03]: each entry rotates a joint about an axis given in world space at rest by 'angle' radians per unit of a rig register (a control or a node of rig.json). Entries on one joint add as rotation vectors. Jaw, tongue (and, when added, eye) rotations are skeleton-driven; the expression targets of those controls are soft-tissue support shapes. The jaw angles must equal the ones the support shapes were computed for (expression::recipes::JAW_DROP etc., tested). Angles are authored model choices, not measurements.",
+ "drivers": [
+  {
+   "input": "jaw.open",
+   "joint": "jaw",
+   "axis": [
+    1,
+    0,
+    0
+   ],
+   "angle": 1.0
+  },
+  {
+   "input": "jaw.yaw",
+   "joint": "jaw",
+   "axis": [
+    0,
+    1,
+    0
+   ],
+   "angle": 1.0
+  },
+  {
+   "input": "w.ctl.tongue-up",
+   "joint": "tongue.02",
+   "axis": [
+    1,
+    0,
+    0
+   ],
+   "angle": -0.22
+  },
+  {
+   "input": "w.ctl.tongue-up",
+   "joint": "tongue.03",
+   "axis": [
+    1,
+    0,
+    0
+   ],
+   "angle": -0.22
+  },
+  {
+   "input": "w.ctl.tongue-up",
+   "joint": "tongue.04",
+   "axis": [
+    1,
+    0,
+    0
+   ],
+   "angle": -0.22
+  },
+  {
+   "input": "w.ctl.tongue-down",
+   "joint": "tongue.02",
+   "axis": [
+    1,
+    0,
+    0
+   ],
+   "angle": 0.18
+  },
+  {
+   "input": "w.ctl.tongue-down",
+   "joint": "tongue.03",
+   "axis": [
+    1,
+    0,
+    0
+   ],
+   "angle": 0.18
+  },
+  {
+   "input": "w.ctl.tongue-down",
+   "joint": "tongue.04",
+   "axis": [
+    1,
+    0,
+    0
+   ],
+   "angle": 0.18
+  },
+  {
+   "input": "w.ctl.tongue-curl",
+   "joint": "tongue.03",
+   "axis": [
+    1,
+    0,
+    0
+   ],
+   "angle": -0.3
+  },
+  {
+   "input": "w.ctl.tongue-curl",
+   "joint": "tongue.04",
+   "axis": [
+    1,
+    0,
+    0
+   ],
+   "angle": -0.55
+  },
+  {
+   "input": "w.ctl.tongue-side-L",
+   "joint": "tongue.02",
+   "axis": [
+    0,
+    1,
+    0
+   ],
+   "angle": 0.12
+  },
+  {
+   "input": "w.ctl.tongue-side-L",
+   "joint": "tongue.03",
+   "axis": [
+    0,
+    1,
+    0
+   ],
+   "angle": 0.12
+  },
+  {
+   "input": "w.ctl.tongue-side-L",
+   "joint": "tongue.04",
+   "axis": [
+    0,
+    1,
+    0
+   ],
+   "angle": 0.12
+  },
+  {
+   "input": "w.ctl.tongue-side-R",
+   "joint": "tongue.02",
+   "axis": [
+    0,
+    1,
+    0
+   ],
+   "angle": -0.12
+  },
+  {
+   "input": "w.ctl.tongue-side-R",
+   "joint": "tongue.03",
+   "axis": [
+    0,
+    1,
+    0
+   ],
+   "angle": -0.12
+  },
+  {
+   "input": "w.ctl.tongue-side-R",
+   "joint": "tongue.04",
+   "axis": [
+    0,
+    1,
+    0
+   ],
+   "angle": -0.12
+  }
+ ]
+}

@@ -1,0 +1,8 @@
+/target
+/out
+*.tmp
+__pycache__/
+
+# Derived from HSRD-100 scans: not published until its licence question and credits are settled
+# (todo.md section 7). Rebuild locally with the capture tools.
+/data/template/face/face-model.hafm

@@ -1,0 +1,12 @@
+# Materials of cube.obj, written by hand for the HumanArt OBJ tests.
+newmtl red
+Kd 0.8 0.1 0.1
+Ks 0.5 0.5 0.5
+Ns 32
+illum 2
+map_Kd red.png
+
+newmtl blue
+Kd 0.1 0.1 0.8
+d 0.5
+map_Bump -bm 0.25 blue_bump.png

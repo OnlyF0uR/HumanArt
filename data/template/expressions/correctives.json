@@ -1,0 +1,249 @@
+{
+  "format": "humanart-correctives",
+  "version": 1,
+  "description": "Combination correctives [EXP-02]: each entry is activated by the product or minimum of its input expression weights and its shape is derived from the inputs' shapes by its rule. 'saturate': where the summed displacement of the inputs is longer than the longest single input, the excess is reduced by 'strength' (0..1), so tissue that two actions move the same way does not travel twice as far; smaller combinations contained in a larger one are subtracted first. Strengths are authored model choices, not measurements. Add entries here; no code change is needed.",
+  "correctives": [
+    {
+      "name": "AU01-L.AU02-L",
+      "op": "product",
+      "inputs": [
+        "AU01-L",
+        "AU02-L"
+      ],
+      "rule": "saturate",
+      "strength": 0.5
+    },
+    {
+      "name": "AU01-R.AU02-R",
+      "op": "product",
+      "inputs": [
+        "AU01-R",
+        "AU02-R"
+      ],
+      "rule": "saturate",
+      "strength": 0.5
+    },
+    {
+      "name": "AU04-L.AU07-L",
+      "op": "product",
+      "inputs": [
+        "AU04-L",
+        "AU07-L"
+      ],
+      "rule": "saturate",
+      "strength": 0.6
+    },
+    {
+      "name": "AU04-R.AU07-R",
+      "op": "product",
+      "inputs": [
+        "AU04-R",
+        "AU07-R"
+      ],
+      "rule": "saturate",
+      "strength": 0.6
+    },
+    {
+      "name": "AU06-L.AU07-L",
+      "op": "product",
+      "inputs": [
+        "AU06-L",
+        "AU07-L"
+      ],
+      "rule": "saturate",
+      "strength": 0.6
+    },
+    {
+      "name": "AU06-R.AU07-R",
+      "op": "product",
+      "inputs": [
+        "AU06-R",
+        "AU07-R"
+      ],
+      "rule": "saturate",
+      "strength": 0.6
+    },
+    {
+      "name": "AU06-L.AU12-L",
+      "op": "product",
+      "inputs": [
+        "AU06-L",
+        "AU12-L"
+      ],
+      "rule": "saturate",
+      "strength": 0.6
+    },
+    {
+      "name": "AU06-R.AU12-R",
+      "op": "product",
+      "inputs": [
+        "AU06-R",
+        "AU12-R"
+      ],
+      "rule": "saturate",
+      "strength": 0.6
+    },
+    {
+      "name": "AU06-L.AU44-L",
+      "op": "product",
+      "inputs": [
+        "AU06-L",
+        "AU44-L"
+      ],
+      "rule": "saturate",
+      "strength": 0.6
+    },
+    {
+      "name": "AU06-R.AU44-R",
+      "op": "product",
+      "inputs": [
+        "AU06-R",
+        "AU44-R"
+      ],
+      "rule": "saturate",
+      "strength": 0.6
+    },
+    {
+      "name": "AU07-L.AU43-L",
+      "op": "product",
+      "inputs": [
+        "AU07-L",
+        "AU43-L"
+      ],
+      "rule": "saturate",
+      "strength": 0.8
+    },
+    {
+      "name": "AU07-R.AU43-R",
+      "op": "product",
+      "inputs": [
+        "AU07-R",
+        "AU43-R"
+      ],
+      "rule": "saturate",
+      "strength": 0.8
+    },
+    {
+      "name": "AU09-L.AU10-L",
+      "op": "product",
+      "inputs": [
+        "AU09-L",
+        "AU10-L"
+      ],
+      "rule": "saturate",
+      "strength": 0.5
+    },
+    {
+      "name": "AU09-R.AU10-R",
+      "op": "product",
+      "inputs": [
+        "AU09-R",
+        "AU10-R"
+      ],
+      "rule": "saturate",
+      "strength": 0.5
+    },
+    {
+      "name": "AU10-L.AU12-L",
+      "op": "product",
+      "inputs": [
+        "AU10-L",
+        "AU12-L"
+      ],
+      "rule": "saturate",
+      "strength": 0.5
+    },
+    {
+      "name": "AU10-R.AU12-R",
+      "op": "product",
+      "inputs": [
+        "AU10-R",
+        "AU12-R"
+      ],
+      "rule": "saturate",
+      "strength": 0.5
+    },
+    {
+      "name": "AU12-L.AU20-L",
+      "op": "product",
+      "inputs": [
+        "AU12-L",
+        "AU20-L"
+      ],
+      "rule": "saturate",
+      "strength": 0.5
+    },
+    {
+      "name": "AU12-R.AU20-R",
+      "op": "product",
+      "inputs": [
+        "AU12-R",
+        "AU20-R"
+      ],
+      "rule": "saturate",
+      "strength": 0.5
+    },
+    {
+      "name": "AU26.AU18",
+      "op": "product",
+      "inputs": [
+        "AU26",
+        "AU18"
+      ],
+      "rule": "saturate",
+      "strength": 0.5
+    },
+    {
+      "name": "AU23.AU24",
+      "op": "product",
+      "inputs": [
+        "AU23",
+        "AU24"
+      ],
+      "rule": "saturate",
+      "strength": 0.6
+    },
+    {
+      "name": "AU17.AU24",
+      "op": "product",
+      "inputs": [
+        "AU17",
+        "AU24"
+      ],
+      "rule": "saturate",
+      "strength": 0.5
+    },
+    {
+      "name": "AU26.AU27",
+      "op": "product",
+      "inputs": [
+        "AU26",
+        "AU27"
+      ],
+      "rule": "saturate",
+      "strength": 0.7
+    },
+    {
+      "name": "AU01-L.AU02-L.AU04-L",
+      "op": "min",
+      "inputs": [
+        "AU01-L",
+        "AU02-L",
+        "AU04-L"
+      ],
+      "rule": "saturate",
+      "strength": 0.5
+    },
+    {
+      "name": "AU01-R.AU02-R.AU04-R",
+      "op": "min",
+      "inputs": [
+        "AU01-R",
+        "AU02-R",
+        "AU04-R"
+      ],
+      "rule": "saturate",
+      "strength": 0.5
+    }
+  ]
+}
