@@ -414,7 +414,11 @@ fn perf_surfaced_skin_geometry_at_1440p() {
         let mut harness = common::Harness::new(config, &scene);
         if surfaced {
             let surface = harness.renderer.skin_surface_mut();
-            surface.set_settings(gpu, SurfaceSettings::for_tiles(&template.parts().tiles)).unwrap();
+            // The settings the engine's character uses (todo 1.4: lips from the measured zone
+            // roughness).
+            let settings =
+                SurfaceSettings { lip_roughness_scale: 1.0, ..SurfaceSettings::for_tiles(&template.parts().tiles) };
+            surface.set_settings(gpu, settings).unwrap();
             surface.bind_compositor(gpu, &compositor).unwrap();
             surface.set_micro_detail(gpu, &plan).unwrap();
         }

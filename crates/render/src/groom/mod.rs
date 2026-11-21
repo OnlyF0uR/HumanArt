@@ -6,9 +6,9 @@
 //! [`GpuGroom`] owns every buffer of one groom, sized once for a [`GroomCapacity`], the three
 //! pipelines (built once, `[PERF-R4]`) and their bind groups. The CPU side is
 //! `humanart_model::hair`: [`GpuGroom::set_layout`] uploads the root placement and interpolation
-//! data (`GroomLayout`, after a placement change), [`GpuGroom::set_guides`] the resampled guides
-//! (after a guide edit), [`GpuGroom::set_params`] the modifiers. [`GpuGroom::encode_generate`]
-//! records the `shape` and `finish` stages; [`GpuGroom::encode_attach`] the per-frame `attach`
+//! data (`GroomLayout`, after a placement change), [`GpuGroom::set_guides`] or
+//! [`GpuGroom::set_world_guides`] the resampled guides (after a guide edit),
+//! [`GpuGroom::set_params`] the modifiers. [`GpuGroom::encode_generate`] records the `shape` and `finish` stages; [`GpuGroom::encode_attach`] the per-frame `attach`
 //! stage against the skin bound with [`GpuGroom::bind_skin`] (the rest surface, or the
 //! deformation's output buffers, `humanart-render::deform`). Uploads reuse one staging vector;
 //! `encode_attach` allocates nothing (`[PERF-R1]`).
@@ -36,8 +36,8 @@ const SHADER: &str = "groom/generate.wgsl";
 const WORKGROUP: u32 = 64;
 /// The most workgroups along one dispatch axis.
 const MAX_GROUPS: u32 = 65_535;
-/// Bytes of one strand record.
-const STRAND_RECORD: u64 = 96;
+/// Bytes of one strand record (seven vec4 words).
+const STRAND_RECORD: u64 = 112;
 /// Bytes of the parameter block.
 const PARAMS_BYTES: usize = 20 * 16;
 /// Most control points per strand in the shader.
@@ -138,6 +138,7 @@ pub struct GpuGroom {
     strand_count: u32,
     guide_count: u32,
     has_sdf: bool,
+    world_curves: bool,
     sdf_header: ([f32; 4], [u32; 4]),
     groom_params: GroomParams,
     staging: Vec<u8>,
@@ -296,6 +297,7 @@ impl GpuGroom {
             strand_count: 0,
             guide_count: 0,
             has_sdf: false,
+            world_curves: false,
             sdf_header: ([0.0; 4], [2, 2, 2, 0]),
             groom_params: GroomParams::default(),
             staging: Vec::new(),
@@ -380,15 +382,29 @@ impl GpuGroom {
             f32_bytes(&mut self.staging, layout.factors[i]);
             f32_bytes(&mut self.staging, [layout.direction[i][0], layout.direction[i][1], layout.color[i]]);
             u32_bytes(&mut self.staging, [layout.key[i]]);
+            f32_bytes(&mut self.staging, [layout.width_factor(i), 0.0, 0.0, 0.0]);
         }
         resources.write_buffer(self.strands.id, 0, &self.staging)?;
         self.strand_count = n as u32;
         self.write_params(resources)
     }
 
-    /// Uploads the guides resampled to the groom's point count (`Guides::resampled`), guide
-    /// after guide. The guide count may change; strands must not refer past it.
+    /// Uploads the guides resampled to the groom's point count (`Guides::resampled`, offsets in
+    /// each guide's root frame, blended in the strand's root frame), guide after guide. The guide
+    /// count may change; strands must not refer past it.
     pub fn set_guides(&mut self, resources: &mut Resources, curves: &[Vec3]) -> Result<(), GroomGpuError> {
+        self.upload_guides(resources, curves, false)
+    }
+
+    /// Uploads the guides as world-space offsets from their roots (`Guides::resampled_world`):
+    /// every strand blends its guides in world directions and turns the blend into its own root
+    /// frame (`GenerateInput::world_curves` on the CPU), so guides whose root frames' tangents
+    /// disagree (across a UV seam) do not bend the strands between them.
+    pub fn set_world_guides(&mut self, resources: &mut Resources, curves: &[Vec3]) -> Result<(), GroomGpuError> {
+        self.upload_guides(resources, curves, true)
+    }
+
+    fn upload_guides(&mut self, resources: &mut Resources, curves: &[Vec3], world: bool) -> Result<(), GroomGpuError> {
         let p = self.capacity.points as usize;
         let count = curves.len() / p;
         if count * p != curves.len() || count > self.capacity.guides as usize {
@@ -398,6 +414,7 @@ impl GpuGroom {
         f32_bytes(&mut self.staging, curves.iter().flat_map(|c| [c.x, c.y, c.z, 0.0]));
         resources.write_buffer(self.curves.id, 0, &self.staging)?;
         self.guide_count = count as u32;
+        self.world_curves = world;
         self.write_params(resources)
     }
 
@@ -441,7 +458,7 @@ impl GpuGroom {
         f(18, self.sdf_header.0);
         let u = [
             [self.strand_count, n, self.guide_count, strand_x.max(1)],
-            [point_x.max(1), u32::from(self.has_sdf), 0, 0],
+            [point_x.max(1), u32::from(self.has_sdf), u32::from(self.world_curves), 0],
         ];
         for (slot, v) in u.iter().enumerate() {
             words[slot * 4..slot * 4 + 4].copy_from_slice(v);

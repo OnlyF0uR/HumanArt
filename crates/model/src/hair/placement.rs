@@ -6,7 +6,10 @@
 //! `hairline.softness` metres from the mask boundary, the distance perturbed by value noise
 //! (`hairline.irregularity`). Every strand then gets the nearest `strands.guides` guides with
 //! inverse-square-distance weights, and the nearest of `clump.count` clump centres (themselves
-//! strands). The result, [`GroomLayout`], is everything per strand the GPU modifiers need besides
+//! strands). Strands in the hairline fade are finer ([`GroomLayout::width_factor`]) and a share of
+//! them are baby hairs (short and frizzy, through the length and frizz factors). With a
+//! [`PartLine`] ([`place_parted`]) the roots thin out along the part and strands near it blend
+//! only guides on their own side of it. The result, [`GroomLayout`], is everything per strand the GPU modifiers need besides
 //! the guides; it changes only when the scalp, the density, the count or the guide roots change.
 //! Placement runs on the CPU and is deterministic given the seed.
 
@@ -19,7 +22,7 @@ use super::error::{HairError, HairResult};
 use super::params::{GroomMaps, GroomParams};
 use super::strands::{Guides, MAX_STRANDS};
 use super::surface::HairSurface;
-use super::{hash_u32, strand_key};
+use super::{hash_u32, hash01, strand_key};
 
 /// The triangles a groom grows on, with the area table and hairline distances placement uses.
 #[derive(Clone, Debug)]
@@ -100,6 +103,49 @@ pub struct GroomLayout {
     pub direction: Vec<[f32; 2]>,
     /// Colour-map offset.
     pub color: Vec<f32>,
+    /// Where the strand is in the hairline fade: 0 at the mask boundary, 1 past the fade.
+    pub hairline: Vec<f32>,
+}
+
+/// Width of a strand at the very hairline, relative to one past the fade.
+pub const HAIRLINE_WIDTH: f32 = 0.6;
+
+/// Share of the strands at the very hairline that are baby hairs (short, fine and frizzy); it
+/// falls to none where the hairline fade ends.
+pub const BABY_HAIR_SHARE: f32 = 0.65;
+
+/// Hash salt of the baby-hair choices.
+const BABY_SALT: u32 = 0xBAB1;
+
+/// A parting combed into a groom: the plane through `point` with unit `normal`, over the part of
+/// the head above `top_y` and in front of `crown_z` (from the front hairline to the crown).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct PartLine {
+    /// A point of the parting plane.
+    pub point: Vec3,
+    /// The plane's unit normal (the side the hair on the positive side is combed toward).
+    pub normal: Vec3,
+    /// Lowest height of the parted region.
+    pub top_y: f32,
+    /// The region ends behind at this `z` (the crown).
+    pub crown_z: f32,
+}
+
+impl PartLine {
+    /// Half-width of the band along the part where the roots thin out, metres.
+    pub const GAP: f32 = 0.002_5;
+
+    /// Whether `p` is in the parted region.
+    #[must_use]
+    pub fn in_region(&self, p: Vec3) -> bool {
+        p.y > self.top_y && p.z > self.crown_z
+    }
+
+    /// Signed distance of `p` from the parting plane.
+    #[must_use]
+    pub fn side(&self, p: Vec3) -> f32 {
+        (p - self.point).dot(self.normal)
+    }
 }
 
 impl GroomLayout {
@@ -111,6 +157,13 @@ impl GroomLayout {
     /// No strands.
     pub fn is_empty(&self) -> bool {
         self.triangle.is_empty()
+    }
+
+    /// Strand `i`'s width relative to the groom's thickness: [`HAIRLINE_WIDTH`] at the very
+    /// hairline, 1 past the fade.
+    pub fn width_factor(&self, i: usize) -> f32 {
+        let h = self.hairline.get(i).copied().unwrap_or(1.0).clamp(0.0, 1.0);
+        HAIRLINE_WIDTH + (1.0 - HAIRLINE_WIDTH) * h
     }
 
     /// One strand per guide, rooted where the guide is, following only it, no clumping: the
@@ -126,21 +179,30 @@ impl GroomLayout {
             weights: vec![[1.0, 0.0, 0.0, 0.0]; n],
             clump: (0..n as u32).collect(),
             key: (0..n as u32).map(|i| strand_key(seed32, i)).collect(),
+            hairline: vec![1.0; n],
             ..Self::default()
         };
         layout.sample_maps(surface, maps);
         Ok(layout)
     }
 
-    /// Re-samples the per-strand map factors (after a map is painted).
+    /// Re-samples the per-strand map factors (after a map is painted). Baby hairs at the
+    /// hairline ([`BABY_HAIR_SHARE`]) keep their shorter length and extra frizz on top of the maps.
     pub fn sample_maps(&mut self, surface: &HairSurface, maps: &GroomMaps) {
         let n = self.len();
         self.factors.resize(n, [1.0; 4]);
         self.direction.resize(n, [0.0; 2]);
         self.color.resize(n, 0.0);
+        self.hairline.resize(n, 1.0);
         for i in 0..n {
             let uv = surface.uv_at(self.triangle[i], self.bary[i]).unwrap_or(Vec2::ZERO);
-            let (f, d, c) = maps.factors_at(uv);
+            let (mut f, d, c) = maps.factors_at(uv);
+            let edge = 1.0 - self.hairline[i].clamp(0.0, 1.0);
+            let key = self.key.get(i).copied().unwrap_or(0);
+            if edge > 0.0 && hash01(key, BABY_SALT) < BABY_HAIR_SHARE * edge {
+                f[0] *= 0.12 + 0.3 * hash01(key, BABY_SALT + 1);
+                f[3] *= 1.0 + 3.0 * edge;
+            }
             self.factors[i] = f;
             self.direction[i] = d;
             self.color[i] = c;
@@ -162,6 +224,7 @@ impl GroomLayout {
             self.factors.len(),
             self.direction.len(),
             self.color.len(),
+            self.hairline.len(),
         ];
         if lens.iter().any(|&l| l != n) {
             return Err(HairError::invalid("layout", 0, "arrays differ in length"));
@@ -183,8 +246,6 @@ impl GroomLayout {
 
 /// Most nearest guides a strand's weights are chosen from.
 const GUIDE_CANDIDATES: usize = 8;
-/// Least cosine between a guide's root tangent and the strand's for the guide to be blended.
-pub const GUIDE_FRAME_AGREEMENT: f32 = 0.5;
 
 /// A hash grid of points for nearest-neighbour queries.
 #[derive(Clone, Debug)]
@@ -305,6 +366,21 @@ pub fn place(
     maps: &GroomMaps,
     seed: u64,
 ) -> HairResult<GroomLayout> {
+    place_parted(surface, mask, guides, params, maps, seed, None)
+}
+
+/// [`place`] with a parting: roots thin out within [`PartLine::GAP`] of the part, and a strand
+/// in the parted region blends only guides on its side of the part (blending across it would
+/// comb the strands along the part over it).
+pub fn place_parted(
+    surface: &HairSurface,
+    mask: &ScalpMask,
+    guides: &Guides,
+    params: &GroomParams,
+    maps: &GroomMaps,
+    seed: u64,
+    part: Option<&PartLine>,
+) -> HairResult<GroomLayout> {
     params.check()?;
     guides.check(surface)?;
     if guides.is_empty() {
@@ -323,6 +399,7 @@ pub fn place(
     layout.triangle.reserve(target);
     layout.bary.reserve(target);
     let mut roots = Vec::with_capacity(target);
+    let mut hairline = Vec::with_capacity(target);
     let softness = params.hairline_softness;
     let irregularity = params.hairline_irregularity;
     let attempts = target.saturating_mul(32);
@@ -337,49 +414,48 @@ pub fn place(
         let uv = surface.uv_at(t, bary).unwrap_or(Vec2::ZERO);
         let p = surface.point_at(t, bary).unwrap_or(Vec3::ZERO);
         let mut density = maps.density_at(uv);
+        let mut fade = 1.0;
         if softness > 0.0 {
             let noise = value_noise(p * HAIRLINE_NOISE_SCALE, seed32) * 2.0 - 1.0;
             let d = mask.hairline_distance(surface, t, bary) + softness * irregularity * noise;
             let x = (d / softness).clamp(0.0, 1.0);
-            density *= x * x * (3.0 - 2.0 * x);
+            fade = x * x * (3.0 - 2.0 * x);
+            density *= fade;
+        }
+        if let Some(part) = part.filter(|l| l.in_region(p)) {
+            let x = (part.side(p).abs() / PartLine::GAP).clamp(0.0, 1.0);
+            density *= 0.15 + 0.85 * x * x;
         }
         if accept < density {
             layout.triangle.push(t);
             layout.bary.push(bary);
             roots.push(p);
+            hairline.push(fade);
         }
     }
     let n = layout.triangle.len();
 
-    // Guide weights: inverse square distance to the nearest guides whose root frame turns the
-    // same way as the strand's. Guide shapes are blended in the root frames, so a guide across a
-    // UV seam (where the frame's tangent flips) would bend the strand away from the hair around
-    // it; such guides are skipped, from twice as many candidates.
+    // Guide weights: inverse square distance to the nearest guides (from twice as many
+    // candidates), in the parted region only those on the strand's side of the part.
     let guide_roots: Vec<Vec3> = (0..guides.len())
         .map(|g| {
             let (t, b) = guides.root(g).unwrap_or((0, [0.0, 0.0]));
             surface.point_at(t, b).unwrap_or(Vec3::ZERO)
         })
         .collect();
-    let guide_tangents: Vec<Vec3> = (0..guides.len())
-        .map(|g| {
-            let (t, b) = guides.root(g).unwrap_or((0, [0.0, 0.0]));
-            surface.frame(t, b).map_or(Vec3::ZERO, |f| f.t)
-        })
-        .collect();
     let spacing = (mask.area() / guides.len() as f32).sqrt();
-    let grid = PointGrid::new(guide_roots, spacing);
+    let grid = PointGrid::new(guide_roots.clone(), spacing);
     let k = params.guides_per_strand().min(guides.len());
     let eps2 = (0.25 * spacing) * (0.25 * spacing);
     layout.guides.reserve(n);
     layout.weights.reserve(n);
     let candidates = (2 * k).min(GUIDE_CANDIDATES).min(guides.len());
     let mut near = [(0_u32, 0.0_f32); GUIDE_CANDIDATES];
-    for (i, &p) in roots.iter().enumerate() {
+    for &p in &roots {
         let found = grid.nearest(p, &mut near[..candidates]);
-        let own = surface.frame(layout.triangle[i], layout.bary[i]).map_or(Vec3::ZERO, |f| f.t);
+        let own_side = part.filter(|l| l.in_region(p)).map(|l| (l, l.side(p) >= 0.0));
         let agrees = |id: u32| {
-            own == Vec3::ZERO || guide_tangents.get(id as usize).is_none_or(|g| g.dot(own) > GUIDE_FRAME_AGREEMENT)
+            own_side.is_none_or(|(l, side)| guide_roots.get(id as usize).is_none_or(|&g| (l.side(g) >= 0.0) == side))
         };
         let mut ids = [near[0].0; 4];
         let mut w = [0.0_f32; 4];
@@ -390,7 +466,7 @@ pub fn place(
             used += 1;
         }
         if used == 0 && found > 0 {
-            // No guide around turns the same way: the nearest alone.
+            // No guide around on the strand's side of the part: the nearest alone.
             ids[0] = near[0].0;
             w[0] = 1.0;
         }
@@ -416,6 +492,7 @@ pub fn place(
         }
     }
     layout.key = (0..n as u32).map(|i| strand_key(seed32, i)).collect();
+    layout.hairline = hairline;
     layout.sample_maps(surface, maps);
     Ok(layout)
 }

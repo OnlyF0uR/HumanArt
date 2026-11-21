@@ -105,7 +105,8 @@ pub(crate) mod testing {
     /// Waits for the GPU and reads a whole `MAP_READ` buffer.
     pub(crate) fn read_mappable(gpu: &Gpu, buffer: &wgpu::Buffer) -> Vec<u8> {
         buffer.slice(..).map_async(wgpu::MapMode::Read, |result| result.expect("the buffer maps"));
-        gpu.device.poll(wgpu::PollType::wait_indefinitely()).expect("the device answers");
+        crate::device::wait_for(&gpu.device, None, crate::device::GPU_WAIT_LIMIT, "the queued work")
+            .expect("the device answers");
         let bytes = buffer.slice(..).get_mapped_range().expect("the buffer is mapped").to_vec();
         buffer.unmap();
         bytes

@@ -5,56 +5,57 @@ plan. `PROGRESS.md` records what is done and the evidence for it, `docs/decision
 `docs/blockers.md` what is blocked. Requirement IDs such as `[EYE-05]` in code and tests are labels from
 the original specification; `PROGRESS.md` keeps the evidence under them.
 
-## Where we stand (2026-11-20)
+## Where we stand (2026-11-21)
 
 The engineering base is broad and tested: codecs, GPU layer, shader system, document and commands,
 CPU and GPU evaluation, render graph, UI toolkit, skin model calibrated against measured skin colour,
 subsurface shading, bakers, LODs, texture compression. Since 2026-11-20 the eyes, mouth interior and
 hair are drawn on the head in CLI renders and the editor, the body measurements match ANSUR II, and
-a mean face of 8 scanned people exists. The character still reads as **computer-made**: the scanned
-face is not in the default character yet, the skin is waxy, the lashes and teeth look artificial and
-expressions read weakly. Data: HSRD-100 (face shape, skin detail) and BodyParts3D (muscle and bone
+the default face is the mean of 8 scanned people. The character still reads as **computer-made**: the
+skin is waxy, the lashes and teeth look artificial and expressions read weakly. Data: HSRD-100 (face shape, skin detail) and BodyParts3D (muscle and bone
 forms) are checked and in use; FLAME is out (owner, 2026-11-20).
 
 ## 1. Photorealism
 
-1. **Scanned face into the default character.** The mean face of 8 HSRD-100 people
-   (`data/template/face/face-model.hafm`, `generate/scan_face.rs`) is built but switched off: with it
-   on, 13 model tests failed (generate anat_02, mod_03, mod_06, mod_07, ac_wp06_1, adr_039; identity
-   ac_wp06, id_05, id_02 x2; expression sweep; eyelid sweep; hair_04 x2). Their messages were never
-   read, because the run died on the memory runaway fixed on 2026-11-20. Switch on with
-   `python target/agents/scan-data/py/apply3.py apply`, read the failures, fix them (likely:
-   vertex-exact mirror symmetry in `scan_face::apply`, move `anatomy.eye_center` with the eyes,
-   re-baseline the ANSUR head constants, raise `TEMPLATE_VERSION`); no limit is loosened. Then: the
-   bump at the back of the neck where the face meets the body, the band across the cheek, the light
-   line between the lips (teeth moved with the lips), ears (thin blades from the front), natural
-   asymmetry, the forehead shading band.
-2. **Face-shape controls from the scans.** 7 components from the 8 people move nose, lips, jaw and
-   face width, but each mixes ancestry, sex, age and weight, and they fold triangles at full range.
-   Bind them to the registry (`face.scan.shape_01..07`, proposal in
-   `target/agents/scan-data/STATUS.md` step 6) with a safe range.
+1. **Scanned face into the default character.** Done 2026-11-21 (`target/agents/face-scan/STATUS.md`,
+   stills `target/review/face/r2-final-*.png`): the mean face of 8 HSRD-100 people is on in the default
+   template, with a rounded skull matching ANSUR head length, breadth and circumference, ears with a rim,
+   and the nose-root seam faired (fold 88 -> 9 degrees). Round 3: the nape knob is a low, broad bump
+   now; the head render test checks the shipped skin and passes. Still to do: the ears are thin, flat
+   and pointed from the front (a 16-slot ear with rim, antihelix, concha, tragus and lobe is drafted in
+   `target/agents/face-scan/py/ear_r3_wip.rs`, reverted for a fold in the concha floor; fix in that
+   STATUS); the side of the forehead meets the temple along a near-vertical edge in three-quarter view
+   (the skull's `VAULT` cross-section is boxy in front); a bump in the far shoulder's outline (body); a
+   red mark at the base of the throat (jugular notch) in today's renders, cause unknown; natural asymmetry
+   as the default (`identity.asymmetry` 0.35, tests that need a symmetric face set it to 0); the eye
+   corners (already in the procedural base): a pale column of skin bridging the lids at the outer
+   corner, the caruncle split in two with a white sliver, crumpled lashes at both corners.
+2. **Face-shape controls from the scans.** Done 2026-11-21: `face.scan.shape_01..07` in the registry
+   (`provisional`), each with a range measured to fold no triangle (shape_03 -1.6..0.6, the others about
+   -1..1 or wider). Still to do: each component still mixes ancestry, sex, age and weight; ranges were
+   measured one component at a time, not in combination.
 3. **Body.** Done: measurements, pelvis, crotch, thighs and girths match ANSUR II. Still to do, in
    order:
-   - external genitalia, both variants (ADR-039): half built (`generate/genitals.rs`, design in
-     `target/agents/template-body/STATUS.md`); the genital faces stay in the closed `body` part.
-     Since this half-built state, two template tests fail that passed on 2026-11-19:
-     `ac_wp11_1_template_head_ibl_and_shadows` (render; one sample with furnace error 1, likely a
-     broken normal) and `ac_wp15_2_thickness_on_the_template` (tools; the nostril has 972 texels,
-     at least 1000 required: the new genital UV charts probably took face texture space);
+   - external genitalia, both variants (ADR-039): built 2026-11-21 (`generate/genitals.rs`; the body
+     outside the crease loop is bit-identical with either variant; stills `target/review/body/`), but
+     crude: the female site has a hard outline with a pointed top, thin ridges beside the penis root,
+     from the front the penis hides most of the scrotum. `ac_wp11_1_template_head_ibl_and_shadows`
+     now renders the shipped skin and passes (furnace error 0). UV packing: the face tile now packs better (nostril 1204 texels);
+     the other tiles can't be repacked until `Mesh::face_uv_area` stops calling one-texel navel faces
+     collapsed (f32 rounding);
    - visible surface anatomy: clavicles, scapulae, pectorals, spine groove, limb muscles
      (BodyParts3D as reference);
    - hands (knuckles, nails, palm creases) and feet (arches, toes, nails, thin spots on the soles);
    - pose correctives for shoulders, armpits, elbows, hips and knees;
-   - the square outline around the nipples, the nose seam.
-4. **Skin surface.** Region textures for albedo, normal and displacement (from the HSRD-100 scans
-   after their baked shadows and scanner glints are cleaned out; until then from measured statistics);
-   pores and fine lines that read at portrait distance; roughness and oil maps so the skin stops
-   looking waxy; cavity and specular occlusion; wrinkle maps for brow, forehead, crow's feet and
-   nasolabial folds, driven by expressions; age (wrinkle onset, thinning, spots); the document's
-   `skin.*` values must reach the compositor (today it always shows the defaults); convert the baked
-   thickness (metres, f32) to the compositor's format. Skin-shading flaws seen in the eye and mouth
-   close-ups: white glints at the inner eye corners, cream-coloured nostril interiors, a bright spot
-   at the inner lip corner, a skin-coloured strip along the lower lip's inner line.
+4. **Skin surface.** Done 2026-11-21 (`target/agents/skin-surface/STATUS.md`, stills
+   `target/review/skin/`): `skin.*` values reach the compositor (CLI, editor, agent server), baked
+   thickness and GPU-baked occlusion feed it, regional specular (Weyrich 2006) and sebum
+   (Algiert-Zielińska 2017), specular occlusion for lights, low-frequency tone variation, procedural
+   wrinkle maps for the 7 drivers, age spots, one bake per template, no corner glints. Still to do:
+   region textures from the HSRD-100 scans (shadows and glints cleaned out); pores still invisible at
+   portrait distance; age spots read as dots, not soft lentigines; nostril interior and lower-lip strip not re-checked on
+   the final head; ADR for the regional specular / sebum sources; the dark-red ring in the
+   eye socket under side light (item 1.9).
 5. **Eyes.** Done: eye shading in CLI renders and the editor (GPU test), the eyelid guard in
    `Evaluator`, catchlights, iris depth, caruncle, tear line, meniscus, vessels, lid and lash shadow;
    cost +0.55 ms for an eye close-up at 1440p. Still to do: the eye looks computer-made next to a
@@ -66,26 +67,43 @@ forms) are checked and in use; FLAME is out (owner, 2026-11-20).
    inside is still very dark, parameter-driven teeth.
 7. **Hair, brows, lashes.** Done: strands on the head with placement from template regions, six
    hairstyle presets (short, medium straight, long wavy, curly, coily, afro), brows, lashes, peach
-   fuzz and body hair, ribbon fallback, TAA stability, order independence. Still to do:
-   - lashes: a regular upright fringe, a light fan in three-quarter view; darker lash line, less even
-     spacing, checked against a photo;
-   - medium straight looks like a wig with a hard hairline; long wavy reads as crimp, not waves; the
-     afro has a spire on top; one stray strand at the back of the head (blend guides in world
-     directions);
-   - peach fuzz does not show at portrait distance, so it is off by default;
-   - close-up hair costs 12.7 ms at 1440p (depth 6.5, records 3.3): bin fragments per screen tile or
-     cull hidden strands, then measure.
-8. **Expressions, round 2.** 6 of 89 controls fail the range-of-motion sweep: au06 cheek raiser right
-   (1 triangle turned over), au16, au25, au27 (172 turned over), viseme stretch, viseme jaw-open-wide
-   (109 turned over); the presets surprise, fear, anger and the visemes aa, E, ih, kk, SS, TH turn
-   triangles over. In the smile, mouth-interior faces roll out at both corners (red dots). Make
-   expressions read clearly, checked against FACS references; register and test `ExpressionDrive`
-   (`crates/doc/src/expression_drive.rs`, written, not in `lib.rs`, no tests) and drive the face from
-   the document's sliders; wrinkles appear with the expressions (the drivers pass; there are no
-   authored wrinkle maps).
-9. **Light and camera.** Studio lighting rigs and HDR environments (permitted licence or generated),
-   contact shadows and ambient occlusion, camera presets for portraits, lens and depth of field. Drop
-   the flat grey background for review renders.
+   fuzz and body hair, ribbon fallback, TAA stability, order independence; round 4 (2026-11-21,
+   `target/agents/hair-render/STATUS.md`, stills `target/review/hair/r4-*.png`): lashes as smooth arcs
+   (150 upper in 4 irregular rows, 75 lower, uneven clumps, none crumpled at the corners, none in the
+   eye or skin), a soft hairline with baby hairs, parts on medium straight and long wavy, looser waves,
+   an afro without a peak, guides blended in world directions (no strays), hair hidden behind the head
+   culled (close-up 12.7 -> 9.9 ms at 1440p, GPU idle). Still to do:
+   - close-up hair still about 10 ms at 1440p (frame 11.5 ms): cull hair hidden behind hair, or bin
+     fragments per screen tile;
+   - lashes: about 1 mm of skin shows along the lash line in places; lighter than in a photo in
+     three-quarter view; checked against anatomy figures, not a photograph;
+   - the forehead reads high under the hairline; medium straight shows a stepped two-layer cut from
+     behind;
+   - peach fuzz does not show even back-lit at close range, so it stays off by default.
+8. **Expressions.** Round 2 done 2026-11-21 (`target/agents/expression2/STATUS.md`, stills
+   `target/review/expression/`): all 89 controls pass the range-of-motion sweep, none of the 34 presets
+   turns a triangle over, the smile no longer shows the mouth lining at the corners, the open mouth no
+   longer stretches a skin sheet across the opening, the neutral upper lip has no folds, and
+   `ExpressionDrive` drives the face from the document's sliders (clamped to each parameter's range,
+   tested). Still to do: sadness and disgust read weakly, contempt barely shows and has no preset
+   (proposal in that STATUS: one-sided AU12 + AU14), wrinkles do not appear with the expressions (no
+   authored maps; disgust shows no nose wrinkle), visemes cannot be set from the CLI; checked against
+   FACS from memory, not against reference photographs.
+9. **Light and camera.** Done 2026-11-21 (`target/agents/light-camera/STATUS.md`, stills
+   `target/review/light/s4-*.png`): shadow maps fitted to the view (about 0.25 mm per texel on the
+   face), soft penumbrae that grow with distance, ambient occlusion and contact shadows, 13 rigs
+   (three-point, Rembrandt, loop, clamshell, rim, sunset and the older ones), Sunset and StudioRoom
+   environments, 5 portrait camera presets with thin-lens depth of field, studio paper backdrop by
+   default in the CLI. Viewport 2.8 ms at 1440p (budget 8 ms; GPU idle), occlusion at half resolution
+   (0.33 ms), depth of field off in the viewport unless a lens is set. Still to do: depth of field costs
+   3.6 ms in Review and Still; the overcast rig is about a stop dark; the
+   occlusion is subtle (the depth buffer misses fold undersides); the dark-red ring in the eye socket
+   under side light is the subsurface blur's (it weighs taps by screen offset only: proposal in the
+   light-camera STATUS, for the skin); **`--test stills`
+   `ac_wp11_3_tiled_8k_still_equals_the_untiled_render` fails since this work**: 1926 samples differ by
+   more than one code value (bound 1327 of 132 M); likely cause: the shadow map is fitted to each tile's
+   own view (`RenderConfig::shadow_focus`), so tiles get different shadow texel grids; a still should fit
+   it once to the whole frame.
 10. **How realism is judged.** The twelve review scenes (portrait front and three-quarter, macro skin,
    macro eye, macro lips and mouth, harsh side light, back light, hair back and profile, expression
    sweep, skin-tone range, age range, full body in poses, crowd), rendered from the CLI and the editor,
@@ -105,18 +123,19 @@ forms) are checked and in use; FLAME is out (owner, 2026-11-20).
 4. Sculpt, paint and groom tools (WP-20): GPU brushes, symmetry, falloff, pen pressure, masks, locks.
 5. Comparison, calibration and photo-guided fit (WP-22): colour-checker calibration, landmark
    annotation, camera and parameter fit from a photo.
-6. Agent server and CLI (WP-23): the server, its tools, security and integration tests are done; still
-   to do are the CLI commands `serve`, `batch`, `turntable` and `validate` (design in
-   `target/agents/agent-server/STATUS.md`; adds the in-house `humanart-platform` to the CLI) and the
-   editor hook that starts the server and calls `Server::admit` when the human grants the link.
-   Quality report and metrics (WP-24).
+6. Agent server and CLI (WP-23): done 2026-11-21, including the CLI commands `serve` (stdio, loopback
+   HTTP with a token), `batch`, `turntable`, `validate` and the editor hook (`crates/app/src/
+   agent_host.rs`: grant starts the server and admits the agent, pause/revoke drive its gate). User
+   docs for the commands: text in `target/agents/cli-hook/STATUS.md`, to go into the user
+   documentation (WP-36). Still to do: quality report and metrics (WP-24).
 
 ## 3. Data pipeline
 
 Done: scan import, registration onto the template and the face model from 8 people
 (`humanart-tools` `capture`, WP-25 and the face part of WP-27). Still to do: appearance capture and
 fitting from the HSRD-100 photos (WP-26), a body model from data (WP-27 rest), consent, withdrawal
-and provenance records; a data attribution file (needed before the scan-derived face ships).
+and provenance records. The scan-derived face model is published under HSRD-100's CC BY 4.0 with
+the credits in `DATA-ATTRIBUTION.md` (ADR-056).
 HumanArt itself is MIT OR Apache-2.0 (ADR-055).
 
 ## 4. Shipping
@@ -128,32 +147,42 @@ format documentation (WP-36), release packaging (WP-37), sample project (WP-38),
 
 ## 5. Performance
 
-Benchmark suite and per-target report (WP-32). Known gaps: close-up hair 12.7 ms at 1440p (item
-1.7); skin detail pass fits its 2 ms budget only up to 38 % face coverage; the autosave journal
-allocates every 100 ms; GPU picking returns no triangle; two `block_on` implementations and some
-unbounded GPU waits; one GPU device per test binary instead of the shared one (ADR-040).
+Benchmark suite and per-target report (WP-32): `humanart-cli bench --scenario 10` (the UI scene) exists
+since 2026-11-21, scenarios 1-9 do not. Known gaps: close-up hair 9.9 ms at 1440p (item 1.7); skin
+detail pass fits its 2 ms budget only up to 38 % face coverage; each journal append on Windows makes
+34 small allocations (section 7). Done 2026-11-21 (`target/agents/loose-ends/STATUS.md`): GPU picking
+reports the triangle, one `block_on`, GPU waits have a time limit, all test binaries share one GPU
+device (ADR-040), the document side of the autosave no longer allocates.
 
 ## 6. Loose ends
 
-- A proposal opened before a human edit does not see that edit: an agent change to the same parameter
-  gets no `needs_review` warning (document crate).
-- `humanart-cli fontbake` and `bench` scenario 10.
-- `Ply::to_mesh` reports mesh problems at offset 0.
+- `ac_wp23_3_headless_render_matches_the_editor_viewport` (agent crate) failed once in 10 runs (a few
+  pixels above 8/255; the other 9 runs differ by 0). Cause unknown. Ruled out: the hair coverage
+  check-then-add in `shaders/hair/raster.wgsl` (it saturates at 16, a difference below 1e-6). To try:
+  fragments with equal depth writing `hair_records` in a different order; the shared GPU device.
+- `skin::tests::ac_wp13_3_partial_rect_cost_scales_with_area` (render lib, GPU timing ratio, bound
+  2.0x) fails when other GPU tests run beside it (2.05x and 2.39x with 2 test threads) and passes alone:
+  run GPU timing tests serially or mark them.
+- `tools/fontbake/bake.sh` can call `humanart-cli fontbake --dir` now; then delete
+  `crates/ui/examples/fontbake.rs`.
 - Identity axes use a pooled standard deviation; ADR-046 asks for per-sex values.
 - Shoulder width measured as 351 vs 382 mm by two agents: recheck on the current template.
-- `docs/architecture.md` names a `build-template` command and a template file that do not exist.
 - UV slivers that lock LOD vertices; low UV packing coverage.
-- `StreamingPool::update_external` (skips a zero-page upload).
-- Clippy on `humanart-agent` and `humanart-cli` not run since the hair round.
+- The embedded face model `data/template/face/face-model.hafm` cannot be rebuilt byte for byte from the
+  8 current fits: a rebuild shifts the mean face by about 1 mm and turns components 02 and 04-07, which
+  would change those sliders. The embedded file stays until the builder reproduces it (measured in
+  `target/agents/face-scan/hafm-diff.txt`).
 
 ## 7. Waiting for the owner
 
-- HSRD-100 licence: the dataset page says CC BY 4.0, each scan's own metadata says "Commercial" with
-  a price. Which one counts? (The mean face of 8 people avoids making one man's face the default.)
 - File extensions `.anthropos`, `.anchar`, `.antmpl`: keep them or rename to HumanArt ones.
 - Skin reference: six ITA skin-tone groups in place of Fitzpatrick I-VI, and the colour tolerances the
   agents set after seeing their results.
 - Skin defaults: `skin.haemoglobin` 0.3 -> 0.5 and `skin.eumelanin-ratio` 0.7 -> 0.75 to match measured
   medium skin.
-- Does the autosave's allocation every 100 ms break the no-allocation rule?
+- Autosave journal: the document side no longer allocates while a slider is dragged (74 of 300 frames
+  before, 0 now). What is left is Windows itself: each append to the journal file makes 34 small
+  allocations (path checks, opening the file). Zero needs either an open file handle kept by the
+  platform layer (can go stale if the file is renamed or deleted from outside) or an open-handle
+  append in the core file-system interface. Which one, or is 34 small allocations every 100 ms fine?
 - Skin budget: 2.0 ms for a face in view, or for a face filling the frame?

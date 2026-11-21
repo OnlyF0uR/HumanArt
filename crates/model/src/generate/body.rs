@@ -138,6 +138,9 @@ fn nipple_rings(side: f32) -> [PitRing; 7] {
 /// (1231 mm, sex midpoint).
 pub const NIPPLE_T: f32 = 0.66;
 
+/// How far (patch units, one grid cell = 1) a [`pit`] ring stays inside its block's sides.
+const PIT_MARGIN: f32 = 0.3;
+
 /// Lagrange weights of the nodes 0, 1, 2 at `s`.
 fn quad_weights(s: f32) -> [f32; 3] {
     [(s - 1.0) * (s - 2.0) * 0.5, -s * (s - 2.0), s * (s - 1.0) * 0.5]
@@ -213,7 +216,21 @@ fn pit(
             .iter()
             .map(|&th| {
                 let (x, y) = (th.cos() * rx * 0.001, th.sin() * ry * 0.001);
-                let on = patch(cs + sign_s * x * su, ct + sign_t * y * tv);
+                let (os, ot) = (sign_s * x * su, sign_t * y * tv);
+                // Keep the ring inside the block, PIT_MARGIN patch units off its sides: a ring that
+                // crosses the block's boundary folds the skin over there (the square outline and
+                // the fold under the nipples, whose centre sits low in its block).
+                let room = |o: f32, c: f32| {
+                    if o > 1e-9 {
+                        (2.0 - PIT_MARGIN - c) / o
+                    } else if o < -1e-9 {
+                        (PIT_MARGIN - c) / o
+                    } else {
+                        f32::INFINITY
+                    }
+                };
+                let k = room(os, cs).min(room(ot, ct)).clamp(0.0, 1.0);
+                let on = patch(cs + os * k, ct + ot * k);
                 on + n * (h * 0.001)
             })
             .collect();
@@ -696,7 +713,7 @@ pub fn build_with(a: &Anatomy, variant: Variant) -> Result<BodyCage> {
     }
     for (i, (block, side)) in [(EAR_L, 1.0_f32), (EAR_R, -1.0)].into_iter().enumerate() {
         let ring = ring_of(&loops, &block);
-        loops.ears[i] = face::ear(&mut cage, &ring, side)?;
+        loops.ears[i] = face::ear(&mut cage, &ring, side, a.auricle)?;
     }
     // Navel and nipples.
     let ring = ring_of(&loops, &NAVEL);
@@ -744,7 +761,16 @@ pub fn build_with(a: &Anatomy, variant: Variant) -> Result<BodyCage> {
     for k in 0..attach.len() {
         loops.creases.push((attach[k], attach[(k + 1) % attach.len()]));
     }
-    loops.genitals = genitals::build(&mut cage, variant, &attach)?;
+    // Where the body surface runs across each loop vertex: from the hexagon vertex it is bridged to
+    // (even slots) or the middle of the pentagon's two hexagon vertices (odd slots).
+    let from: Vec<Vec3> = (0..attach.len())
+        .map(|k| {
+            let (i, j) = (k / 2, (k / 2 + 1) % hexagon.len());
+            let (hi, hj) = (cage.pos[hexagon[i] as usize], cage.pos[hexagon[j] as usize]);
+            if k % 2 == 0 { hi } else { (hi + hj) * 0.5 }
+        })
+        .collect();
+    loops.genitals = genitals::build(&mut cage, variant, &attach, &from)?;
     Ok(BodyCage { cage, loops })
 }
 

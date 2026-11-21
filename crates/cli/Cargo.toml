@@ -20,9 +20,11 @@ humanart-doc.workspace = true
 humanart-gpu.workspace = true
 humanart-shaders.workspace = true
 humanart-render.workspace = true
+humanart-ui.workspace = true
 humanart-tools.workspace = true
 humanart-capture.workspace = true
 humanart-agent.workspace = true
+humanart-platform.workspace = true
 
 [target.'cfg(not(target_arch = "wasm32"))'.dependencies]
 wgpu = { workspace = true, features = ["dx12", "metal", "vulkan", "gles"] }

@@ -162,6 +162,8 @@ pub struct Ctx<'c, 's> {
     pub provenance: &'c Provenance,
     /// The agent link.
     pub agent: &'c AgentLink,
+    /// The agent server's address and bearer token while it runs.
+    pub agent_server: Option<(&'c str, &'c str)>,
     /// The preferences.
     pub prefs: &'c Prefs,
     /// The person at the editor.
@@ -1422,18 +1424,37 @@ fn agent_panel(ui: &mut Ui, ctx: &Ctx<'_, '_>, intents: &mut Vec<Intent>) {
     if a.is_revoked() {
         label_styled(ui, "Access revoked: agent commands are refused.", theme.text.small, theme.palette.danger);
     }
+    if let Some((url, token)) = ctx.agent_server {
+        let mut s = ArrayString::<96>::new();
+        let _ = write!(s, "Agent server: {url}");
+        label_styled(ui, s.as_str(), theme.text.small, theme.palette.text_muted);
+        ui.begin(Style { gap: theme.metrics.space_2, ..Style::row() });
+        if Button::new("Copy address").kind(ButtonKind::Ghost).show(ui).clicked {
+            ui.copy(url);
+        }
+        if Button::new("Copy token").kind(ButtonKind::Ghost).show(ui).clicked {
+            ui.copy(token);
+        }
+        ui.end();
+    }
     ui.begin(Style { gap: theme.metrics.space_2, ..Style::row() });
     let pause_label = if a.is_paused() { "Resume agent" } else { "Pause agent" };
     if Button::new(pause_label).kind(ButtonKind::Secondary).enabled(!a.is_revoked()).show(ui).clicked {
         intents.push(Intent::AgentPause(!a.is_paused()));
     }
-    let revoke_label = if a.is_revoked() { "Grant access" } else { "Revoke agent" };
-    if Button::new(revoke_label)
-        .kind(if a.is_revoked() { ButtonKind::Secondary } else { ButtonKind::Danger })
-        .show(ui)
-        .clicked
+    // Granting starts the agent server; revoking stops it [APP-04].
+    let serving = ctx.agent_server.is_some();
+    if a.is_revoked() || !serving {
+        let label = if a.is_revoked() { "Grant access" } else { "Start agent server" };
+        if Button::new(label).kind(ButtonKind::Secondary).show(ui).clicked {
+            intents.push(Intent::AgentRevoke(false));
+        }
+    }
+    if !a.is_revoked()
+        && (serving || a.status() != crate::agent_link::AgentStatus::Disconnected)
+        && Button::new("Revoke agent").kind(ButtonKind::Danger).show(ui).clicked
     {
-        intents.push(Intent::AgentRevoke(!a.is_revoked()));
+        intents.push(Intent::AgentRevoke(true));
     }
     ui.end();
     let mut s = ArrayString::<96>::new();

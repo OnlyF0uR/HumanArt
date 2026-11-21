@@ -9,11 +9,13 @@
 //! - [`modes`]: the editor modes `[APP-02]`.
 //! - [`provenance`]: author badges, change flashes, "changed since I last looked" `[APP-03]`.
 //! - [`agent_link`]: agent status, pause and revoke `[APP-04]`.
+//! - [`agent_host`]: the agent server started when the human grants the link `[AG-01]`.
 //! - [`prefs`]: preferences `[APP-05]`.
 //! - [`window`]: winit events to toolkit input, the window surface's configuration.
 //! - [`error`] holds [`error::AppError`].
 #![forbid(unsafe_code)]
 
+pub mod agent_host;
 pub mod agent_link;
 pub mod app;
 pub mod error;

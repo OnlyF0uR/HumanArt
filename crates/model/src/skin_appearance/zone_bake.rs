@@ -152,7 +152,7 @@ const fn caps(
 }
 
 /// The zones of the generated template, by stable region and joint names (artistic defaults).
-pub const TEMPLATE_ZONES: [ZoneSource; 10] = [
+pub const TEMPLATE_ZONES: [ZoneSource; 12] = [
     regions(Zone::Cheeks, &["cheek-L", "cheek-R", "malar-L", "malar-R"], 0.025),
     regions(Zone::Nose, &["nose"], 0.010),
     regions(Zone::UnderEye, &["lower-lid-L", "lower-lid-R"], 0.012),
@@ -196,6 +196,8 @@ pub const TEMPLATE_ZONES: [ZoneSource; 10] = [
     caps(Zone::Knees, &["L.shin", "R.shin"], Facing::Front, 0.035, &["thigh-L", "thigh-R", "shin-L", "shin-R"], 0.025),
     regions(Zone::Temples, &["temple-L", "temple-R"], 0.020),
     regions(Zone::Forehead, &["forehead"], 0.020),
+    regions(Zone::Chin, &["chin"], 0.012),
+    regions(Zone::Eyelids, &["upper-lid-L", "upper-lid-R"], 0.006),
 ];
 
 /// Names a template did not have (the zone parts they would have made are empty).
@@ -889,7 +891,7 @@ mod tests {
             match zone {
                 Zone::Knees => assert!(c.y < 0.7, "knees at {c:?}"),
                 Zone::Elbows => assert!(c.y > 0.8 && c.y < head.y, "elbows at {c:?}"),
-                Zone::Knuckles | Zone::Ears | Zone::Temples | Zone::Cheeks => {
+                Zone::Knuckles | Zone::Ears | Zone::Temples | Zone::Cheeks | Zone::Chin | Zone::Eyelids => {
                     assert!(c.x.abs() < 0.02, "{zone:?} symmetric");
                 }
                 _ => {}
@@ -953,8 +955,11 @@ mod tests {
         for zone in Zone::ALL {
             assert!(seen[zone.slot()] > 0, "{zone:?} has no texels");
         }
-        // Slots 10 and 11 are unused.
-        assert!(weights.slot(10).iter().all(|&x| x == 0.0));
+        // The chin is under the lips, the upper lids above the under-eye zone.
+        let (chin, _, _) = centroid(Zone::Chin);
+        let (lids, _, _) = centroid(Zone::Eyelids);
+        let (under, _, _) = centroid(Zone::UnderEye);
+        assert!(chin.y < lips.y && lids.y > under.y);
     }
 
     #[test]

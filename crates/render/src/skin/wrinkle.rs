@@ -311,6 +311,12 @@ impl WrinkleGpu {
     /// Writes this frame's expression terms (one per driver, `DriverTable::expression_terms`).
     /// Allocation-free (`[PERF-R1]`).
     pub fn set_terms(&mut self, gpu: &Gpu, terms: &[f32]) -> Result<(), SkinGpuError> {
+        self.write_terms(&gpu.queue, terms)
+    }
+
+    /// [`WrinkleGpu::set_terms`] on a queue (for callers that hold the queue, not the [`Gpu`]).
+    /// Allocation-free (`[PERF-R1]`).
+    pub fn write_terms(&mut self, queue: &wgpu::Queue, terms: &[f32]) -> Result<(), SkinGpuError> {
         let n = self.driver_count as usize;
         if terms.len() < n {
             return Err(SkinGpuError::Invalid { what: "one expression term per driver" });
@@ -321,7 +327,7 @@ impl WrinkleGpu {
         for (chunk, t) in self.terms_bytes.as_chunks_mut::<4>().0.iter_mut().zip(&terms[..n]) {
             *chunk = t.to_le_bytes();
         }
-        gpu.queue.write_buffer(&self.terms, 0, &self.terms_bytes[..n * 4]);
+        queue.write_buffer(&self.terms, 0, &self.terms_bytes[..n * 4]);
         Ok(())
     }
 

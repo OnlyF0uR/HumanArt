@@ -17,22 +17,22 @@ use std::sync::Arc;
 use humanart_gpu::Gpu;
 use humanart_gpu::resources::{Resources, TextureId};
 use humanart_math::Vec3;
-use humanart_model::skin_appearance::channels::BaseValues;
-use humanart_render::camera::{Camera, Exposure, ReviewCamera};
+use humanart_render::camera::{Camera, Exposure, Lens, ReviewCamera};
 use humanart_render::deform::{DeformSettings, GpuDeformer};
 use humanart_render::ibl::EnvironmentSource;
-use humanart_render::light::{BuiltinRig, LightRig};
+use humanart_render::light::{BackdropChoice, BuiltinRig, LightRig};
 use humanart_render::renderer::{
     DebugView, FrameInput, MAX_OVERLAY_PRIMITIVES, OverlayPrimitive, PickHit, Quality, RenderConfig, Renderer,
 };
 use humanart_render::scene::{GpuScene, Material, Mesh, Scene};
 use humanart_render::sss::SkinShading;
+use humanart_render::surface::SurfaceSettings;
 
 use super::error::EngineError;
 use super::features::{FeatureParts, Features, add_parts};
 use super::hair::{CharacterHair, HairOptions};
 use super::model::Model;
-use super::skin::{SKIN_TILE_SIZE, SURFACED_SKIN_MATERIAL, SkinLook, character_meshes};
+use super::skin::{SKIN_TILE_SIZE, SURFACED_SKIN_MATERIAL, SkinLook, SkinWrinkles, character_meshes};
 
 /// The material of the character's non-skin parts, and of the whole character when the skin
 /// surface is off (a medium skin albedo, linear Rec.709).
@@ -52,6 +52,12 @@ pub struct ViewSettings {
     pub rig: BuiltinRig,
     /// Draw the wireframe over the surface.
     pub wireframe: bool,
+    /// The backdrop (todo 1.9): the rig's own, studio paper, flat grey or the environment.
+    pub backdrop: BackdropChoice,
+    /// The lens of the depth of field (todo 1.9); `None`: everything is sharp.
+    pub lens: Option<Lens>,
+    /// Screen-space ambient occlusion and contact shadows (todo 1.9).
+    pub occlusion: bool,
 }
 
 impl Default for ViewSettings {
@@ -62,6 +68,9 @@ impl Default for ViewSettings {
             quality: Quality::Interactive,
             rig: BuiltinRig::NeutralStudio,
             wireframe: false,
+            backdrop: BackdropChoice::Rig,
+            lens: None,
+            occlusion: true,
         }
     }
 }
@@ -112,6 +121,9 @@ pub struct Viewer {
     meshes: Vec<usize>,
     skin: Option<SkinLook>,
     skin_error: Option<EngineError>,
+    wrinkles: Option<SkinWrinkles>,
+    /// The scene object of the surfaced skin.
+    skin_object: Option<usize>,
     hair: Option<CharacterHair>,
     hair_error: Option<EngineError>,
     features: Option<Features>,
@@ -120,7 +132,7 @@ pub struct Viewer {
     uploaded: u64,
     settings: ViewSettings,
     rig: LightRig,
-    rig_kind: Option<BuiltinRig>,
+    rig_kind: Option<(BuiltinRig, BackdropChoice)>,
     overlay: Vec<OverlayPrimitive>,
     reset: bool,
 }
@@ -165,14 +177,14 @@ impl Viewer {
         let mut skin = None;
         let mut skin_error = None;
         let surfaced = if options.skin_surface {
-            let built = character_meshes(template).and_then(|m| {
-                SkinLook::new(gpu, template, &BaseValues::default(), SKIN_TILE_SIZE).map(|look| (m, look))
-            });
+            let built = character_meshes(template)
+                .and_then(|m| SkinLook::new(gpu, template, model.skin(), SKIN_TILE_SIZE).map(|look| (m, look)));
             built.map_err(|e| skin_error = Some(e)).ok()
         } else {
             None
         };
         let mut parts = FeatureParts::default();
+        let mut skin_object = None;
         if let Some(((mut skin_mesh, _rest), look)) = surfaced {
             // The eye and mouth parts as their own objects ([`super::features`]).
             parts = add_parts(&mut scene, template, &mut skin_mesh, SKIN_MATERIAL)?;
@@ -181,6 +193,7 @@ impl Viewer {
             if let Some(o) = scene.objects.get_mut(object) {
                 o.skin = SkinShading { surface: true, ..SkinShading::default() };
                 meshes.push(o.mesh);
+                skin_object = Some(object);
             }
             skin = Some(look);
         } else {
@@ -206,6 +219,14 @@ impl Viewer {
             Arc::clone(template),
             DeformSettings { lods: false, ..DeformSettings::default() },
         )?;
+        // The expression wrinkles read the deformer's region strain (a failure leaves them off).
+        let wrinkles = match &skin {
+            Some(_) => SkinWrinkles::new(gpu, template, &deformer).ok().flatten(),
+            None => None,
+        };
+        if let Some(w) = &wrinkles {
+            w.bind(gpu, &mut renderer);
+        }
         let (hair, hair_error) =
             super::hair::build_for_view(gpu, resources, model, options.hair.as_ref(), &mut renderer, &deformer);
         let (mut features, features_error) = match Features::new(resources, model, &parts, &deformer) {
@@ -225,6 +246,8 @@ impl Viewer {
             meshes,
             skin,
             skin_error,
+            wrinkles,
+            skin_object,
             hair,
             hair_error,
             features,
@@ -239,6 +262,54 @@ impl Viewer {
         })
     }
 
+    /// Brings the surfaced skin up to date with `model`'s `skin.*` values (todo 1.4): re-resolves
+    /// the compositor, regenerates the micro-detail or rewrites the flush when they changed since
+    /// the last call ([`SkinLook::sync`]). Call it before [`Viewer::record`] when the document may
+    /// have changed; it does nothing (and allocates nothing) otherwise. Returns whether the skin
+    /// changed.
+    ///
+    /// # Errors
+    /// The compositor's and the surface's errors.
+    pub fn sync_skin(&mut self, gpu: &Gpu, model: &Model) -> Result<bool, EngineError> {
+        let Some(look) = self.skin.as_mut() else { return Ok(false) };
+        let changed = look.sync(gpu, &mut self.renderer, model)?;
+        if changed {
+            self.reset = true;
+        }
+        Ok(changed)
+    }
+
+    /// Replaces the surfaced skin's layer settings (for tools and calibration; the defaults come
+    /// from [`SkinLook`]). Does nothing without the surfaced skin.
+    ///
+    /// # Errors
+    /// [`EngineError::Render`] for a setting out of its range.
+    pub fn set_skin_settings(&mut self, gpu: &Gpu, settings: SurfaceSettings) -> Result<(), EngineError> {
+        if self.skin.is_some() {
+            self.renderer.skin_surface_mut().set_settings(gpu, settings)?;
+            self.reset = true;
+        }
+        Ok(())
+    }
+
+    /// Replaces the surfaced skin object's shading (lobes, profile scale, translucency); does
+    /// nothing without the surfaced skin.
+    ///
+    /// # Errors
+    /// [`EngineError::Render`] for a value out of its range.
+    pub fn set_skin_shading(&mut self, shading: SkinShading) -> Result<(), EngineError> {
+        if let Some(object) = self.skin_object {
+            self.scene.set_skin(object, SkinShading { surface: true, ..shading })?;
+            self.reset = true;
+        }
+        Ok(())
+    }
+
+    /// The surfaced skin's layer settings.
+    pub fn skin_settings(&self) -> &SurfaceSettings {
+        self.renderer.skin_surface().settings()
+    }
+
     /// The skin the viewer binds (`None` when the surface is off or could not be built).
     pub fn skin(&self) -> Option<&SkinLook> {
         self.skin.as_ref()
@@ -247,6 +318,12 @@ impl Viewer {
     /// Why the skin surface asked for in [`ViewerOptions`] could not be built, if it could not.
     pub fn skin_error(&self) -> Option<&EngineError> {
         self.skin_error.as_ref()
+    }
+
+    /// The expression wrinkles the viewer folds (`None` without the surfaced skin or when the
+    /// template has none).
+    pub fn wrinkles(&self) -> Option<&SkinWrinkles> {
+        self.wrinkles.as_ref()
     }
 
     /// The hair the viewer draws (`None` when off or when it could not be built).
@@ -344,10 +421,16 @@ impl Viewer {
         if let Some(features) = &mut self.features {
             features.sync(resources, &mut self.renderer, model)?;
         }
+        if let Some(w) = &mut self.wrinkles {
+            w.update(resources.queue(), model)?;
+        }
         if self.deformer.encode(encoder)
             && let Some(features) = &self.features
         {
             features.encode(encoder);
+        }
+        if let Some(w) = &self.wrinkles {
+            w.record(encoder)?;
         }
         if let Some(hair) = &mut self.hair {
             hair.encode(encoder);
@@ -410,17 +493,21 @@ impl Viewer {
     fn apply_settings(&mut self, resources: &mut Resources, model: &Model) -> Result<(), EngineError> {
         let s = self.settings;
         let current = *self.renderer.config();
-        let config = RenderConfig { quality: s.quality, debug: s.debug, ..current };
+        let config = RenderConfig { quality: s.quality, debug: s.debug, occlusion: s.occlusion, ..current };
         if config != current {
             self.renderer.configure(resources, config)?;
             self.reset = true;
         }
-        if self.rig_kind != Some(s.rig) {
+        if self.renderer.lens().copied() != s.lens {
+            self.renderer.set_lens(resources, s.lens)?;
+            self.reset = true;
+        }
+        if self.rig_kind != Some((s.rig, s.backdrop)) {
             let (center, radius) = model.head_bounds();
-            self.rig = LightRig::builtin(s.rig, center, radius);
+            self.rig = LightRig::builtin(s.rig, center, radius).with_backdrop(s.backdrop);
             self.renderer.set_environment(resources, EnvironmentSource::Procedural(self.rig.environment))?;
             self.settings.camera.exposure = Exposure::ev100(self.rig.ev100);
-            self.rig_kind = Some(s.rig);
+            self.rig_kind = Some((s.rig, s.backdrop));
             self.reset = true;
         }
         Ok(())

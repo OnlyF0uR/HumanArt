@@ -34,6 +34,10 @@ pub const FLAG_DUAL: u32 = 1;
 pub const FLAG_OCCLUSION: u32 = 2;
 /// Flag: hair shadows on the skin (`HAIR_FLAG_SKIN_SHADOW`).
 pub const FLAG_SKIN_SHADOW: u32 = 4;
+/// Flag: skip segments hidden behind the opaque scene (`HAIR_FLAG_CULL`).
+pub const FLAG_CULL: u32 = 8;
+/// Side of the scene depth tiles of the hidden-segment test, pixels (`HAIR_TILE`).
+pub const TILE: u32 = 16;
 /// Invocations per workgroup of the compute rasteriser.
 pub const WORKGROUP: u32 = 64;
 /// Most workgroups along one dispatch axis.

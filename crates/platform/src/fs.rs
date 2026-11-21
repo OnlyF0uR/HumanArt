@@ -572,4 +572,32 @@ pub(crate) mod tests {
         let text = String::from_utf8(native.read("app.log").unwrap()).unwrap();
         assert!(text.contains("written to disk"), "{text}");
     }
+
+    /// `[PERF-R1]` measures what one journal append costs the allocator: the editor appends a
+    /// batch of drag frames to the journal every 100 ms. The path API rebuilds the operating-system
+    /// path (normalised, checked component by component, canonicalised to stay inside the root)
+    /// and opens the file on every call, and that allocates; the session's own part of the write
+    /// allocates nothing (humanart-doc `perf_r1_steady_drag_frames_do_not_allocate`).
+    #[test]
+    fn perf_r1_native_append_allocations_are_measured() {
+        let dir = TempDir::new("append");
+        let fs = StdFileSystem::rooted(dir.path()).unwrap();
+        fs.create_dir_all("p/journal").unwrap();
+        fs.write("p/journal/journal.log", b"header\n").unwrap();
+        let line = [b'x'; 160];
+        fs.append("p/journal/journal.log", &line).unwrap();
+        let rounds = 50u64;
+        let counts = humanart_core::alloc::count_in(|| {
+            for _ in 0..rounds {
+                fs.append("p/journal/journal.log", &line).unwrap();
+            }
+        });
+        let per = (counts.allocations + counts.reallocations) as f64 / rounds as f64;
+        println!(
+            "rooted StdFileSystem::append of a 160-byte line: {per:.1} allocator calls per append ({} bytes per append)",
+            counts.bytes_allocated / rounds
+        );
+        assert_eq!(fs.metadata("p/journal/journal.log").unwrap().len, 7 + 160 * (rounds + 1));
+        assert!(per > 0.0 && per < 64.0, "{per}");
+    }
 }

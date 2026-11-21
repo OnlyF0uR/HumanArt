@@ -9,7 +9,7 @@
 use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
-use humanart_gpu::{DeviceRequest, Gpu};
+use humanart_gpu::Gpu;
 use humanart_io::image::{ColorSpace, Image, Limits, Samples};
 
 use crate::color::Color;
@@ -20,8 +20,8 @@ use crate::theme::FontFace;
 
 /// The device every GPU test shares.
 pub(crate) fn gpu() -> &'static Gpu {
-    static GPU: OnceLock<Gpu> = OnceLock::new();
-    GPU.get_or_init(|| Gpu::headless_blocking(&DeviceRequest::default()).expect("this machine has a GPU"))
+    // The process's shared device (ADR-040).
+    humanart_gpu::shared_headless().expect("this machine has a GPU")
 }
 
 /// Serialises GPU tests that share the device's queue-level state (uncaptured-error scopes).
@@ -85,7 +85,8 @@ pub(crate) fn draw_and_read(
     );
     queue.submit([encoder.finish()]);
     staging.slice(..).map_async(wgpu::MapMode::Read, |r| r.expect("the readback maps"));
-    device.poll(wgpu::PollType::wait_indefinitely()).expect("the device answers");
+    humanart_gpu::device::wait_for(device, None, humanart_gpu::device::GPU_WAIT_LIMIT, "the queued work")
+        .expect("the device answers");
     let mapped = staging.slice(..).get_mapped_range().expect("mapped").to_vec();
     staging.unmap();
     let mut out = Vec::with_capacity((width * height * 4) as usize);

@@ -9,12 +9,12 @@ use crate::light::{GpuLight, MAX_LIGHTS, MAX_SHADOWED};
 
 /// Bytes the shaders see at each dynamic offset of the uniform ring: the largest block
 /// ([`FrameUniforms`]) rounded up to 256.
-pub const RING_BINDING_SIZE: u32 = 1536;
+pub const RING_BINDING_SIZE: u32 = 1792;
 
 pod_struct! {
     /// The per-frame constants (`struct Frame`).
     #[derive(Debug, PartialEq)]
-    pub struct FrameUniforms(size = 1488, align = 4) {
+    pub struct FrameUniforms(size = 1568, align = 4) {
         /// World to clip with the TAA jitter.
         pub view_proj: [f32; 16],
         /// World to clip without jitter.
@@ -39,8 +39,24 @@ pod_struct! {
         pub jitter: [f32; 4],
         /// Environment scale (nits), rotation, specular mip count, light count.
         pub environment: [f32; 4],
-        /// Backdrop radiance; w = 0 flat, 1 environment.
+        /// Backdrop: the flat radiance (w = 0), nothing (w = 1: the environment) or the paper's
+        /// reflectance (w = 2: the studio backdrop).
         pub background: [f32; 4],
+        /// Studio backdrop: the wall's unit normal (towards the camera) and its plane offset
+        /// (`normal . p = w` on the wall).
+        pub backdrop_wall: [f32; 4],
+        /// Studio backdrop: the floor's height, the radius of the cove between wall and floor,
+        /// the falloff strength and the falloff radius.
+        pub backdrop_floor: [f32; 4],
+        /// Studio backdrop: the spot on the wall behind the subject; w unused.
+        pub backdrop_spot: [f32; 4],
+        /// Depth of field: the focus distance (metres along the view axis), the radius of the
+        /// circle of confusion at infinity (pixels), the largest radius drawn (pixels), on (1/0).
+        pub lens: [f32; 4],
+        /// Screen-space occlusion: the ambient radius (metres), the contact-shadow length
+        /// (metres), the tangent of half the vertical field of view, 0 off or the resolution divisor
+        /// of the occlusion targets (1 full, 2 half).
+        pub occlusion: [f32; 4],
         /// TAA minimum weight, mode (0 TAA, 1 accumulate), frames accumulated, reset.
         pub taa: [f32; 4],
         /// Frame index, debug view, shadow map size, flags.
@@ -66,6 +82,11 @@ impl FrameUniforms {
         jitter: [0.0; 4],
         environment: [0.0; 4],
         background: [0.0; 4],
+        backdrop_wall: [0.0; 4],
+        backdrop_floor: [0.0; 4],
+        backdrop_spot: [0.0; 4],
+        lens: [0.0; 4],
+        occlusion: [0.0; 4],
         taa: [0.0; 4],
         counters: [0; 4],
         lights: [GpuLight::NONE; MAX_LIGHTS],
@@ -87,8 +108,10 @@ pod_struct! {
     pub struct TonemapUniforms(size = 16, align = 4) {
         /// The exposure scale.
         pub exposure: f32,
-        /// Padding to 16 bytes.
-        pub pad: [f32; 3],
+        /// The dither added before the 8-bit rounding, in steps of 1/255 (0: none).
+        pub dither: f32,
+        /// The origin of a still's tile in the full image, pixels (the dither's seed).
+        pub tile: [f32; 2],
     }
 }
 
@@ -112,7 +135,7 @@ mod tests {
     /// The sizes the WGSL structs have (uniform layout: 16-byte aligned members).
     #[test]
     fn blocks_match_their_wgsl_sizes() {
-        assert_eq!(std::mem::size_of::<FrameUniforms>(), 4 * 64 + 4 * 64 + 4 * 16 + 9 * 16 + 8 * 96);
+        assert_eq!(std::mem::size_of::<FrameUniforms>(), 4 * 64 + 4 * 64 + 4 * 16 + 14 * 16 + 8 * 96);
         assert!(std::mem::size_of::<FrameUniforms>() as u32 <= RING_BINDING_SIZE);
         assert_eq!(RING_BINDING_SIZE % 256, 0);
         assert_eq!(std::mem::size_of::<IblUniforms>(), 48);
@@ -146,6 +169,11 @@ mod tests {
                 "jitter",
                 "environment",
                 "background",
+                "backdrop_wall",
+                "backdrop_floor",
+                "backdrop_spot",
+                "lens",
+                "occlusion",
                 "taa",
                 "counters",
                 "lights",

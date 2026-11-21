@@ -13,8 +13,8 @@ use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, Instant};
 
+use humanart_gpu::Gpu;
 use humanart_gpu::resources::{Budget, Resources, TextureId};
-use humanart_gpu::{DeviceRequest, Gpu};
 use humanart_render::camera::Camera;
 use humanart_render::capture;
 use humanart_render::light::LightRig;
@@ -66,9 +66,9 @@ fn start_watchdog() {
 
 /// The test binary's one headless device (created on first use, never dropped).
 pub fn gpu() -> &'static Gpu {
-    static GPU: OnceLock<Gpu> = OnceLock::new();
     start_watchdog();
-    let gpu = GPU.get_or_init(|| Gpu::headless_blocking(&DeviceRequest::default()).expect("this machine has a GPU"));
+    // The process's shared device (ADR-040).
+    let gpu = humanart_gpu::shared_headless().expect("this machine has a GPU");
     progress();
     gpu
 }

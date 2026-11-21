@@ -12,9 +12,12 @@
 //! the tail, upper hairs angled down and lower hairs up (the herringbone of a real brow), lying
 //! at a small lift angle above the skin, each with its own length.
 //!
-//! **Lashes** ([`lash_groom`]): roots along the lid margin in one or more rows; each lash leaves
-//! the lid along the surface normal tilted away from the eye opening, fans toward the outer
-//! corner, is longest past the middle of the lid and curls by its own amount.
+//! **Lashes** ([`lash_groom`]): roots unevenly spaced along the lid margin in irregular rows;
+//! each lash leaves the lid forward, tilted away from the eye opening, the outer ones fanning
+//! toward the outer corner; it is longest past the middle of the lid, curls as one smooth arc by
+//! its own amount, gathers with its neighbours into clumps, and some are short (still growing).
+//! A lash that would touch the eyeball or the lid is lifted away whole, never bent point by
+//! point.
 //!
 //! **Lid-following hooks** `[EXP-05]`: lashes follow the lid because their roots are bound to lid
 //! triangles. For the lash direction change of a blink, [`FeatureGroom::along`] gives each lash's
@@ -36,7 +39,7 @@ use super::surface::{HairSurface, normalize_or};
 /// The most hairs one brow or lash row set may have.
 pub const MAX_FEATURE_HAIRS: usize = 8192;
 
-/// Control points per brow or lash hair.
+/// Control points per brow hair (lashes: [`LASH_POINTS`]).
 pub const FEATURE_POINTS: u32 = 6;
 
 /// A brow or lash groom: one guide per hair.
@@ -105,24 +108,37 @@ impl Default for BrowSpec {
 }
 
 /// Settings of [`lash_groom`].
+///
+/// The defaults follow the anatomy texts' lash counts and lengths (upper lid about 90 to 160
+/// lashes in 3 to 6 irregular rows, 8 to 12 mm long; lower lid about 75 to 80, 6 to 8 mm); the
+/// angles, the curl, the fan and the share of growing lashes are styling choices.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct LashSpec {
     /// Upper lid (lashes turn up) or lower lid (lashes turn down).
     pub upper: bool,
     /// Lashes on the lid.
     pub count: usize,
-    /// Rows the lashes are spread over (1..=4), each 0.4 mm further behind the margin.
+    /// Rows the lashes are spread over (1..=6), each about [`LASH_ROW_STEP`] further behind the
+    /// margin, irregular.
     pub rows: u32,
     /// Length of the longest lashes, metres.
     pub length: f32,
     /// Random per-lash length change, ± fraction.
     pub length_variation: f32,
-    /// Angle the lash leaves the lid at, away from the eye opening, radians.
+    /// Angle the lash leaves the lid at, above the plane of the lid margin (away from the eye
+    /// opening), radians; negative toward the opening (upper lashes leave forward and a little
+    /// down, so their bases crowd into a dark line along the lid in front view, then curl up).
     pub tilt: f32,
     /// Total bend of a lash from root to tip, radians.
     pub curl: f32,
     /// Random per-lash curl change, ± fraction.
     pub curl_variation: f32,
+    /// How far the lashes of the outer part of the lid sweep toward the outer corner (and the
+    /// innermost toward the nose), radians at the ends.
+    pub fan: f32,
+    /// Share of lashes still growing (a quarter to two thirds of their full length): they crowd
+    /// the lash line, which reads darker than the lashes' tips.
+    pub growing: f32,
 }
 
 impl LashSpec {
@@ -131,13 +147,15 @@ impl LashSpec {
     pub const fn upper() -> Self {
         Self {
             upper: true,
-            count: 120,
-            rows: 2,
-            length: 0.010,
-            length_variation: 0.2,
-            tilt: 0.05,
-            curl: 0.6,
+            count: 150,
+            rows: 4,
+            length: 0.010_5,
+            length_variation: 0.18,
+            tilt: -0.2,
+            curl: 1.05,
             curl_variation: 0.3,
+            fan: 0.75,
+            growing: 0.3,
         }
     }
 
@@ -146,13 +164,15 @@ impl LashSpec {
     pub const fn lower() -> Self {
         Self {
             upper: false,
-            count: 55,
-            rows: 1,
-            length: 0.006,
+            count: 75,
+            rows: 2,
+            length: 0.006_8,
             length_variation: 0.25,
-            tilt: 0.15,
-            curl: 0.25,
-            curl_variation: 0.3,
+            tilt: 0.05,
+            curl: 0.4,
+            curl_variation: 0.35,
+            fan: 0.6,
+            growing: 0.25,
         }
     }
 }
@@ -189,10 +209,10 @@ impl Line {
 }
 
 /// The parameters of a groom of authored hairs.
-fn feature_params(count: usize, thickness: f32, tip_ratio: f32) -> GroomParams {
+fn feature_params(count: usize, points: u32, thickness: f32, tip_ratio: f32) -> GroomParams {
     GroomParams {
         strand_count: count as f32,
-        points: FEATURE_POINTS as f32,
+        points: points as f32,
         interpolation: 1.0,
         length_variation: 0.0,
         noise: 0.0,
@@ -301,7 +321,7 @@ pub fn brow_groom(
     if guides.is_empty() {
         return Err(HairError::invalid("brow", 0, "no hair could be bound to the skin"));
     }
-    let params = feature_params(guides.len(), 0.000_1, 0.35);
+    let params = feature_params(guides.len(), FEATURE_POINTS, 0.000_1, 0.35);
     Ok(FeatureGroom { guides, params, along, axis })
 }
 
@@ -324,22 +344,84 @@ pub struct Eyeball {
 /// The least distance between a lash and the eyeball's surface, metres.
 pub const LASH_EYE_CLEARANCE: f32 = 0.000_4;
 
+/// The least distance between a lash root and the eyeball's surface, metres (the margin rests
+/// on the globe; the lashes leave from its front edge).
+pub const LASH_ROOT_EYE_CLEARANCE: f32 = 0.000_25;
+
 /// The least distance a lash point past the root keeps above the lid skin, metres.
 pub const LASH_SKIN_CLEARANCE: f32 = 0.000_1;
 
-/// Lashes per clump: tips of neighbouring lashes gather in clumps of this many (inclusive range).
-pub const LASH_CLUMP: (u32, u32) = (3, 5);
+/// Lashes per clump (inclusive range); about a quarter of the lashes stand alone between clumps.
+pub const LASH_CLUMP: (u32, u32) = (2, 6);
+
+/// Depth between two lash rows, behind the margin along the lid's front surface, metres.
+pub const LASH_ROW_STEP: f32 = 0.000_15;
+
+/// Control points per lash: a curled lash needs more than a brow hair.
+pub const LASH_POINTS: u32 = 8;
+
+/// Shapes a lash is tried in before it is left out: each lifts it further from the eye and
+/// shortens it a little, so lashes at the canthi clear the globe and the other lid whole
+/// instead of being bent point by point.
+const LASH_ATTEMPTS: u32 = 10;
+
+/// Where the lashes begin along the margin, from the inner canthus (upper, lower lid): the
+/// lacrimal part of the lid, medial to the punctum, bears none.
+const LASH_START: (f32, f32) = (0.07, 0.12);
+
+/// Where the lashes end along the margin: the last millimetre or two before the outer canthus,
+/// where the lids meet, bears none (lashes there ran into the other lid).
+const LASH_END: f32 = 0.94;
+
+/// One lash being built: its place along the lid, the lid tangent there, its points.
+struct Lash {
+    along: f32,
+    tangent: Vec3,
+    points: Vec<Vec3>,
+}
+
+/// Every point of a lash clear of the eyeball and (past the root) the lid skin.
+fn lash_clear(points: &[Vec3], skin: &TriangleGrid, eyeball: Option<&Eyeball>) -> bool {
+    points.iter().enumerate().all(|(k, &q)| {
+        let skin_ok = k == 0 || skin.closest(q).is_some_and(|c| c.signed_distance >= LASH_SKIN_CLEARANCE);
+        let need = if k == 0 { LASH_ROOT_EYE_CLEARANCE } else { LASH_EYE_CLEARANCE };
+        let eye_ok = eyeball.is_none_or(|e| e.grid.closest(q).is_none_or(|c| c.signed_distance >= need));
+        skin_ok && eye_ok
+    })
+}
+
+/// The points of a lash from `root` leaving along `start`, bending toward `away` by `curl` over
+/// `length` (evenly, so the lash is one smooth arc).
+fn lash_points(root: Vec3, start: Vec3, away: Vec3, tangent: Vec3, length: f32, curl: f32) -> Vec<Vec3> {
+    let bend_axis = normalize_or(start.cross(away), tangent);
+    let step = length / (LASH_POINTS - 1) as f32;
+    let mut q = root;
+    let mut out = Vec::with_capacity(LASH_POINTS as usize);
+    out.push(q);
+    for k in 1..LASH_POINTS {
+        let t = (k as f32 - 0.5) / (LASH_POINTS - 1) as f32;
+        q += Quat::from_axis_angle(bend_axis, curl * t).mul_vec3(start) * step;
+        out.push(q);
+    }
+    out
+}
 
 /// The lashes of one lid along `margin` (world points from the inner to the outer canthus).
 /// `opening` is the world direction from the lid margin into the eye opening (down for an upper
 /// lid, up for a lower lid); lashes leave away from it.
 ///
-/// With an `eyeball`, a lash leaves the margin along the eyeball's radius (rejected from the lid
-/// tangent) tilted by [`LashSpec::tilt`] away from the opening; without one, along the skin
-/// normal minus its part along the lid's up/down direction. Neighbouring lashes are gathered into
-/// clumps of [`LASH_CLUMP`] whose tips converge, then every point past the root is walked out of
-/// the eyeball and the skin (keeping each segment's length), so no lash pierces the globe or runs
-/// inside the lid where the margin wraps around the eye at the canthi.
+/// Roots: unevenly spaced along the margin (strongly jittered strata, sparser toward the inner
+/// corner, none on the lacrimal part), in [`LashSpec::rows`] irregular rows behind the margin.
+/// Direction: with an `eyeball`, a lash leaves forward (halfway between the eyeball's radius at
+/// the root and through the middle of the lid, without their parts along the lid and along the
+/// lid's up/down direction) tilted [`LashSpec::tilt`] away from the opening; without one, along
+/// the skin normal with the same parts removed. The outer lashes fan toward the outer corner,
+/// each lash turns a little at random, and it curls away from the eye as one smooth arc. A share
+/// of lashes is still growing (short). A lash whose shape would come closer than
+/// [`LASH_EYE_CLEARANCE`] to the eyeball or [`LASH_SKIN_CLEARANCE`] to the skin is tried again
+/// turned further toward the skin's normal at its root, a little higher and shorter, and left
+/// out when no try clears (no point is ever pushed, so no lash is crumpled). Runs of
+/// [`LASH_CLUMP`] neighbours then gather toward their tips, where that keeps them clear.
 pub fn lash_groom(
     surface: &HairSurface,
     grid: &TriangleGrid,
@@ -350,120 +432,124 @@ pub fn lash_groom(
     seed: u64,
 ) -> HairResult<FeatureGroom> {
     check_count(spec.count)?;
-    if !(1..=4).contains(&spec.rows) {
-        return Err(HairError::limit("lash rows", 4, u64::from(spec.rows)));
+    if !(1..=6).contains(&spec.rows) {
+        return Err(HairError::limit("lash rows", 6, u64::from(spec.rows)));
     }
     let line = Line::new(margin)?;
     let mut rng = Rng::new(seed);
     let away = -normalize_or(opening, if spec.upper { -Vec3::Y } else { Vec3::Y });
-    // 1. One polyline per lash, in order along the lid.
-    let mut lashes: Vec<(f32, Vec3, Vec<Vec3>)> = Vec::with_capacity(spec.count);
-    for i in 0..spec.count {
-        // Stratified along the lid, avoiding the very corners.
-        let s = 0.03 + 0.94 * (i as f32 + rng.f32()) / spec.count as f32;
-        let row = rng.below(u64::from(spec.rows)) as f32;
+    // The eye's forward: the eyeball's radius through the middle of the lid, without its part
+    // along the lid's up/down direction. Lashes leave between it and their own radius, so the
+    // ones at the inner corner do not run into the side of the nose.
+    let gaze = eyeball.map(|eye| normalize_or((line.at(0.5).0 - eye.centre).reject_from(away), Vec3::Z));
+    let start_at = if spec.upper { LASH_START.0 } else { LASH_START.1 };
+    // 1. Places along the lid: jittered strata (gaps and pairs), warped so the lashes thin out
+    //    toward the inner corner; in order along the lid.
+    let mut places: Vec<f32> = (0..spec.count)
+        .map(|i| {
+            let u = ((i as f32 + rng.range_f32(-0.4, 1.4)) / spec.count as f32).clamp(0.0, 1.0);
+            start_at + (LASH_END - start_at) * (1.0 - (1.0 - u).powf(1.35))
+        })
+        .collect();
+    places.sort_by(f32::total_cmp);
+    // 2. One lash per place, in the first shape that clears the eye and the skin.
+    let mut lashes: Vec<Lash> = Vec::with_capacity(spec.count);
+    for s in places {
         let (p, tangent) = line.at(s);
+        let row = rng.below(u64::from(spec.rows)) as f32;
+        let depth = (LASH_ROW_STEP * (row + rng.range_f32(-0.35, 0.35))).max(0.0);
+        let growing = rng.f32() < spec.growing;
+        let grow = if growing { rng.range_f32(0.25, 0.65) } else { 1.0 };
+        let length_jitter = 1.0 + spec.length_variation * rng.range_f32(-1.0, 1.0);
+        let curl_jitter = 1.0 + spec.curl_variation * rng.range_f32(-1.0, 1.0);
+        let (turn, lift_jitter) = (rng.range_f32(-0.14, 0.14), rng.range_f32(-0.1, 0.1));
         let Some(on_margin) = grid.closest(p) else { continue };
         let n = grid.face_normal(on_margin.triangle);
         let back = normalize_or(away.reject_from(n), away);
-        let Some(hit) = grid.closest(p + back * (0.000_4 * row)) else { continue };
+        let Some(hit) = grid.closest(p + back * depth) else { continue };
         let root = hit.point;
+        let hit_normal = grid.face_normal(hit.triangle);
         let forward = match eyeball {
-            Some(eye) => normalize_or((root - eye.centre).reject_from(tangent), n),
-            // The margin's normal turns into the opening; lashes still leave forward.
+            Some(eye) => {
+                let radial = normalize_or((root - eye.centre).reject_from(away), n);
+                normalize_or((radial + gaze.unwrap_or(radial)).reject_from(tangent), n)
+            }
             None => normalize_or(n.reject_from(away).reject_from(tangent), n),
         };
-        // Longest past the middle, short at the inner corner.
-        let profile = 0.45 + 0.55 * (std::f32::consts::PI * s.powf(0.8)).sin();
-        let length = spec.length * profile * (1.0 + spec.length_variation * rng.range_f32(-1.0, 1.0));
-        let curl = spec.curl * (1.0 + spec.curl_variation * rng.range_f32(-1.0, 1.0));
-        let fan = tangent * (0.6 * (s - 0.4));
-        let start = normalize_or(forward * spec.tilt.cos() + away * spec.tilt.sin() + fan, forward);
-        // Curl: the direction turns toward `away` (away from the eye) by `curl` over the length.
-        let bend_axis = normalize_or(start.cross(away), tangent);
-        let step = length / (FEATURE_POINTS - 1) as f32;
-        let mut q = root;
-        let mut world = Vec::with_capacity(FEATURE_POINTS as usize);
-        world.push(q);
-        for k in 1..FEATURE_POINTS {
-            let t = (k as f32 - 0.5) / (FEATURE_POINTS - 1) as f32;
-            let d = Quat::from_axis_angle(bend_axis, curl * t).mul_vec3(start);
-            q += d * step;
-            world.push(q);
+        // Short and sparse at the inner corner, longest past the middle, a little shorter at
+        // the outer corner.
+        let profile = 0.5 + 0.5 * smooth(0.0, 0.45, s) - 0.3 * smooth(0.75, 1.0, s);
+        let length = spec.length * profile * length_jitter * grow;
+        let curl = spec.curl * curl_jitter;
+        // The fan: the outer third sweeps toward the outer corner, the innermost lashes a
+        // little toward the nose.
+        let fan = spec.fan * (smooth(0.45, 1.0, s) - 0.3 * (1.0 - smooth(0.1, 0.35, s))) + turn;
+        let mut found = None;
+        for attempt in 0..LASH_ATTEMPTS {
+            // Each try turns the lash further toward the skin's normal at the root (straight out
+            // of the lid) and lifts it a little further from the eye.
+            let k = attempt as f32;
+            let tilt = spec.tilt + lift_jitter + 0.05 * k;
+            let start = forward * tilt.cos() + away * tilt.sin();
+            let start = normalize_or(start * fan.cos() + tangent * fan.sin(), forward);
+            let start = normalize_or(start + hit_normal * (0.25 * k), start);
+            let shortened = length * (1.0 - 0.07 * k);
+            let points = lash_points(root, start, away, tangent, shortened, curl);
+            if lash_clear(&points, grid, eyeball) {
+                found = Some(points);
+                break;
+            }
         }
-        lashes.push((s, tangent, world));
+        if let Some(points) = found {
+            lashes.push(Lash { along: s, tangent, points });
+        }
     }
-    // 2. Clumps: runs of 3..=5 neighbours whose points converge on the run's mean toward the tip.
+    // 3. Clumps: runs of neighbours whose points gather toward the run's mean near the tips;
+    //    a lash the gathering would bring too close to the eye or the skin stays as it was.
     let mut first = 0;
     while first < lashes.len() {
-        let size = LASH_CLUMP.0 + rng.below(u64::from(LASH_CLUMP.1 - LASH_CLUMP.0 + 1)) as u32;
+        let size = if rng.f32() < 0.25 {
+            1
+        } else {
+            LASH_CLUMP.0 + rng.below(u64::from(LASH_CLUMP.1 - LASH_CLUMP.0 + 1)) as u32
+        };
         let end = (first + size as usize).min(lashes.len());
-        let strength = rng.range_f32(0.5, 0.85);
+        let strength = rng.range_f32(0.35, 0.8);
         let members = &mut lashes[first..end];
-        let inv = 1.0 / members.len() as f32;
-        for k in 1..FEATURE_POINTS as usize {
-            let mean = members.iter().fold(Vec3::ZERO, |a, l| a + l.2[k]) * inv;
-            let w = strength * (k as f32 / (FEATURE_POINTS - 1) as f32).powf(1.5);
+        if members.len() > 1 {
+            let inv = 1.0 / members.len() as f32;
+            let mean: Vec<Vec3> = (0..LASH_POINTS as usize)
+                .map(|k| members.iter().fold(Vec3::ZERO, |a, l| a + l.points[k]) * inv)
+                .collect();
             for l in members.iter_mut() {
-                l.2[k] = l.2[k].lerp(mean, w);
+                let gathered: Vec<Vec3> = l
+                    .points
+                    .iter()
+                    .zip(&mean)
+                    .enumerate()
+                    .map(|(k, (&q, &m))| q.lerp(m, strength * (k as f32 / (LASH_POINTS - 1) as f32).powf(1.5)))
+                    .collect();
+                if lash_clear(&gathered, grid, eyeball) {
+                    l.points = gathered;
+                }
             }
         }
         first = end;
     }
-    // 3. Out of the eyeball and the skin, then bound to the skin.
-    let mut guides = Guides::new(FEATURE_POINTS)?;
+    // 4. Bound to the skin.
+    let mut guides = Guides::new(LASH_POINTS)?;
     let (mut along, mut axis) = (Vec::with_capacity(lashes.len()), Vec::with_capacity(lashes.len()));
-    for (s, tangent, mut world) in lashes {
-        keep_outside(&mut world, grid, eyeball);
-        if push_hair(&mut guides, surface, grid, &world, tangent, &mut axis)? {
-            along.push(s);
+    for lash in lashes {
+        if push_hair(&mut guides, surface, grid, &lash.points, lash.tangent, &mut axis)? {
+            along.push(lash.along);
         }
     }
     if guides.is_empty() {
         return Err(HairError::invalid("lashes", 0, "no lash could be bound to the skin"));
     }
-    let params = feature_params(guides.len(), 0.000_12, 0.25);
+    // Thick at the root, fine at the tip: the bases crowd into a dark lash line.
+    let params = feature_params(guides.len(), LASH_POINTS, 0.000_14, 0.2);
     Ok(FeatureGroom { guides, params, along, axis })
-}
-
-/// Walks the points of a lash past its root out of `eyeball` (to [`LASH_EYE_CLEARANCE`]) and the
-/// `skin` (to [`LASH_SKIN_CLEARANCE`]), each segment keeping its length: a point too close is
-/// moved to the clearance along the outward normal of the closest surface triangle, then put back
-/// at its segment's length from the (already moved) point before it.
-fn keep_outside(points: &mut [Vec3], skin: &TriangleGrid, eyeball: Option<&Eyeball>) {
-    let lengths: Vec<f32> = points.windows(2).map(|w| (w[1] - w[0]).length()).collect();
-    for k in 1..points.len() {
-        let prev = points[k - 1];
-        let length = lengths[k - 1];
-        let mut q = points[k];
-        // A few rounds: a push out of one surface (or the length fix) can move the point toward
-        // the other or back into a fold of the lid at the canthus.
-        for _ in 0..8 {
-            let mut moved = false;
-            let surfaces = [(Some(skin), LASH_SKIN_CLEARANCE), (eyeball.map(|e| &e.grid), LASH_EYE_CLEARANCE)];
-            for (grid, clearance) in surfaces {
-                let Some(hit) = grid.and_then(|g| g.closest(q)) else { continue };
-                if hit.signed_distance < clearance {
-                    let normal = grid.map_or(Vec3::ZERO, |g| g.face_normal(hit.triangle));
-                    q = hit.point + normal * (clearance * 1.05);
-                    moved = true;
-                }
-            }
-            q = prev + normalize_or(q - prev, points[k] - prev) * length;
-            if !moved {
-                break;
-            }
-        }
-        // The eyeball last and without the length fix: a lash may come out a little longer, but
-        // never inside the globe.
-        if let Some(eye) = eyeball
-            && let Some(hit) = eye.grid.closest(q)
-            && hit.signed_distance < LASH_EYE_CLEARANCE
-        {
-            q = hit.point + eye.grid.face_normal(hit.triangle) * (LASH_EYE_CLEARANCE * 1.05);
-        }
-        points[k] = q;
-    }
 }
 
 /// The lid-following hook `[EXP-05]`: turns every lash of `groom` about its lid tangent by
@@ -545,7 +631,7 @@ mod tests {
         let s = &head.surface;
         let margin = head.lid_curve(-1.0);
         let mut upper = lash_groom(s, &grid, &margin, -Vec3::Y, None, &LashSpec::upper(), 3).unwrap();
-        assert_eq!(upper.guides.len(), 120);
+        assert!((120..=150).contains(&upper.guides.len()), "{}", upper.guides.len());
         let (mut mid, mut ends) = (Vec::new(), Vec::new());
         for i in 0..upper.guides.len() {
             let w = world(&upper, s, i);
@@ -555,10 +641,11 @@ mod tests {
             let a = upper.along[i];
             if (0.4..0.75).contains(&a) {
                 mid.push(upper.guides.length(i));
-            } else if !(0.1..0.9).contains(&a) {
+            } else if a < 0.2 {
                 ends.push(upper.guides.length(i));
             }
         }
+        // Short at the inner corner.
         let mean = |v: &[f32]| v.iter().sum::<f32>() / v.len() as f32;
         assert!(mean(&mid) > 1.2 * mean(&ends), "{} {}", mean(&mid), mean(&ends));
         let lower = lash_groom(s, &grid, &margin, Vec3::Y, None, &LashSpec::lower(), 3).unwrap();

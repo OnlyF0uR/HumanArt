@@ -585,15 +585,14 @@ mod tests {
     #[test]
     fn todo_1_5_the_viewer_shades_the_traced_eye_and_the_model_runs_the_guard() {
         use humanart_gpu::resources::Budget;
-        use humanart_gpu::{DeviceRequest, Gpu};
 
         use super::super::view::Viewer;
         let mut model = posed(&[]);
         assert!(model.evaluator().guard().is_some(), "Model::new sets the penetration guard on its Evaluator");
-        let gpu = Gpu::headless_blocking(&DeviceRequest::default()).unwrap();
-        let mut res = Resources::new(&gpu, Budget::UNLIMITED);
+        let gpu = humanart_gpu::shared_headless().unwrap();
+        let mut res = Resources::new(gpu, Budget::UNLIMITED);
         let (w, h) = (96, 64);
-        let mut viewer = Viewer::new(&gpu, &mut res, &model, w, h).unwrap();
+        let mut viewer = Viewer::new(gpu, &mut res, &model, w, h).unwrap();
         assert!(viewer.features_error().is_none(), "{:?}", viewer.features_error());
         assert_eq!(viewer.features_mut().unwrap().table().len(), 3, "two eyes and the mouth");
         #[allow(clippy::cast_precision_loss)]

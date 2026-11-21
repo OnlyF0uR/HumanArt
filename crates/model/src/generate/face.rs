@@ -19,7 +19,7 @@ use std::f32::consts::{FRAC_PI_2, PI, TAU};
 
 use humanart_math::Vec3;
 
-use super::anatomy::{Anatomy, sided};
+use super::anatomy::{Anatomy, Auricle, sided};
 use super::body::head_point;
 use super::cage::{Cage, Tag};
 use super::regions::{C, R};
@@ -281,6 +281,17 @@ pub fn eye(cage: &mut Cage, a: &Anatomy, hole: &[u32], side: f32) -> Result<EyeL
 
 // --- Mouth -----------------------------------------------------------------------------------
 
+/// How far (mm) the white-roll ring lies outside the vermilion border on the finished head
+/// ([`Auricle::Finished`], the head the scan face is applied to). The white roll is a band of 1
+/// to 2 mm; at [`BASE_ROLL_OFFSET`] the cage fit cannot reach the crest and folds the band
+/// between roll and border: inverted faces on the upper vermilion 10 to 23 mm from the midline,
+/// which renders show as holes (`diag_mouth_folds`).
+const ROLL_OFFSET: f32 = 1.6;
+/// The roll offset of the fitting base ([`Auricle::Base`], `build::BASE_VERSION`): the scans were
+/// fitted to this head, so it keeps the offset it was measured with, folds included, until the
+/// face model is rebuilt.
+const BASE_ROLL_OFFSET: f32 = 0.9;
+
 /// Half width of the mouth (cheilion), mm.
 const MOUTH_HALF: f32 = 25.0;
 
@@ -343,7 +354,7 @@ fn contact(t: f32, upper: bool) -> (f32, f32) {
 /// Fills the mouth block (12-vertex ring, counter-clockwise from the front).
 ///
 /// Rings: the block, the perioral skin (24 slots, carrying the philtrum columns and groove), the
-/// white roll (a fine skin crest 0.9 mm outside the vermilion border, [`MouthLoops::roll`]), the
+/// white roll (a fine skin crest [`ROLL_OFFSET`] outside the vermilion border, [`MouthLoops::roll`]), the
 /// vermilion border, the red lip (the upper tubercle and the everted lower lip), the contact
 /// line, the inner lip and the mouth bag. Each ring meets the corner at its own point, stepping
 /// inward and back, so the commissure tucks in under the modiolus.
@@ -389,6 +400,7 @@ pub fn mouth(cage: &mut Cage, a: &Anatomy, hole: &[u32]) -> Result<MouthLoops> {
     };
     // The corner recess: how far (mm) the lips sink back at the commissure.
     let tuck = |t: f32| 1.6 * t.powi(6);
+    let roll_offset = if a.auricle == Auricle::Finished { ROLL_OFFSET } else { BASE_ROLL_OFFSET };
     let roll = ring(26.4, &|up, t| {
         let (y, z) = vermilion(t, up);
         let w = 1.0 - t.powi(4);
@@ -396,7 +408,7 @@ pub fn mouth(cage: &mut Cage, a: &Anatomy, hole: &[u32]) -> Result<MouthLoops> {
         let peak = if up { 0.25 * bump((t - lip::PEAK) / 0.12) } else { 0.0 };
         // The skin meets the border at a steeper angle than the vermilion leaves it: the
         // border is a crest, not a groove.
-        (y + if up { 0.9 } else { -0.9 } * w, z - if up { 0.3 } else { 0.6 } * w + peak - tuck(t))
+        (y + if up { roll_offset } else { -roll_offset } * w, z - if up { 0.3 } else { 0.6 } * w + peak - tuck(t))
     });
     let border = ring(25.5, &|up, t| {
         let (y, z) = vermilion(t, up);
@@ -678,13 +690,20 @@ fn auricle(t: f32) -> (f32, f32, f32) {
 }
 
 /// Fills an ear block (8-vertex ring, counter-clockwise from outside).
-pub fn ear(cage: &mut Cage, hole: &[u32], side: f32) -> Result<EarLoops> {
+/// `design` picks the auricle ([`Auricle`]).
+pub fn ear(cage: &mut Cage, hole: &[u32], side: f32, design: Auricle) -> Result<EarLoops> {
+    let finished = design == Auricle::Finished;
     if hole.len() != 8 {
         return Err(ModelError::invalid("ear block", hole.len(), "ear block ring must have 8 vertices"));
     }
     let centre = hole.iter().fold(Vec3::ZERO, |s, &v| s + cage.pos[v as usize]) / 8.0;
     let tilt = 0.30_f32;
-    let out = Vec3::new(side * 0.96, 0.0, -0.28).normalize();
+    // Finished: the auricle's plane faces out and a little forward (6 degrees); with the helix
+    // standing off the head toward the back (`auricle`'s protrusion) the auricle makes about 30
+    // degrees with the side of the head, so it shows its rim and concha from the front instead of a
+    // thin edge (the base design faces 16 degrees back and reads as a blade from the front).
+    let out =
+        if finished { Vec3::new(side * 0.9945, 0.0, 0.105) } else { Vec3::new(side * 0.96, 0.0, -0.28) }.normalize();
     let up = Vec3::new(0.0, tilt.cos(), -tilt.sin());
     let back = up.cross(out) * side;
     let local = |b: f32, u: f32, o: f32| -> Vec3 { centre + (back * b + up * u + out * o) * 0.001 };
@@ -717,14 +736,22 @@ pub fn ear(cage: &mut Cage, hole: &[u32], side: f32) -> Result<EarLoops> {
         .iter()
         .map(|&t| {
             let (b, u, _) = auricle(t);
-            local(b * 0.55, u * 0.32, 4.0 + 2.5 * t.cos().max(0.0))
+            // Finished: a broad attachment (60 % of the auricle's height): seen from behind the
+            // auricle grows out of the head instead of standing on a stalk.
+            if finished {
+                local(b * 0.6, u * 0.6, 3.5 + 2.0 * t.cos().max(0.0))
+            } else {
+                local(b * 0.55, u * 0.32, 4.0 + 2.5 * t.cos().max(0.0))
+            }
         })
         .collect();
     let rings_pts = [
         root,
-        ring_pts(1.0, 0.0, 0.88),
-        ring_pts(0.97, 0.0, 1.06),
-        ring_pts(0.74, -0.5, 0.92),
+        // Finished: the helix rim rolls over 30 % of the protrusion (4 to 5 mm) and 8 % of the
+        // outline, the scapha sinks behind it.
+        ring_pts(1.0, 0.0, if finished { 0.80 } else { 0.88 }),
+        ring_pts(if finished { 0.92 } else { 0.97 }, 0.0, if finished { 1.10 } else { 1.06 }),
+        ring_pts(0.74, -0.5, if finished { 0.86 } else { 0.92 }),
         ring_pts(0.52, -1.0, 0.97),
     ];
     let tags: [&dyn Fn(f32) -> R; 5] = [
@@ -755,4 +782,146 @@ pub fn ear(cage: &mut Cage, hole: &[u32], side: f32) -> Result<EarLoops> {
     let interior = cage.cap(&last, 2, 2, 1, Tag::new(concha.id(), chart), &|_, _, _| concha_pt)?;
     let concha_v = interior.first().copied().unwrap_or(0);
     Ok(EarLoops { rings, params, concha: concha_v })
+}
+
+#[cfg(test)]
+mod tests {
+    use humanart_math::Vec3;
+
+    use super::super::cage::Cage;
+
+    /// The faces of `cage` within `box_mm` of `centre` (mm per axis) whose normal points against
+    /// one of their vertices' mean normals (folds), as (centroid - centre in mm, worst dot).
+    fn folds(cage: &Cage, centre: Vec3, box_mm: Vec3) -> Vec<(Vec3, f32, usize)> {
+        let face_normal = |f: usize| {
+            let c = cage.corners_of(f);
+            let o = cage.pos[c[0] as usize];
+            (1..c.len() - 1)
+                .map(|k| (cage.pos[c[k] as usize] - o).cross(cage.pos[c[k + 1] as usize] - o))
+                .fold(Vec3::ZERO, |a, b| a + b)
+        };
+        let mut normals = vec![Vec3::ZERO; cage.pos.len()];
+        for f in 0..cage.face_count() {
+            let n = face_normal(f);
+            for &v in cage.corners_of(f) {
+                normals[v as usize] += n;
+            }
+        }
+        let mut out = Vec::new();
+        for f in 0..cage.face_count() {
+            let d = (cage.centroid(f) - centre) * 1e3;
+            if d.x.abs() > box_mm.x || d.y.abs() > box_mm.y || d.z.abs() > box_mm.z {
+                continue;
+            }
+            let n = face_normal(f).normalize_or_zero();
+            let worst = cage
+                .corners_of(f)
+                .iter()
+                .map(|&v| n.dot(normals[v as usize].normalize_or_zero()))
+                .fold(1.0_f32, f32::min);
+            if worst < 0.0 {
+                out.push((d, worst, f));
+            }
+        }
+        out
+    }
+
+    /// Diagnostic: folded faces around the mouth in the designed cage, the fitted cage and every
+    /// subdivision level of the body surface.
+    #[test]
+    #[ignore = "diagnostic: cargo test diag_mouth_folds -- --ignored --nocapture"]
+    fn diag_mouth_folds() {
+        let auricle = if std::env::var_os("DIAG_FINISHED").is_some() {
+            super::super::anatomy::Auricle::Finished
+        } else {
+            super::super::anatomy::Auricle::Base
+        };
+        let s = super::super::body_surface_for(super::super::genitals::Variant::default(), auricle).unwrap();
+        let rings = &s.body.loops.mouth.rings;
+        let contact = &rings[5];
+        let centre = contact.iter().fold(Vec3::ZERO, |a, &v| a + s.body.cage.pos[v as usize]) / contact.len() as f32;
+        let mut design = s.body.cage.clone();
+        design.pos.clone_from(&s.targets);
+        let ring_of = |v: u32| rings.iter().position(|r| r.contains(&v));
+        let bx = Vec3::new(40.0, 30.0, 40.0);
+        for (label, cage) in [("design", &design), ("fitted", &s.body.cage)].into_iter().chain(
+            s.levels.iter().enumerate().map(|(i, l)| (if i + 1 == s.levels.len() { "last" } else { "level" }, &l.cage)),
+        ) {
+            let f = folds(cage, centre, bx);
+            let upper = f.iter().filter(|x| x.0.y > 2.0 && x.0.y < 15.0).count();
+            let lower = f.iter().filter(|x| x.0.y < -2.0 && x.0.y > -15.0).count();
+            println!("{label}: {} folded faces near the mouth ({upper} upper lip, {lower} lower lip)", f.len());
+            if label == "last" {
+                for (d, worst, face) in f.iter().filter(|x| x.0.y > 2.0 && x.0.x > 0.0) {
+                    let n = cage.corners_of(*face).len();
+                    println!("  last ({:.2},{:.2},{:.2}) mm worst {worst:.2} {n}-gon", d.x, d.y, d.z);
+                }
+                // The designed and fitted ring points on the left upper lip.
+                let roll = &s.body.loops.mouth.roll;
+                for (name, r) in [("perioral", &rings[1]), ("roll", roll), ("border", &rings[2]), ("red", &rings[3])] {
+                    for &v in r {
+                        let p = (s.targets[v as usize] - centre) * 1e3;
+                        let q = (s.body.cage.pos[v as usize] - centre) * 1e3;
+                        if p.x > 8.0 && p.x < 24.0 && p.y > 0.5 {
+                            println!(
+                                "  {name} design ({:.2},{:.2},{:.2}) fitted ({:.2},{:.2},{:.2})",
+                                p.x, p.y, p.z, q.x, q.y, q.z
+                            );
+                        }
+                    }
+                }
+            }
+            for (d, worst, face) in f.iter().take(0) {
+                let rs: Vec<Option<usize>> = cage.corners_of(*face).iter().map(|&v| ring_of(v)).collect();
+                println!("  ({:.1},{:.1},{:.1}) mm worst {worst:.2} rings {rs:?}", d.x, d.y, d.z);
+            }
+        }
+    }
+
+    /// Diagnostic: folded faces around the mouth of the finished template (scan face on), with
+    /// vertex normals welded across UV seams.
+    #[test]
+    #[ignore = "diagnostic: cargo test diag_finished_mouth_folds -- --ignored --nocapture"]
+    fn diag_finished_mouth_folds() {
+        let options = super::super::build::Options { lods: false, ..super::super::build::Options::default() };
+        let t = super::super::build::template(&options).unwrap().template;
+        let mesh = t.mesh();
+        let pos = mesh.positions();
+        let keys = mesh.position_keys();
+        let at = |name: &str| t.landmarks().iter().find(|l| l.name == name).unwrap().position(pos).unwrap();
+        let centre = (at("lip.upper.inner.06") + at("lip.lower.inner.06")) * 0.5;
+        let faces: Vec<Vec<u32>> = mesh.parts()[0].faces().map(|f| mesh.face(f).to_vec()).collect();
+        let normal = |c: &[u32]| {
+            let o = pos[c[0] as usize];
+            (1..c.len() - 1)
+                .map(|k| (pos[c[k] as usize] - o).cross(pos[c[k + 1] as usize] - o))
+                .fold(Vec3::ZERO, |a, b| a + b)
+        };
+        let mut normals = vec![Vec3::ZERO; pos.len()];
+        for c in &faces {
+            let n = normal(c);
+            for &v in c {
+                normals[keys[v as usize] as usize] += n;
+            }
+        }
+        let (mut upper, mut lower, mut other) = (0, 0, 0);
+        for c in &faces {
+            let d = (c.iter().fold(Vec3::ZERO, |s, &v| s + pos[v as usize]) / c.len() as f32 - centre) * 1e3;
+            if d.x.abs() > 40.0 || d.y.abs() > 30.0 || d.z.abs() > 40.0 {
+                continue;
+            }
+            let n = normal(c).normalize_or_zero();
+            if c.iter().any(|&v| n.dot(normals[keys[v as usize] as usize].normalize_or_zero()) < 0.0) {
+                match d.y {
+                    y if y > 2.0 && y < 15.0 => upper += 1,
+                    y if y < -2.0 && y > -15.0 => lower += 1,
+                    _ => other += 1,
+                }
+                if d.y.abs() < 15.0 {
+                    println!("  folded at ({:.1},{:.1},{:.1}) mm", d.x, d.y, d.z);
+                }
+            }
+        }
+        println!("finished template: {upper} upper lip, {lower} lower lip, {other} other folded faces near the mouth");
+    }
 }

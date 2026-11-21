@@ -25,9 +25,14 @@ pub struct PlyMesh {
     pub face_vertices: Vec<u32>,
 }
 
-/// An [`Error::Invalid`] about the data as a whole (offset 0), for what only shows once it is read.
+/// An [`Error::Content`] about the data as a whole, for what only shows once it is read.
 const fn bad_mesh(what: &'static str) -> Error {
-    Error::Invalid { format: FORMAT, offset: 0, what }
+    Error::Content { format: FORMAT, item: None, what }
+}
+
+/// An [`Error::Content`] about face `index`.
+const fn bad_face(index: usize, what: &'static str) -> Error {
+    Error::Content { format: FORMAT, item: Some(("face", index)), what }
 }
 
 /// The scalar column of a property, if the element has it.
@@ -82,10 +87,10 @@ impl Ply {
     /// result is a point cloud. Values are converted as they are, NaN included (organised scans use
     /// it for missing points).
     ///
-    /// Errors (at offset 0, as they concern the data as a whole): no `vertex` element or no
-    /// positions, a vertex attribute or the face indices stored the wrong way (a list, a float list,
-    /// a negative or out-of-range index), a face with fewer than 3 vertices, a mesh over 2^32 − 1
-    /// face corners.
+    /// Errors ([`Error::Content`]; the ones about one face name its index): no `vertex` element or
+    /// no positions, a vertex attribute or the face indices stored the wrong way (a list, a float
+    /// list, a negative or out-of-range index), a face with fewer than 3 vertices, a mesh over
+    /// 2^32 − 1 face corners.
     pub fn to_mesh(&self) -> Result<PlyMesh> {
         let vertex = self.element("vertex").ok_or(bad_mesh("no vertex element"))?;
         let n = vertex.count;
@@ -133,20 +138,22 @@ impl Ply {
         if values.len() > u32::MAX as usize {
             return Err(bad_mesh("too many face corners"));
         }
+        let mut previous = 0_u32;
+        for (face_index, &end) in ends.iter().enumerate() {
+            if end < previous.saturating_add(3) || end as usize > values.len() {
+                return Err(bad_face(face_index, "a face has fewer than 3 vertices"));
+            }
+            previous = end;
+        }
         mesh.face_vertices.reserve(values.len());
         for i in 0..values.len() {
             let index = values.get(i).unwrap_or(-1.0);
             if index < 0.0 || index >= n as f64 {
-                return Err(bad_mesh("face vertex index out of range"));
+                // The face whose corner this is: the first one ending past corner `i`.
+                let face_index = ends.partition_point(|&end| end as usize <= i);
+                return Err(bad_face(face_index, "face vertex index out of range"));
             }
             mesh.face_vertices.push(index as u32);
-        }
-        let mut previous = 0_u32;
-        for &end in ends {
-            if end < previous.saturating_add(3) || end as usize > values.len() {
-                return Err(bad_mesh("a face has fewer than 3 vertices"));
-            }
-            previous = end;
         }
         if previous as usize != values.len() {
             return Err(bad_mesh("face lists are inconsistent"));

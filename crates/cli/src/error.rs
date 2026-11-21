@@ -26,6 +26,15 @@ pub enum CliError {
         /// The cause.
         source: std::io::Error,
     },
+    /// The project could not be opened, created or saved (exit code 7).
+    Project(String),
+    /// A batch job file is malformed or beyond its limits (exit code 8).
+    Job(String),
+    /// The command ran but found failures: a batch step failed, validation found errors (exit
+    /// code 9). The report was printed before.
+    Failed(String),
+    /// The agent server could not be started (exit code 10).
+    Server(String),
 }
 
 impl CliError {
@@ -42,6 +51,10 @@ impl CliError {
             Self::Gpu(_) => 4,
             Self::Render(_) => 5,
             Self::Io { .. } => 6,
+            Self::Project(_) => 7,
+            Self::Job(_) => 8,
+            Self::Failed(_) => 9,
+            Self::Server(_) => 10,
         }
     }
 
@@ -53,6 +66,10 @@ impl CliError {
             Self::Gpu(_) => "gpu",
             Self::Render(_) => "render",
             Self::Io { .. } => "io",
+            Self::Project(_) => "project",
+            Self::Job(_) => "job",
+            Self::Failed(_) => "failed",
+            Self::Server(_) => "server",
         }
     }
 
@@ -94,6 +111,10 @@ impl fmt::Display for CliError {
             Self::Gpu(what) => write!(f, "GPU: {what}"),
             Self::Render(e) => write!(f, "render: {e}"),
             Self::Io { path, source } => write!(f, "{}: {source}", path.display()),
+            Self::Project(what) => write!(f, "project: {what}"),
+            Self::Job(what) => write!(f, "job: {what}"),
+            Self::Failed(what) => write!(f, "failed: {what}"),
+            Self::Server(what) => write!(f, "agent server: {what}"),
         }
     }
 }
@@ -104,7 +125,7 @@ impl std::error::Error for CliError {
             Self::Usage(e) => Some(e),
             Self::Render(e) => Some(e),
             Self::Io { source, .. } => Some(source),
-            Self::Data(_) | Self::Gpu(_) => None,
+            Self::Data(_) | Self::Gpu(_) | Self::Project(_) | Self::Job(_) | Self::Failed(_) | Self::Server(_) => None,
         }
     }
 }
@@ -133,10 +154,18 @@ mod tests {
             CliError::Gpu("g".into()),
             CliError::Render(EngineError::Invalid { what: "r" }),
             CliError::io(Path::new("x.png"), std::io::Error::other("denied")),
+            CliError::Project("p".into()),
+            CliError::Job("j".into()),
+            CliError::Failed("f".into()),
+            CliError::Server("s".into()),
         ];
         let mut codes: Vec<u8> = errors.iter().map(CliError::exit_code).collect();
         codes.dedup();
-        assert_eq!(codes, [2, 3, 4, 5, 6]);
+        assert_eq!(codes, [2, 3, 4, 5, 6, 7, 8, 9, 10]);
+        let mut classes: Vec<&str> = errors.iter().map(CliError::class).collect();
+        classes.sort_unstable();
+        classes.dedup();
+        assert_eq!(classes.len(), errors.len());
         let json = CliError::Data("a \"quoted\"\npath\\x".into()).to_json();
         assert_eq!(json, r#"{"error":{"class":"data","code":3,"message":"data: a \"quoted\"\npath\\x"}}"#);
     }

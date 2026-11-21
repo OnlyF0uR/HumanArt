@@ -21,6 +21,12 @@
 // one wave), each walking its share of the major-axis pixels, so a few 100-pixel segments do not
 // keep the rest of their wave idle. Every fragment is still produced once, by one thread, with
 // the same depth and coverage, so the image does not change.
+//
+// Hidden segments [HR-04]: `depth_tiles` keeps the farthest opaque scene depth of every
+// HAIR_TILE x HAIR_TILE pixel tile; a segment whose nearest depth is behind it in every tile its
+// footprint touches (hair behind the head) has no fragment in front of the scene, so both raster
+// passes skip it without walking it (HAIR_FLAG_CULL turns the test on). The fragments it
+// would have produced all fail the per-fragment scene depth test, so the image does not change.
 
 #include "lib/math.wgsl"
 #include "lib/packing.wgsl"
@@ -40,6 +46,12 @@
 @group(2) @binding(2) var<storage, read_write> hair_coverage: array<atomic<u32>>;
 @group(2) @binding(3) var<storage, read_write> hair_records: array<vec4<u32>>;
 @group(2) @binding(4) var<storage, read_write> hair_voxels: array<atomic<u32>>;
+@group(2) @binding(5) var<storage, read_write> hair_tiles: array<u32>;
+
+// Tiles a segment's footprint may touch for the hidden-segment test; longer segments are walked.
+const HAIR_CULL_TILES: u32 = 16u;
+
+var<workgroup> tile_far: atomic<u32>;
 
 // A segment this thread draws: strand, first and last point index, and which of the segment's
 // `parts` walk shares it takes.
@@ -159,6 +171,67 @@ fn project_span(p0: vec4<f32>, p1: vec4<f32>) -> Span {
     return s;
 }
 
+// Tiles per row of the tile grid.
+fn tiles_per_row() -> u32 {
+    return (u32(view.screen.x) + HAIR_TILE - 1u) / HAIR_TILE;
+}
+
+// Whether every fragment the walk of `s` could produce is behind the opaque scene: the span's
+// nearest depth (reversed-Z: the larger) is at or behind the farthest scene depth of every tile
+// its footprint touches. Conservative: false when unsure (test off, too many tiles).
+fn hidden_by_scene(s: Span) -> bool {
+    if ((view.counts.w & HAIR_FLAG_CULL) == 0u) {
+        return false;
+    }
+    let pad = 0.5 * HAIR_MAX_WIDTH + 1.0;
+    let lo = max(min(s.a, s.b) - vec2<f32>(pad), vec2<f32>(0.0));
+    let hi = min(max(s.a, s.b) + vec2<f32>(pad), view.screen.xy - vec2<f32>(1.0));
+    if (any(hi < lo)) {
+        return false;
+    }
+    let t0 = vec2<u32>(lo) / HAIR_TILE;
+    let t1 = vec2<u32>(hi) / HAIR_TILE;
+    if ((t1.x - t0.x + 1u) * (t1.y - t0.y + 1u) > HAIR_CULL_TILES) {
+        return false;
+    }
+    let near = max(s.z.x, s.z.y);
+    let row = tiles_per_row();
+    for (var y = t0.y; y <= t1.y; y++) {
+        for (var x = t0.x; x <= t1.x; x++) {
+            if (near > bitcast<f32>(hair_tiles[y * row + x])) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+// The farthest scene depth (reversed-Z: the smallest) of each HAIR_TILE x HAIR_TILE tile.
+@compute @workgroup_size(16, 16)
+fn depth_tiles(
+    @builtin(global_invocation_id) gid: vec3<u32>,
+    @builtin(local_invocation_index) local: u32,
+    @builtin(workgroup_id) group: vec3<u32>,
+) {
+    if (local == 0u) {
+        atomicStore(&tile_far, 0xFFFFFFFFu);
+    }
+    workgroupBarrier();
+    let size = vec2<u32>(view.screen.xy);
+    if (gid.x < size.x && gid.y < size.y) {
+        // Depths are in [0, 1]: their bit patterns order like the values.
+        let d = clamp(textureLoad(scene_depth, vec2<i32>(gid.xy), 0), 0.0, 1.0);
+        atomicMin(&tile_far, bitcast<u32>(d));
+    }
+    workgroupBarrier();
+    if (local == 0u) {
+        let tiles_y = (size.y + HAIR_TILE - 1u) / HAIR_TILE;
+        if (group.x < tiles_per_row() && group.y < tiles_y) {
+            hair_tiles[group.y * tiles_per_row() + group.x] = atomicLoad(&tile_far);
+        }
+    }
+}
+
 // Motion (pixels, current minus previous) of the world point mix(p, q, t) between frames.
 fn motion_of(cur: vec3<f32>, prev: vec3<f32>) -> vec2<f32> {
     let c = frame.unjittered_view_proj * vec4<f32>(cur, 1.0);
@@ -247,7 +320,7 @@ fn raster_depth(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
     let s = project_span(points[seg.first], points[seg.last]);
-    if (!s.ok) {
+    if (!s.ok || hidden_by_scene(s)) {
         return;
     }
     walk(s, seg.part, seg.parts, false, vec4<u32>(0u), array<vec2<f32>, 2>(vec2<f32>(0.0), vec2<f32>(0.0)));
@@ -262,7 +335,7 @@ fn raster_records(@builtin(global_invocation_id) gid: vec3<u32>) {
     let p0 = points[seg.first];
     let p1 = points[seg.last];
     let s = project_span(p0, p1);
-    if (!s.ok) {
+    if (!s.ok || hidden_by_scene(s)) {
         return;
     }
     let q0 = prev_points[seg.first].xyz;

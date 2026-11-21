@@ -22,7 +22,7 @@ use humanart_model::expression::controls::ControlRig;
 use humanart_model::expression::error::ExprError;
 
 use crate::document::Document;
-use crate::registry::{ParamValue, Registry};
+use crate::registry::{ParamValue, Range, Registry};
 
 /// What can go wrong driving the expression rig.
 #[derive(Debug)]
@@ -80,13 +80,18 @@ pub struct ExpressionDrive {
     joints: Vec<u16>,
 }
 
-fn scalar(value: &ParamValue) -> f32 {
-    match value {
-        #[allow(clippy::cast_possible_truncation)] // Expression weights are small coefficients.
-        ParamValue::Scalar(v) if v.is_finite() => *v as f32,
+/// A control value from a document value: scalars clamped to the parameter's hard range (a
+/// document written past the command layer may hold anything), `true` as 1, everything else
+/// (non-finite numbers, other kinds) as 0.
+fn scalar(value: &ParamValue, range: Option<&Range>) -> f32 {
+    let v = match value {
+        ParamValue::Scalar(v) if v.is_finite() => range.map_or(*v, |r| r.clamp(*v)),
         ParamValue::Bool(true) => 1.0,
         _ => 0.0,
-    }
+    };
+    #[allow(clippy::cast_possible_truncation)] // Expression weights are small coefficients.
+    let v = v as f32;
+    if v.is_finite() { v } else { 0.0 }
 }
 
 impl ExpressionDrive {
@@ -167,7 +172,8 @@ impl ExpressionDrive {
     }
 
     /// Reads the document's values of the bound parameters (registry defaults where the document
-    /// has none) into the controls and evaluates the rig. Allocation-free.
+    /// has none; numbers clamped to the parameter's hard range, non-finite numbers and other kinds
+    /// as 0) into the controls and evaluates the rig. Allocation-free.
     ///
     /// # Errors
     /// [`DriveError::RegistryChanged`] when `registry` is not the bound one; [`DriveError::Rig`]
@@ -179,7 +185,7 @@ impl ExpressionDrive {
         let params = registry.params();
         for &(i, c) in &self.bound {
             let Some(p) = params.get(i as usize) else { continue };
-            let v = scalar(doc.params.get(&p.id).unwrap_or(&p.default));
+            let v = scalar(doc.params.get(&p.id).unwrap_or(&p.default), p.range.as_ref());
             if let Some(slot) = self.controls.get_mut(c as usize) {
                 *slot = v;
             }

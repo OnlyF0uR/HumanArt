@@ -339,7 +339,9 @@ fn upload(gpu: &Gpu, resources: &mut Resources, hair: &TemplateHair, g: &Charact
     let mut groom = GpuGroom::new(gpu, resources, hair.surface(), sdf, capacity).map_err(gpu_groom_error)?;
     let filled = (|| -> Result<(), GroomGpuError> {
         groom.set_params(resources, &g.params)?;
-        groom.set_guides(resources, &g.guides.resampled(points))?;
+        // Blended in world directions: root frames flip across the scalp's UV seam.
+        let curves = g.guides.resampled_world(points, hair.surface()).map_err(GroomGpuError::Hair)?;
+        groom.set_world_guides(resources, &curves)?;
         groom.set_layout(resources, hair.surface(), &g.layout)
     })();
     match filled {
@@ -362,8 +364,8 @@ fn bounds_for(model: &Model, kind: GroomKind, length: f32) -> (Vec3, f32) {
 mod tests {
     use std::sync::Arc;
 
+    use humanart_gpu::Gpu;
     use humanart_gpu::resources::Budget;
-    use humanart_gpu::{DeviceRequest, Gpu};
 
     use super::*;
     use crate::engine::tests::{registry, template};
@@ -408,12 +410,12 @@ mod tests {
     /// changes where hair grows, and the picture goes to target/review/hair/viewer_head.png.
     #[test]
     fn hair_viewer_draws_the_groom_set_on_the_template() {
-        let gpu = Gpu::headless_blocking(&DeviceRequest::default()).expect("this machine has a GPU");
-        let mut res = Resources::new(&gpu, Budget::UNLIMITED);
+        let gpu = humanart_gpu::shared_headless().expect("this machine has a GPU");
+        let mut res = Resources::new(gpu, Budget::UNLIMITED);
         let mut model = Model::new(Arc::new(template().clone()), registry());
         let start = std::time::Instant::now();
         let (bare, none) = shoot(
-            &gpu,
+            gpu,
             &mut res,
             &mut model,
             ViewerOptions { hair: None, ..ViewerOptions::default() },
@@ -425,7 +427,7 @@ mod tests {
         let bare_time = start.elapsed();
         let start = std::time::Instant::now();
         let (hair, strands) =
-            shoot(&gpu, &mut res, &mut model, ViewerOptions::default(), Framing::Head, 8, "viewer_head.png");
+            shoot(gpu, &mut res, &mut model, ViewerOptions::default(), Framing::Head, 8, "viewer_head.png");
         println!("viewer with hair: {strands} strands, {:?} (without: {bare_time:?})", start.elapsed());
         assert!(strands > 100_000, "{strands}");
         let changed = bare.as_chunks::<4>().0.iter().zip(hair.as_chunks::<4>().0).filter(|(a, b)| a != b).count();
@@ -448,7 +450,7 @@ mod tests {
                 hair: Some(HairOptions { style, shade: HairShade::Black, peach_fuzz: fuzz, ..HairOptions::default() }),
                 ..ViewerOptions::default()
             };
-            shoot(&gpu, &mut res, &mut model, options, framing, 8, name);
+            shoot(gpu, &mut res, &mut model, options, framing, 8, name);
         }
     }
 

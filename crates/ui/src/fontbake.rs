@@ -31,6 +31,7 @@ use humanart_io::ttf::{Font, GlyphId, OutlineSink};
 
 use crate::error::UiError;
 use crate::font::{BakedFont, FALLBACK, FontMetrics, Glyph, KerningPair, MAX_GLYPHS, MAX_PAGES};
+use crate::theme::FontFace;
 
 /// Largest chord error when flattening curves, texels.
 pub const FLATTEN_TOLERANCE: f64 = 0.02;
@@ -79,6 +80,29 @@ pub fn all_mapped(font: &Font<'_>) -> Vec<char> {
     out.sort_unstable();
     out.dedup();
     out
+}
+
+/// The TrueType file of `data/fonts/` each shipped face is baked from.
+pub const fn source_file(face: FontFace) -> &'static str {
+    match face {
+        FontFace::Regular => "Inter-Regular.ttf",
+        FontFace::SemiBold => "Inter-SemiBold.ttf",
+        FontFace::Italic => "Inter-Italic.ttf",
+        FontFace::Mono => "JetBrainsMono-Regular.ttf",
+        FontFace::Icons => "Lucide.ttf",
+    }
+}
+
+/// Bakes `ttf` the way the shipped faces are baked `[UI-03]`: a text face is the
+/// [`latin_charset`] with [`BakeOptions::TEXT`], an icon face (`icons`) every character the font
+/// maps with [`BakeOptions::ICONS`].
+pub fn bake_shipped(ttf: &[u8], icons: bool) -> Result<BakedFont, UiError> {
+    if icons {
+        let chars = all_mapped(&Font::new(ttf)?);
+        bake(ttf, &chars, &BakeOptions::ICONS)
+    } else {
+        bake(ttf, &latin_charset(), &BakeOptions::TEXT)
+    }
 }
 
 /// Bakes the characters `chars` of the TrueType font `ttf` (characters the font does not map are

@@ -152,6 +152,24 @@ impl WrinkleDrivers {
         Self::new(&drivers, regions.regions.len(), expressions.expressions.len())
     }
 
+    /// The drivers as a list (the inverse of [`WrinkleDrivers::new`]), for the skin's wrinkle
+    /// blending table.
+    #[must_use]
+    pub fn to_drivers(&self) -> Vec<WrinkleDriver> {
+        (0..self.names.len())
+            .map(|i| {
+                let (a, b) = (self.offsets[i] as usize, self.offsets[i + 1] as usize);
+                WrinkleDriver {
+                    name: self.names[i].clone(),
+                    region: self.regions[i],
+                    expressions: self.expressions[a..b].iter().copied().zip(self.gains[a..b].iter().copied()).collect(),
+                    compression_gain: self.compression_gains[i],
+                    stretch_gain: self.stretch_gains[i],
+                }
+            })
+            .collect()
+    }
+
     /// How many drivers there are.
     #[must_use]
     pub fn len(&self) -> usize {

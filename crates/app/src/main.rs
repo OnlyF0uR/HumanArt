@@ -2,7 +2,10 @@
 //! `humanart` library (which also runs offscreen in the tests).
 //!
 //! Start-up: the data directory is `HUMANART_DATA` or `./data`; preferences, keymap, layout and the
-//! last project live in `HUMANART_SETTINGS` or `<APPDATA or HOME>/HumanArt`. The template is the
+//! last project live in `HUMANART_SETTINGS` or `<APPDATA or HOME>/HumanArt`. When the human grants
+//! the agent link, the agent server listens on `127.0.0.1` (port `HUMANART_AGENT_PORT`, default any
+//! free one) with the agent's files in `<settings>/exchange`; while it runs, the loop wakes every
+//! [`AGENT_TICK`] to hand the agent's messages to the editor and redraws only when there were some. The template is the
 //! package `data/template/template.antmpl` or, until it exists, generated (ADR-006). The project
 //! opened last is reopened, replaying its journal after a crash `[AC-WP21-3]`.
 //!
@@ -18,6 +21,7 @@ use std::process::ExitCode;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use humanart::agent_host::AgentServerOptions;
 use humanart::app::{App, Env, Intent};
 use humanart::prefs::Prefs;
 use humanart::shell::BrowseFor;
@@ -43,6 +47,8 @@ use winit::window::{Window, WindowId};
 
 /// How often an open project is ticked for autosaves while idle.
 const TICK: Duration = Duration::from_millis(1000);
+/// How often the agent server is pumped between frames while it runs.
+const AGENT_TICK: Duration = Duration::from_millis(30);
 
 /// Where the editor's files are.
 struct Paths {
@@ -78,6 +84,8 @@ struct Running {
     dialog: Option<(BrowseFor, PendingDialog)>,
     shown: bool,
     redraw: bool,
+    /// When the idle tick last redrew (autosaves run in the frame).
+    ticked: Instant,
 }
 
 #[derive(Default)]
@@ -106,7 +114,19 @@ fn start(event_loop: &ActiveEventLoop) -> Result<Running, String> {
     let seed = Id128::random(&OsEntropy).unwrap_or(Id128::from_u128(u128::from(clock.now_nanos())));
     let user = std::env::var("USERNAME").or_else(|_| std::env::var("USER")).unwrap_or_else(|_| "owner".into());
     let human = Author { id: "human.owner".into(), kind: AuthorKind::Human, name: user };
-    let env = Env { registry, fs, clock, template, human, settings_dir: paths.settings.clone(), seed };
+    let mut agent = AgentServerOptions::new(std::path::PathBuf::from(join_path(&paths.settings, "exchange")));
+    agent.port = std::env::var("HUMANART_AGENT_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(0);
+    let env = Env {
+        registry,
+        fs,
+        clock,
+        template,
+        human,
+        settings_dir: paths.settings.clone(),
+        seed,
+        entropy: &OsEntropy,
+        agent,
+    };
     let budget = prefs.memory_budget_mb;
     let mut app = App::new(env, prefs, fonts.clone());
     if source == humanart_agent::engine::TemplateSource::Generated {
@@ -174,6 +194,7 @@ fn start(event_loop: &ActiveEventLoop) -> Result<Running, String> {
             dialog: None,
             shown: false,
             redraw: true,
+            ticked: Instant::now(),
         });
     }
     Err(format!("The GPU could not be set up: {last_error}"))
@@ -355,6 +376,15 @@ impl ApplicationHandler for Host {
             r.redraw = false;
             r.window.request_redraw();
         }
+        // The agent's messages are handled between frames; a frame follows only when there were
+        // some.
+        if r.app.agent_server().is_running() {
+            if r.app.pump_agent() > 0 {
+                r.window.request_redraw();
+            }
+            event_loop.set_control_flow(ControlFlow::WaitUntil(Instant::now() + AGENT_TICK));
+            return;
+        }
         // An open project is ticked for autosaves; otherwise the editor sleeps until input.
         let flow = if r.app.project().is_some() || r.dialog.is_some() {
             ControlFlow::WaitUntil(Instant::now() + TICK)
@@ -365,8 +395,12 @@ impl ApplicationHandler for Host {
     }
 
     fn new_events(&mut self, _: &ActiveEventLoop, cause: winit::event::StartCause) {
-        if let (winit::event::StartCause::ResumeTimeReached { .. }, Some(r)) = (cause, &mut self.running) {
+        // The agent's wake-ups come every AGENT_TICK; the autosave tick still redraws once per TICK.
+        if let (winit::event::StartCause::ResumeTimeReached { .. }, Some(r)) = (cause, &mut self.running)
+            && r.ticked.elapsed() >= TICK
+        {
             r.redraw = true;
+            r.ticked = Instant::now();
         }
     }
 

@@ -17,7 +17,7 @@
 
 use humanart_math::{Vec2, Vec3};
 
-use super::anatomy::Anatomy;
+use super::anatomy::{Anatomy, Auricle};
 use super::cage::Cage;
 use super::limbs::finger_joints;
 use super::regions::R;
@@ -120,6 +120,19 @@ fn smoothstep(x: f32) -> f32 {
     x * x * (3.0 - 2.0 * x)
 }
 
+/// The spinous process of C7 (vertebra prominens) at the base of the nape. The fitting base keeps
+/// its knob (4.4 mm high, 12 mm round: `build::BASE_VERSION`); the finished head
+/// ([`Auricle::Finished`], todo 1.1) has the low, broad bump a lean adult shows with the head
+/// upright (2.2 mm over 16 x 22 mm), which reads as part of the nape's outline instead of a knob on
+/// it in profile.
+fn c7(a: &Anatomy) -> Feature {
+    if a.auricle == Auricle::Finished {
+        blob(BACK, [0.0, 1.452, 0.0], 0.016, 0.022, 1.0)
+    } else {
+        blob(BACK, [0.0, 1.452, 0.0], 0.012, 0.012, 2.0)
+    }
+}
+
 /// The feature list (left side).
 fn features(a: &Anatomy) -> Vec<Feature> {
     let fl = (LATERAL + FRONT * 1.7).normalize();
@@ -153,7 +166,7 @@ fn features(a: &Anatomy) -> Vec<Feature> {
         // cleft and the gluteal fold.
         ridge(BACK, [0.0, 1.440, 0.0], [0.0, 1.120, 0.0], 0.013, -1.2, -2.2),
         ridge(BACK, [0.0, 1.120, 0.0], [0.0, 0.990, 0.0], 0.016, -2.2, -2.6),
-        blob(BACK, [0.0, 1.452, 0.0], 0.012, 0.012, 2.0),
+        c7(a),
         blob(BACK, [0.095, 1.31, 0.0], 0.055, 0.070, 2.0),
         ridge(BACK, [0.060, 1.370, 0.0], [0.076, 1.235, 0.0], 0.010, 1.3, 1.4),
         ridge(BACK, [0.065, 1.366, 0.0], [0.160, 1.395, 0.0], 0.010, 1.5, 1.1),

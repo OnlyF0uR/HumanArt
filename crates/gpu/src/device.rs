@@ -710,24 +710,34 @@ impl Gpu {
     }
 }
 
-/// Minimal executor for wgpu's initialisation futures (the reference's `block_on`).
+/// Drives one of wgpu's futures (adapter and device requests, recovery) to completion on this
+/// thread with the workspace's one executor, [`humanart_core::executor::block_on`]. Native only: a
+/// browser cannot block.
 #[cfg(not(target_arch = "wasm32"))]
-pub fn block_on<F: Future>(future: F) -> F::Output {
-    /// Wakes the blocked thread.
-    struct Unpark(std::thread::Thread);
-    impl std::task::Wake for Unpark {
-        fn wake(self: std::sync::Arc<Self>) {
-            self.0.unpark();
+pub fn block_on<T>(future: impl Future<Output = Result<T, GpuError>>) -> Result<T, GpuError> {
+    humanart_core::executor::block_on(future).map_err(GpuError::Blocked)?
+}
+
+/// How long a blocking wait for the GPU ([`wait_for`]) lasts at most before it gives up with
+/// [`GpuError::Timeout`] `[ERR-05]`.
+pub const GPU_WAIT_LIMIT: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// Waits until `submission` (every submission so far for `None`) finished on the GPU, at most
+/// `limit` `[ERR-05]`: a slow, shared, hung or lost GPU returns [`GpuError::Timeout`] naming
+/// `what` instead of hanging the caller. For tools, tests and one-off reads; frame code never
+/// blocks (it reads back through [`crate::readback::ReadbackRing`]).
+pub fn wait_for(
+    device: &wgpu::Device,
+    submission: Option<wgpu::SubmissionIndex>,
+    limit: std::time::Duration,
+    what: &'static str,
+) -> Result<(), GpuError> {
+    match device.poll(wgpu::PollType::Wait { submission_index: submission, timeout: Some(limit) }) {
+        Ok(_) => Ok(()),
+        Err(wgpu::PollError::Timeout) => {
+            Err(GpuError::Timeout { what, limit_ms: u64::try_from(limit.as_millis()).unwrap_or(u64::MAX) })
         }
-    }
-    let waker = std::sync::Arc::new(Unpark(std::thread::current())).into();
-    let mut context = std::task::Context::from_waker(&waker);
-    let mut future = std::pin::pin!(future);
-    loop {
-        if let std::task::Poll::Ready(output) = future.as_mut().poll(&mut context) {
-            return output;
-        }
-        std::thread::park();
+        Err(e) => Err(GpuError::Poll(e)),
     }
 }
 
@@ -1170,13 +1180,13 @@ mod tests {
         let value = block_on(std::future::poll_fn(|context| {
             let mut state = shared.lock().unwrap();
             if state.0 {
-                Poll::Ready(42)
+                Poll::Ready(Ok::<u32, GpuError>(42))
             } else {
                 state.1 = Some(context.waker().clone());
                 Poll::Pending
             }
         }));
-        assert_eq!(value, 42);
+        assert_eq!(value.unwrap(), 42);
         thread.join().unwrap();
     }
 }

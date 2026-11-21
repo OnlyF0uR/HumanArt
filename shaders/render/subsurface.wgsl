@@ -17,6 +17,8 @@ const PREINTEGRATED_MAX_INV_RADIUS: f32 = 0.5;
 // 2010 shrink the position into the surface). Kept well below the thickness of an ear rim
 // (2 to 5 mm): a lookup point pushed through the back surface would see no material at all.
 const THICKNESS_SHRINK: f32 = 0.0005;
+// THICKNESS_SHRINK in millimetres.
+const THICKNESS_SHRINK_MM: f32 = 0.5;
 // The wrap of the transmitted light around the back of the surface (Jimenez et al. 2010).
 const TRANSLUCENCY_WRAP: f32 = 0.3;
 
@@ -38,13 +40,22 @@ fn skin_transmittance(d_mm: f32, scale: f32) -> vec3<f32> {
         + vec3<f32>(0.078, 0.0, 0.0) * profile_plane(d2, 7.41);
 }
 
-// The distance in metres the light travels inside the body before it reaches `world`: from the
-// first surface its shadow map holds to the point (moved THICKNESS_SHRINK into the surface along
-// `normal`). Negative when the light has no shadow map or the point is outside it.
-fn shadow_thickness(light: Light, world: vec3<f32>, normal: vec3<f32>) -> f32 {
+// The slab of tissue between the surface a light enters and `world` (moved THICKNESS_SHRINK into
+// the surface along `normal`), from the light's shadow map: x the distance in metres the light
+// travels inside the body, negative when the light has no shadow map or the point is outside it;
+// y the cosine between the light and the surface it entered through (the irradiance that entered
+// is the light's times this).
+//
+// The occluder's depth is interpolated between the four texels around the lookup: a single texel
+// on a surface that is grazing to the light is off by a texel's width times the slope, which read
+// as millimetres of tissue on skin the light reaches directly (dark-red blotches around the lids
+// under a side light, todo 1.4 / 1.9). The slope of the same four texels gives the cosine: at the
+// foot of a fold or a bump the light enters at a grazing angle and little of it gets in, where the
+// slab formula alone gave the full light (a deep-red band along every shadow edge).
+fn shadow_slab(light: Light, world: vec3<f32>, normal: vec3<f32>) -> vec2<f32> {
     let layer_f = light.shadow.x;
     if (layer_f < 0.0) {
-        return -1.0;
+        return vec2<f32>(-1.0, 0.0);
     }
     let layer = min(u32(layer_f), MAX_SHADOWED - 1u);
     let params = frame.shadow_params[layer];
@@ -52,17 +63,48 @@ fn shadow_thickness(light: Light, world: vec3<f32>, normal: vec3<f32>) -> f32 {
     let ndc = clip.xyz / clip.w;
     let uv = vec2<f32>(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
     if (any(uv < vec2<f32>(0.0)) || any(uv > vec2<f32>(1.0))) {
-        return -1.0;
+        return vec2<f32>(-1.0, 0.0);
     }
     let size = f32(max(frame.counters.z, 1u));
-    let texel = vec2<i32>(clamp(uv * size, vec2<f32>(0.0), vec2<f32>(size - 1.0)));
-    let occluder = textureLoad(shadow_atlas, texel, i32(layer), 0);
-    let depth = clamp(ndc.z, 0.0, 1.0);
-    // Reversed-Z: the occluder is nearer the light, its depth larger.
-    if (frame.shadow_kind[layer] > 0.5) {
-        return max(shadow_linear_depth(depth, params.x, params.y) - shadow_linear_depth(occluder, params.x, params.y), 0.0);
+    let st = clamp(uv * size - 0.5, vec2<f32>(0.0), vec2<f32>(size - 1.0));
+    let base = vec2<i32>(st);
+    let f = fract(st);
+    let last = i32(size) - 1;
+    let x1 = min(base.x + 1, last);
+    let y1 = min(base.y + 1, last);
+    let perspective = frame.shadow_kind[layer] > 0.5;
+    // The four occluder depths as distances along the light, metres.
+    var d00 = textureLoad(shadow_atlas, base, i32(layer), 0);
+    var d10 = textureLoad(shadow_atlas, vec2<i32>(x1, base.y), i32(layer), 0);
+    var d01 = textureLoad(shadow_atlas, vec2<i32>(base.x, y1), i32(layer), 0);
+    var d11 = textureLoad(shadow_atlas, vec2<i32>(x1, y1), i32(layer), 0);
+    var here = clamp(ndc.z, 0.0, 1.0);
+    var texel = 2.0 * params.z / size;
+    if (perspective) {
+        d00 = shadow_linear_depth(d00, params.x, params.y);
+        d10 = shadow_linear_depth(d10, params.x, params.y);
+        d01 = shadow_linear_depth(d01, params.x, params.y);
+        d11 = shadow_linear_depth(d11, params.x, params.y);
+        here = shadow_linear_depth(here, params.x, params.y);
+        texel = 2.0 * d00 * params.z / size;
+    } else {
+        // Reversed-Z: the distance from the near plane grows as the depth falls.
+        let range = params.y - params.x;
+        d00 = (1.0 - d00) * range;
+        d10 = (1.0 - d10) * range;
+        d01 = (1.0 - d01) * range;
+        d11 = (1.0 - d11) * range;
+        here = (1.0 - here) * range;
     }
-    return max((occluder - depth) * (params.y - params.x), 0.0);
+    let occluder = mix(mix(d00, d10, f.x), mix(d01, d11, f.x), f.y);
+    let slope = vec2<f32>(mix(d10 - d00, d11 - d01, f.y), mix(d01 - d00, d11 - d10, f.x)) / max(texel, 1e-9);
+    return vec2<f32>(max(here - occluder, 0.0), inverseSqrt(1.0 + dot(slope, slope)));
+}
+
+// The distance in metres the light travels inside the body before it reaches `world` (the x of
+// `shadow_slab`). Negative when the light has no shadow map or the point is outside it.
+fn shadow_thickness(light: Light, world: vec3<f32>, normal: vec3<f32>) -> f32 {
+    return shadow_slab(light, world, normal).x;
 }
 
 // The pre-integrated diffuse falloff per channel for the cosine between the normal and the light

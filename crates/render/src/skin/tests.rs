@@ -1,12 +1,10 @@
 //! GPU tests of the skin compositor, the micro-detail generator and the streaming integration, on
 //! the real adapter, headless. CPU references: `humanart_model::skin_appearance`.
 
-use std::sync::OnceLock;
-
 use humanart_core::rng::Rng;
 use humanart_gpu::resources::{Budget, Resources};
 use humanart_gpu::streaming::TileRequest;
-use humanart_gpu::{Capability, DeviceRequest, Gpu, GpuError};
+use humanart_gpu::{Capability, Gpu, GpuError};
 use humanart_io::{ColorSpace, Format, Image, Samples};
 use humanart_math::{f16_bits_to_f32, f32_to_f16_bits};
 use humanart_model::skin_appearance::antitile::GaussianExemplar;
@@ -29,10 +27,8 @@ use super::stream::{SkinStreaming, TileSource, TileView};
 use super::{SkinCompositor, SkinDesc};
 
 fn gpu() -> &'static Gpu {
-    static GPU: OnceLock<Gpu> = OnceLock::new();
-    GPU.get_or_init(|| {
-        Gpu::headless_blocking(&DeviceRequest::default()).unwrap_or_else(|e| panic!("this machine has a GPU: {e}"))
-    })
+    // The process's shared device (ADR-040).
+    humanart_gpu::shared_headless().unwrap_or_else(|e| panic!("this machine has a GPU: {e}"))
 }
 
 /// Reads one array layer of a `COPY_SRC` texture, rows tightly packed.
@@ -213,6 +209,7 @@ fn texel_inputs(scene: &Scene, tile: usize, i: usize) -> TexelInputs {
         zones,
         thickness: f32::from(scene.baked[tile][i * 4]) / 255.0,
         cavity: f32::from(scene.baked[tile][i * 4 + 1]) / 255.0,
+        variation: f32::from(scene.baked[tile][i * 4 + 2]) / 255.0,
     }
 }
 
@@ -895,6 +892,8 @@ fn skn03_gpu_to_pool_copy_streams_the_resolved_set() {
         assert_eq!(streaming.wanted_mip(&near), 0);
         assert_eq!(streaming.wanted_mip(&far), 1);
         let mut frames = 0;
+        let uploaded_before = resources.stats().bytes_uploaded;
+        let (mut loaded, mut table_bytes) = (0_u64, 0_u64);
         while !streaming.is_view_resident(&near) || !streaming.is_view_resident(&far) {
             frames += 1;
             assert!(frames < 10, "never resident");
@@ -902,12 +901,25 @@ fn skn03_gpu_to_pool_copy_streams_the_resolved_set() {
             streaming.request_view(&near).unwrap_or_else(|e| panic!("{e}"));
             streaming.request_view(&far).unwrap_or_else(|e| panic!("{e}"));
             let mut encoder = gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
-            streaming
+            let report = streaming
                 .update_from_gpu(gpu, &mut resources, &mut encoder, 8, &mut pages)
                 .unwrap_or_else(|e| panic!("{e}"));
+            loaded += u64::from(report.loaded);
+            table_bytes += report.table_bytes;
             submit(gpu, encoder);
         }
         assert_eq!(pages.late_pipelines(), 0);
+        // (todo 6) The pool uploads no texels for a page the GPU copies: only page-table rows went
+        // to the queue. Before, every such page also cost one upload of zeros of its size.
+        let uploaded = resources.stats().bytes_uploaded - uploaded_before;
+        let page_bytes = u64::from(page * page) * 8;
+        assert!(loaded >= 16 + 4, "{loaded} pages loaded");
+        assert!(table_bytes > 0 && table_bytes < page_bytes, "{table_bytes} page-table bytes");
+        assert_eq!(uploaded, table_bytes, "{loaded} pages streamed: only page-table rows are uploaded");
+        eprintln!(
+            "channel {channel}: {loaded} pages streamed, {uploaded} B uploaded (page table); zero pages would add {} B",
+            loaded * page_bytes
+        );
         let pool_texture =
             resources.texture(streaming.pool().pool_texture()).unwrap_or_else(|| panic!("pool")).raw().clone();
         let mut worst = 0.0_f32;

@@ -14,6 +14,10 @@ use humanart_math::{F16, Quat, Vec3};
 
 use super::field::{FaceField, falloff};
 
+/// The shortest edge length [`Shape::relax`] weights by, metres (welded nodes are never closer;
+/// the bound keeps the inverse-length weights finite).
+const MIN_EDGE: f32 = 1.0e-6;
+
 /// The area-ratio bounds of [`Shape::regularize`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct AreaBounds {
@@ -25,6 +29,17 @@ pub struct AreaBounds {
     pub min_area: f32,
     /// Parts whose triangles are only checked for folds.
     pub exempt_parts: Vec<u16>,
+    /// The smallest cosine between a triangle's deformed and rest normals: 0 counts only folds
+    /// (turned past 90 degrees); a positive margin also catches triangles turned nearly on edge,
+    /// whose fold test the rounding of the evaluated positions can flip.
+    pub min_cos: f32,
+    /// [`AreaBounds::min_cos`] for the triangles smaller than [`AreaBounds::min_area`] or
+    /// thinner than [`AreaBounds::sliver_quality`]: the template's slivers (at the lip corners
+    /// about 0.05 mm high), which any further target added to this one tilts by a large angle,
+    /// need a wider margin.
+    pub min_cos_small: f32,
+    /// Rest height over longest edge below which a triangle counts as a sliver.
+    pub sliver_quality: f32,
 }
 
 /// One displacement primitive; `w` below is the node's mask weight.
@@ -208,8 +223,11 @@ impl Shape {
     }
 
     /// `iterations` Jacobi steps of Laplacian smoothing of the displacement over the nodes where
-    /// `movable` is true (`lambda` in `(0, 1]` is the step); other nodes keep theirs.
+    /// `movable` is true (`lambda` in `(0, 1]` is the step); other nodes keep theirs. Neighbours
+    /// are weighted by their inverse rest distance, so the smoothed field varies evenly per metre
+    /// of surface, not per edge.
     pub fn relax(&mut self, field: &FaceField<'_>, iterations: usize, lambda: f32, movable: impl Fn(usize) -> bool) {
+        let pos = field.positions();
         let active: Vec<usize> = (0..self.disp.len())
             .filter(|&n| {
                 movable(n)
@@ -225,11 +243,18 @@ impl Shape {
                     next[k] = self.disp[n];
                     continue;
                 }
-                let mut avg = Vec3::ZERO;
+                // Inverse-edge-length weights: the uniform average would treat every edge as one
+                // unit and, where the template packs rows tightly (the white roll of the lips,
+                // the lid margins), concentrate the whole gradient of the field into those rows.
+                let p = pos.get(n).copied().unwrap_or(Vec3::ZERO);
+                let (mut avg, mut wsum) = (Vec3::ZERO, 0.0_f32);
                 for &m in nb {
-                    avg += self.disp.get(m as usize).copied().unwrap_or(Vec3::ZERO);
+                    let q = pos.get(m as usize).copied().unwrap_or(p);
+                    let w = 1.0 / (q - p).length().max(MIN_EDGE);
+                    avg += self.disp.get(m as usize).copied().unwrap_or(Vec3::ZERO) * w;
+                    wsum += w;
                 }
-                avg /= nb.len() as f32;
+                avg /= wsum;
                 next[k] = self.disp[n] + (avg - self.disp[n]) * lambda;
             }
             for (k, &n) in active.iter().enumerate() {
@@ -347,8 +372,9 @@ impl Shape {
         bad.len()
     }
 
-    /// The triangles of `field` that the displacement (rounded to f16) turns over, or whose area
-    /// ratio (deformed / rest) leaves `bounds` while their rest area is at least
+    /// The triangles of `field` that the displacement (rounded to f16) turns over or turns
+    /// further than [`AreaBounds::min_cos`] allows, or whose area ratio (deformed / rest) leaves
+    /// `bounds` while their rest area is at least
     /// [`AreaBounds::min_area`] and their first node's part is not exempt.
     #[must_use]
     pub fn bad_triangles(&self, field: &FaceField<'_>, bounds: &AreaBounds) -> Vec<usize> {
@@ -367,10 +393,16 @@ impl Shape {
             .filter(|(_, t)| {
                 let n0 = (at(t[1]) - at(t[0])).cross(at(t[2]) - at(t[0]));
                 let n1 = (moved(t[1]) - moved(t[0])).cross(moved(t[2]) - moved(t[0]));
-                if n0.dot(n1) < 0.0 {
+                let a0 = 0.5 * n0.length();
+                let longest = (at(t[1]) - at(t[0]))
+                    .length_squared()
+                    .max((at(t[2]) - at(t[1])).length_squared())
+                    .max((at(t[0]) - at(t[2])).length_squared());
+                let sliver = a0 < bounds.min_area || 2.0 * a0 < bounds.sliver_quality * longest;
+                let min_cos = if sliver { bounds.min_cos_small } else { bounds.min_cos };
+                if n0.dot(n1) < 0.0 || n0.dot(n1) < min_cos * n0.length() * n1.length() {
                     return true;
                 }
-                let a0 = 0.5 * n0.length();
                 if a0 < bounds.min_area || bounds.exempt_parts.contains(&field.part_of(t[0] as usize)) {
                     return false;
                 }

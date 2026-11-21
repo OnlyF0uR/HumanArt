@@ -628,9 +628,11 @@ dependencies = [
  "humanart-io",
  "humanart-math",
  "humanart-model",
+ "humanart-platform",
  "humanart-render",
  "humanart-shaders",
  "humanart-tools",
+ "humanart-ui",
  "wgpu",
 ]
 

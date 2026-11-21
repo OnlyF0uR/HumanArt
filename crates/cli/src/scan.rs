@@ -32,7 +32,7 @@ use humanart_io::Limits;
 use humanart_math::color::transfer::linear_to_srgb_rgb_f32;
 use humanart_math::color::transfer::srgb_to_linear_f32;
 use humanart_math::{Vec2, Vec3};
-use humanart_model::generate::build::{Options as GenOptions, template};
+use humanart_model::generate::build::{BASE_VERSION, Options as GenOptions, template};
 use humanart_model::skin_appearance::channels::{Attribute, BaseValues};
 use humanart_model::skin_appearance::dirty::Rect;
 use humanart_model::skin_appearance::layers::{
@@ -1110,7 +1110,8 @@ pub fn fit_command(program: &str, args: &[String]) -> Result<(), CliError> {
     );
 
     // The template and its head as a fit surface.
-    let generated = template(&GenOptions { lods: false, ..GenOptions::default() })
+    // The fitting base: the procedural head without the scanned face (fits are measured from it).
+    let generated = template(&GenOptions { lods: false, scan_face: false, ..GenOptions::default() })
         .map_err(|e| CliError::Data(format!("template: {e}")))?;
     let template = generated.template;
     let mut region_weights = RegionWeights::head_scan();
@@ -1263,7 +1264,7 @@ pub fn fit_command(program: &str, args: &[String]) -> Result<(), CliError> {
         source: set.scan.clone(),
         attribution: p.get("attribution").unwrap_or("").to_owned(),
         template_name: template.info().name.clone(),
-        template_version: template.info().version,
+        template_version: BASE_VERSION,
         template_vertices: template.mesh().vertex_count() as u32,
         alignment: sim,
         summary: humanart_tools::capture::fitted::summary(&result.report, result.flags.0),
@@ -1399,9 +1400,9 @@ pub fn fit_command(program: &str, args: &[String]) -> Result<(), CliError> {
         );
         let _ = writeln!(
             report,
-            "template: {} v{} ({} fit nodes, regions {})",
+            "template: {} base v{} ({} fit nodes, regions {})",
             template.info().name,
-            template.info().version,
+            BASE_VERSION,
             fit.mesh.positions.len(),
             select.join(", ")
         );
@@ -1597,6 +1598,22 @@ pub fn face_masks(template: &Template, fit: &FittedSurface) -> (Vec<f32>, Vec<f3
     (blend, align)
 }
 
+/// Whether fits of `fit` can feed a face model of this build: same template name and the same
+/// fitting base ([`BASE_VERSION`]); the template's own version also counts the scan face and the
+/// finishing steps on top of the base, which the fits never saw.
+///
+/// # Errors
+/// [`CliError::Data`] naming both versions when they differ.
+pub fn base_matches(template_name: &str, fit: &FittedSurface) -> Result<(), CliError> {
+    if template_name != fit.template_name || fit.template_version != BASE_VERSION {
+        return Err(CliError::Data(format!(
+            "the fits are of template {} base v{}, this build fits to {} base v{}: refit the scans",
+            fit.template_name, fit.template_version, template_name, BASE_VERSION
+        )));
+    }
+    Ok(())
+}
+
 /// Runs the `face-model` command line `args`.
 ///
 /// # Errors
@@ -1618,18 +1635,11 @@ pub fn face_model_command(program: &str, args: &[String]) -> Result<(), CliError
         fits.push(FittedSurface::parse(&bytes).map_err(|e| CliError::Data(format!("{path}: {e}")))?);
     }
     let first = fits.first().ok_or_else(|| usage("--fits names no file".into()))?;
-    let generated = template(&GenOptions { lods: false, ..GenOptions::default() })
+    // The fitting base: the procedural head without the scanned face (fits are measured from it).
+    let generated = template(&GenOptions { lods: false, scan_face: false, ..GenOptions::default() })
         .map_err(|e| CliError::Data(format!("template: {e}")))?;
     let template = generated.template;
-    if template.info().name != first.template_name || template.info().version != first.template_version {
-        return Err(CliError::Data(format!(
-            "the fits are of template {} v{}, this build makes {} v{}",
-            first.template_name,
-            first.template_version,
-            template.info().name,
-            template.info().version
-        )));
-    }
+    base_matches(&template.info().name, first)?;
     let (blend, align) = face_masks(&template, first);
     let settings = BuildSettings { components: p.number("components", 0, 64)? as usize, ..BuildSettings::default() };
     let description = p.get("description").unwrap_or("").to_owned();
@@ -1739,6 +1749,29 @@ pub fn face_model_command(program: &str, args: &[String]) -> Result<(), CliError
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `[WP-25]` Fits feed a face model when they were fitted to this build's fitting base: the
+    /// template's own version (raised by the scan face) does not matter, the base version does.
+    #[test]
+    fn wp25_face_model_takes_fits_of_the_same_base() {
+        use humanart_model::scanfit::fitted::FittedSummary;
+        use humanart_model::scanfit::similarity::Similarity;
+        let fit = |name: &str, version: u32| FittedSurface {
+            source: "s".into(),
+            attribution: String::new(),
+            template_name: name.into(),
+            template_version: version,
+            template_vertices: 0,
+            alignment: Similarity::IDENTITY,
+            summary: FittedSummary::default(),
+            nodes: Vec::new(),
+            triangles: Vec::new(),
+        };
+        let name = humanart_model::generate::build::TEMPLATE_NAME;
+        assert!(base_matches(name, &fit(name, BASE_VERSION)).is_ok());
+        assert!(base_matches(name, &fit(name, BASE_VERSION + 1)).is_err());
+        assert!(base_matches(name, &fit("other", BASE_VERSION)).is_err());
+    }
 
     fn job(list: &[&str]) -> Result<MeshJob, CliError> {
         let args: Vec<String> = list.iter().map(|s| (*s).to_owned()).collect();

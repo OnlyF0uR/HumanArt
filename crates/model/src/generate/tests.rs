@@ -4,7 +4,7 @@
 use std::path::PathBuf;
 
 use humanart_io::{ColorSpace, Format, Image, Samples};
-use humanart_math::Vec3;
+use humanart_math::{Vec2, Vec3};
 
 /// The preview folder of this agent.
 pub fn preview_dir() -> PathBuf {
@@ -325,6 +325,10 @@ fn preview_body_surface() {
     let nipple = Vec3::new(0.095, 1.233, 0.1);
     render(&plain, &View::new("nipple-L", Vec3::new(-0.3, 0.0, -1.0)).window(nipple, 0.035).size(800, 800).wire());
     render(&plain, &View::new("nipple-L-side", -Vec3::X).window(nipple, 0.035).size(800, 800));
+    render(
+        &plain,
+        &View::new("nipple-L-wide", Vec3::new(-0.3, 0.3, -1.0)).window(nipple, 0.07).size(800, 800).raking(),
+    );
     render(&plain, &View::new("nipple-L-34", Vec3::new(-0.7, 0.0, -0.7)).window(nipple, 0.015).size(800, 800).wire());
     let navel = Vec3::new(0.0, 1.018, 0.1);
     render(&plain, &View::new("navel", -Vec3::Z).window(navel, 0.03).size(800, 800).wire());
@@ -1659,8 +1663,9 @@ fn adr_039_body_is_identical_with_either_variant() {
 }
 
 /// How deep the genital vertices of `s` go into the thighs: per vertex, the signed distance along
-/// the nearest thigh vertex's normal (negative inside), the minimum over the genital vertices.
-fn thigh_penetration(s: &super::Surface) -> f32 {
+/// the nearest thigh vertex's normal (negative inside), the minimum over the genital vertices, and
+/// the genital vertex where it is reached.
+fn thigh_penetration(s: &super::Surface) -> (f32, Vec3) {
     let m = s.mesh();
     let mut normals = vec![Vec3::ZERO; m.pos.len()];
     for f in 0..m.face_count() {
@@ -1689,14 +1694,53 @@ fn thigh_penetration(s: &super::Surface) -> f32 {
         .collect();
     genital.sort_unstable();
     genital.dedup();
+    // Near the attachment loop the genital surface meets the body in a concave fold, where the
+    // nearest thigh vertex's tangent plane says nothing about crossing: skip 8 mm around it, and
+    // the penis root and mons above 0.825 m (the same fold against the groin).
+    let lp = super::genitals::attachment_loop();
+    let near_loop = |p: Vec3| {
+        (0..lp.len()).any(|k| {
+            let (a, b) = (lp[k], lp[(k + 1) % lp.len()]);
+            let t = ((p - a).dot(b - a) / (b - a).dot(b - a)).clamp(0.0, 1.0);
+            p.distance(a + (b - a) * t) < 0.008
+        })
+    };
+    genital.retain(|&g| !near_loop(m.pos[g]) && m.pos[g].y < 0.825);
     genital
         .iter()
         .map(|&g| {
             let p = m.pos[g];
             let q = thigh.iter().copied().min_by(|&a, &b| m.pos[a].distance(p).total_cmp(&m.pos[b].distance(p)));
-            q.map_or(0.0, |q| (p - m.pos[q]).dot(normals[q].normalize_or_zero()).min(m.pos[q].distance(p)))
+            (q.map_or(0.0, |q| (p - m.pos[q]).dot(normals[q].normalize_or_zero()).min(m.pos[q].distance(p))), p)
         })
-        .fold(f32::INFINITY, f32::min)
+        .fold((f32::INFINITY, Vec3::ZERO), |a, b| if b.0 < a.0 { b } else { a })
+}
+
+/// The gap between the thighs below the crotch: per height and depth, the smallest `x` of a left
+/// thigh vertex within 4 mm of that height and depth (mm), as text rows.
+fn thigh_gap(s: &super::Surface) -> Vec<String> {
+    let m = s.mesh();
+    let thigh: Vec<Vec3> = (0..m.face_count())
+        .filter(|&f| matches!(super::regions::R::from_id(m.tags[f].region), Some(super::regions::R::ThighL)))
+        .flat_map(|f| m.corners_of(f).iter().map(|&v| m.pos[v as usize]).collect::<Vec<_>>())
+        .collect();
+    let zs: Vec<f32> = (-4..=10).map(|k| k as f32 * 0.01).collect();
+    let mut rows = vec![format!("thigh gap x (mm) at z (cm) {:?}", (-4..=10).collect::<Vec<i32>>())];
+    for y in [0.70_f32, 0.73, 0.76, 0.78, 0.80, 0.82, 0.84] {
+        let row: Vec<String> = zs
+            .iter()
+            .map(|&z| {
+                let x = thigh
+                    .iter()
+                    .filter(|p| (p.y - y).abs() < 0.004 && (p.z - z).abs() < 0.004)
+                    .map(|p| p.x)
+                    .fold(f32::INFINITY, f32::min);
+                if x.is_finite() { format!("{:5.1}", x * 1e3) } else { "    -".to_string() }
+            })
+            .collect();
+        rows.push(format!("y {y:.2}: {}", row.join(" ")));
+    }
+    rows
 }
 
 #[test]
@@ -1720,16 +1764,224 @@ fn preview_genitals() {
             &View::new(name("below-wire"), Vec3::new(0.0, 1.0, -0.45)).window(site, 0.07).size(900, 900).wire(),
         );
         render(&plain, &View::new(name("side"), -Vec3::X).window(site, 0.07).size(900, 900));
+        // The right half seen from the left: the profile of the midline and the right side.
+        let half = Scene {
+            pos: m.pos.clone(),
+            faces: (0..m.face_count())
+                .filter(|&f| m.centroid(f).x < 1e-4 && m.centroid(f).x > -0.12)
+                .map(|f| (m.corners_of(f).to_vec(), skin))
+                .collect(),
+        };
+        render(&half, &View::new(name("cut"), -Vec3::X).window(site, 0.07).size(900, 900));
         render(&plain, &View::new(name("34"), Vec3::new(-0.6, 0.0, -1.0)).window(site, 0.07).size(900, 900));
         render(&regions, &View::new(name("regions"), Vec3::new(0.0, 0.6, -1.0)).window(site, 0.07).size(900, 900));
         render(
             &plain,
             &View::new(name("pelvis"), -Vec3::Z).window(Vec3::new(0.0, 0.86, 0.0), 0.2).size(900, 900).raking(),
         );
-        lines.push(format!("{v:?}: thigh penetration {:.1} mm", thigh_penetration(&s) * 1e3));
+        for region in [super::regions::R::Scrotum, super::regions::R::Penis, super::regions::R::LabiaMajora] {
+            let (lo, hi) = (0..m.face_count())
+                .filter(|&f| super::regions::R::from_id(m.tags[f].region) == Some(region))
+                .flat_map(|f| m.corners_of(f).iter().map(|&v| m.pos[v as usize]).collect::<Vec<_>>())
+                .fold((Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)), |(lo, hi), p| (lo.min(p), hi.max(p)));
+            if lo.x <= hi.x {
+                lines.push(format!(
+                    "{v:?} {region:?}: box {:.1?} .. {:.1?} mm",
+                    (lo * 1e3).to_array(),
+                    (hi * 1e3).to_array()
+                ));
+            }
+        }
+        // The kink across the attachment loop: angle between the normals of the body face and the
+        // genital face on each loop edge of the surface.
+        let is_genital =
+            |f: usize| super::regions::R::from_id(m.tags[f].region).is_some_and(super::regions::R::is_genital);
+        let face_normal = |f: usize| {
+            let c = m.corners_of(f);
+            let o = m.pos[c[0] as usize];
+            (1..c.len() - 1)
+                .map(|k| (m.pos[c[k] as usize] - o).cross(m.pos[c[k + 1] as usize] - o))
+                .fold(Vec3::ZERO, |a, b| a + b)
+                .normalize_or_zero()
+        };
+        let (_, _, edge_faces) = m.edges();
+        let kinks: Vec<f32> = edge_faces
+            .iter()
+            .filter(|f| f[1] != u32::MAX && is_genital(f[0] as usize) != is_genital(f[1] as usize))
+            .map(|f| face_normal(f[0] as usize).dot(face_normal(f[1] as usize)).clamp(-1.0, 1.0).acos().to_degrees())
+            .collect();
+        let mean = kinks.iter().sum::<f32>() / kinks.len().max(1) as f32;
+        let max = kinks.iter().copied().fold(0.0_f32, f32::max);
+        lines.push(format!("{v:?}: loop kink over {} edges: mean {mean:.1} deg, max {max:.1} deg", kinks.len()));
+        let (depth, at) = thigh_penetration(&s);
+        lines.push(format!("{v:?}: thigh penetration {:.1} mm at {at:?}", depth * 1e3));
+        if v == super::genitals::Variant::Female {
+            lines.extend(thigh_gap(&s));
+        }
     }
     lines.push(format!("penis centreline {:.1} mm", super::genitals::shaft_length() * 1e3));
     lines.push(format!("site midline {:.1} mm", super::genitals::site_length() * 1e3));
     eprintln!("{}", lines.join("\n"));
     std::fs::write(preview_dir().join("genitals.txt"), lines.join("\n") + "\n").unwrap();
+}
+
+/// Diagnostic for `ac_wp15_2_thickness_on_the_template` (tools): the face tile's islands, their
+/// UV boxes and the UV area of the nostril regions (times 1024² is roughly the test's texels).
+#[test]
+#[ignore = "diagnostic"]
+fn diag_face_tile_islands() {
+    let s = super::body_surface().unwrap();
+    let parts = super::parts::build(&s.anatomy, &s.body, &s.targets).unwrap();
+    let pieces: Vec<&Cage> = std::iter::once(s.mesh()).chain(parts.iter().map(|p| &p.mesh)).collect();
+    let layout = super::uv::layout(&pieces).unwrap();
+    let mut islands: std::collections::BTreeMap<u32, (usize, Vec2, Vec2)> = std::collections::BTreeMap::new();
+    for c in layout.copies.iter().filter(|c| c.tile == 0) {
+        let e = islands.entry(c.island).or_insert((0, Vec2::splat(f32::MAX), Vec2::splat(f32::MIN)));
+        e.0 += 1;
+        e.1 = e.1.min(c.uv);
+        e.2 = e.2.max(c.uv);
+    }
+    let mut used = 0.0;
+    for (i, (n, lo, hi)) in &islands {
+        let d = *hi - *lo;
+        used += d.x * d.y;
+        eprintln!("island {i}: {n} copies, box {:.4} x {:.4} at {:.3?}", d.x, d.y, lo.to_array());
+    }
+    let m = s.mesh();
+    let mut uv_area = 0.0_f32;
+    let mut area = 0.0_f32;
+    for f in 0..m.face_count() {
+        if !matches!(
+            super::regions::R::from_id(m.tags[f].region),
+            Some(super::regions::R::NostrilL | super::regions::R::NostrilR)
+        ) {
+            continue;
+        }
+        let start = m.offsets[f] as usize;
+        let c = m.corners_of(f);
+        let uv: Vec<Vec2> =
+            (0..c.len()).map(|k| layout.copies[layout.corner_copies[0][start + k] as usize].uv).collect();
+        for k in 1..c.len() - 1 {
+            let (a, b) = (uv[k] - uv[0], uv[k + 1] - uv[0]);
+            uv_area += (a.x * b.y - a.y * b.x).abs() * 0.5;
+            let (p, q) = (m.pos[c[k] as usize] - m.pos[c[0] as usize], m.pos[c[k + 1] as usize] - m.pos[c[0] as usize]);
+            area += p.cross(q).length() * 0.5;
+        }
+    }
+    eprintln!(
+        "face tile: {} islands, boxes cover {used:.3}; nostril 3D area {:.1} mm², UV area {uv_area:.6} = {:.0} texels at 1024²",
+        islands.len(),
+        area * 1e6,
+        uv_area * 1024.0 * 1024.0
+    );
+}
+
+/// Writes the template with each genital variant (ADR-039) as a package into a data folder for
+/// `humanart-cli render --data` (review stills of the current generator with any CLI build).
+#[test]
+#[ignore = "writes review data"]
+fn write_variant_review_packages() {
+    for (variant, folder) in
+        [(super::genitals::Variant::Female, "data-female"), (super::genitals::Variant::Male, "data-male")]
+    {
+        let options = super::build::Options { lods: false, genitals: variant, ..super::build::Options::default() };
+        let generated = super::build::template(&options).unwrap();
+        let bytes = crate::package::write_package(&generated.template).unwrap();
+        let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../target/agents/template-body")
+            .join(folder)
+            .join("template");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("template.antmpl"), bytes).unwrap();
+    }
+}
+
+/// Diagnostic for `ac_wp11_1_template_head_ibl_and_shadows` (render): surface faces above the
+/// shoulders that face against their vertices' mean normal (folds the GPU culls as holes).
+#[test]
+#[ignore = "diagnostic"]
+fn diag_head_folds() {
+    let s = super::body_surface().unwrap();
+    let m = s.mesh();
+    let face_normal = |f: usize| {
+        let c = m.corners_of(f);
+        let o = m.pos[c[0] as usize];
+        (1..c.len() - 1)
+            .map(|k| (m.pos[c[k] as usize] - o).cross(m.pos[c[k + 1] as usize] - o))
+            .fold(Vec3::ZERO, |a, b| a + b)
+    };
+    let mut normals = vec![Vec3::ZERO; m.pos.len()];
+    for f in 0..m.face_count() {
+        let n = face_normal(f);
+        for &v in m.corners_of(f) {
+            normals[v as usize] += n;
+        }
+    }
+    let mut found = 0;
+    for f in 0..m.face_count() {
+        let c = m.corners_of(f);
+        if m.centroid(f).y < 1.40 {
+            continue;
+        }
+        let n = face_normal(f).normalize_or_zero();
+        let worst = c.iter().map(|&v| n.dot(normals[v as usize].normalize_or_zero())).fold(1.0_f32, f32::min);
+        let near = [
+            Vec3::new(-0.018_526_666, 1.520_779_4, 0.094_435_53),
+            Vec3::new(-0.080_674_66, 1.550_635_7, 0.003_411_182),
+        ]
+        .iter()
+        .any(|p| p.distance(m.centroid(f)) < 0.008);
+        if worst < 0.0 {
+            found += 1;
+            if near {
+                eprintln!(
+                    "face {f} {} worst {worst:.2} at {:?}",
+                    super::regions::REGIONS[m.tags[f].region as usize].1,
+                    m.centroid(f)
+                );
+            }
+        }
+    }
+    eprintln!("{found} folded faces above 1.40 m");
+}
+
+/// Diagnostic for `ac_wp11_1_template_head_ibl_and_shadows`: folded faces of the finished
+/// template's body part (scanned face on) above the shoulders, by the same measure as
+/// [`diag_head_folds`].
+#[test]
+#[ignore = "diagnostic"]
+fn diag_finished_head_folds() {
+    let options = super::build::Options { lods: false, ..super::build::Options::default() };
+    let generated = super::build::template(&options).unwrap();
+    let mesh = generated.template.mesh();
+    let pos = mesh.positions();
+    let faces: Vec<Vec<u32>> = mesh.parts()[0].faces().map(|f| mesh.face(f).to_vec()).collect();
+    let normal = |c: &[u32]| {
+        let o = pos[c[0] as usize];
+        (1..c.len() - 1)
+            .map(|k| (pos[c[k] as usize] - o).cross(pos[c[k + 1] as usize] - o))
+            .fold(Vec3::ZERO, |a, b| a + b)
+    };
+    let mut normals = vec![Vec3::ZERO; pos.len()];
+    for c in &faces {
+        let n = normal(c);
+        for &v in c {
+            normals[v as usize] += n;
+        }
+    }
+    let mut found = 0;
+    for c in &faces {
+        let centre = c.iter().fold(Vec3::ZERO, |s, &v| s + pos[v as usize]) / c.len() as f32;
+        if centre.y < 1.40 {
+            continue;
+        }
+        let n = normal(c).normalize_or_zero();
+        if c.iter().any(|&v| n.dot(normals[v as usize].normalize_or_zero()) < 0.0) {
+            found += 1;
+            if found <= 12 {
+                eprintln!("folded at {centre:?}");
+            }
+        }
+    }
+    eprintln!("finished template: {found} folded faces above 1.40 m (UV seams split vertices, so seams count too)");
 }

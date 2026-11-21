@@ -429,5 +429,21 @@ fn picking_reports_the_object_under_the_cursor() {
         assert_eq!(hit.pixel, [x as u32, y as u32]);
         assert_eq!(hit.pick_id, want, "pixel ({x}, {y})");
         assert_eq!(hit.depth > 0.0, want != 0);
+        // [VP-01] the triangle and barycentrics: the point they name on the object's mesh lies
+        // under the pixel's centre.
+        let Some(object) = scene.objects.iter().find(|o| o.pick_id == want && want != 0) else {
+            assert_eq!(hit.triangle, None);
+            continue;
+        };
+        let mesh = &scene.meshes[object.mesh];
+        let t = hit.triangle.expect("a hit names its triangle") as usize;
+        assert!(3 * t + 2 < mesh.indices.len(), "triangle {t} of {}", mesh.indices.len() / 3);
+        let b = hit.barycentric;
+        assert!((b[0] + b[1] + b[2] - 1.0).abs() < 1e-4 && b.iter().all(|w| (0.0..=1.0).contains(w)), "{b:?}");
+        let corner = |k: usize| object.transform.transform_point3(mesh.positions[mesh.indices[3 * t + k] as usize]);
+        let point = corner(0) * b[0] + corner(1) * b[1] + corner(2) * b[2];
+        let at = pixel_of_f(&camera, w, hgt, point);
+        let centre = Vec2::new(x as f32 + 0.5, y as f32 + 0.5);
+        assert!((at - centre).length() < 0.05, "pixel ({x}, {y}): the hit point projects to {at:?}");
     }
 }

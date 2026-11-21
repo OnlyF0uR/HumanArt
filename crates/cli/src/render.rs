@@ -13,11 +13,13 @@ use humanart_doc::document::{Author, AuthorKind, Document};
 use humanart_doc::registry::{ParamValue, Registry, RegistryLimits};
 use humanart_gpu::resources::{Budget, Resources};
 use humanart_gpu::{DeviceRequest, Gpu};
+use humanart_math::Vec3;
 use humanart_model::generate::build::{Options, template};
 use humanart_model::hair::ScalpStyle;
 use humanart_model::{PackageLimits, Template, read_package};
+use humanart_render::camera::{Camera, Lens, PortraitPreset, PortraitSubject};
 use humanart_render::capture::{encode_png_rgba8, read_texture};
-use humanart_render::light::BuiltinRig;
+use humanart_render::light::{BackdropChoice, BuiltinRig};
 use humanart_render::renderer::Quality;
 
 use crate::args::{CommandSpec, OptSpec, Parsed};
@@ -28,19 +30,33 @@ pub const VIEWS: [&str; 4] = ["body", "head", "three-quarter", "profile"];
 const FRAMINGS: [Framing; 4] = [Framing::Body, Framing::Head, Framing::ThreeQuarter, Framing::Profile];
 /// The tiers `--quality` takes.
 pub const QUALITIES: [&str; 3] = ["interactive", "review", "still"];
-const TIERS: [Quality; 3] = [Quality::Interactive, Quality::Review, Quality::Still];
+pub(crate) const TIERS: [Quality; 3] = [Quality::Interactive, Quality::Review, Quality::Still];
 /// The rigs `--rig` takes.
-pub const RIGS: [&str; 7] =
-    ["neutral-studio", "flat-beauty", "harsh-sidelight", "backlight", "overcast-outdoor", "golden-hour", "reference"];
-const BUILTIN_RIGS: [BuiltinRig; 7] = [
-    BuiltinRig::NeutralStudio,
-    BuiltinRig::FlatBeauty,
-    BuiltinRig::HarshSidelight,
-    BuiltinRig::Backlight,
-    BuiltinRig::OvercastOutdoor,
-    BuiltinRig::GoldenHour,
-    BuiltinRig::ReferenceMatched,
+pub const RIGS: [&str; 13] = [
+    "neutral-studio",
+    "flat-beauty",
+    "harsh-sidelight",
+    "backlight",
+    "overcast-outdoor",
+    "golden-hour",
+    "reference",
+    "three-point",
+    "rembrandt",
+    "loop",
+    "clamshell",
+    "rim-only",
+    "sunset",
 ];
+/// The rigs of [`RIGS`], in its order ([`BuiltinRig::ALL`]'s).
+pub(crate) const BUILTIN_RIGS: [BuiltinRig; 13] = BuiltinRig::ALL;
+/// The cameras `--camera` takes: `view` (the `--view` framing), then the portrait presets.
+pub const CAMERAS: [&str; 6] = ["view", "head-and-shoulders", "tight-face", "full-body", "three-quarter", "profile"];
+/// The backdrops `--background` takes, in [`BACKDROPS`] order.
+pub const BACKGROUNDS: [&str; 4] = ["studio", "rig", "flat", "environment"];
+const BACKDROPS: [BackdropChoice; 4] =
+    [BackdropChoice::Studio, BackdropChoice::Rig, BackdropChoice::Flat, BackdropChoice::Environment];
+/// Largest focus distance `--focus` takes, metres.
+pub const MAX_FOCUS_M: f32 = 100.0;
 /// The hair `--hair` takes: `none` (no hair at all), then the scalp styles (`bald` keeps brows,
 /// lashes and peach fuzz).
 pub const HAIR_STYLES: [&str; 8] = ["none", "bald", "short", "medium-straight", "long-wavy", "curly", "coily", "afro"];
@@ -58,7 +74,37 @@ pub const CLOSE_UPS: [&str; 3] = ["none", "eye", "mouth"];
 /// Most `--set` values on one command line.
 pub const MAX_SET_VALUES: usize = 64;
 
-const OPTIONS: [OptSpec; 16] = [
+const OPTIONS: [OptSpec; 21] = [
+    OptSpec {
+        name: "camera",
+        value: Some("NAME"),
+        default: Some("view"),
+        help: "Portrait camera: view (use --view), head-and-shoulders (85 mm), tight-face (105 mm), full-body (50 mm), three-quarter, profile.",
+    },
+    OptSpec {
+        name: "aperture",
+        value: Some("F"),
+        default: Some("off"),
+        help: "Depth of field: the lens's f-number (0.7 to 64, e.g. 2.8), or off for everything sharp.",
+    },
+    OptSpec {
+        name: "focus",
+        value: Some("M"),
+        default: Some("eye"),
+        help: "Focus distance in metres along the view, or eye: the eye nearer the camera.",
+    },
+    OptSpec {
+        name: "background",
+        value: Some("NAME"),
+        default: Some("studio"),
+        help: "studio (seamless paper lit by the rig; outdoor rigs keep their sky), rig (the rig's own), flat (grey) or environment.",
+    },
+    OptSpec {
+        name: "occlusion",
+        value: Some("ON"),
+        default: Some("on"),
+        help: "Screen-space ambient occlusion and contact shadows: on or off.",
+    },
     OptSpec {
         name: "close-up",
         value: Some("NAME"),
@@ -97,7 +143,7 @@ const OPTIONS: [OptSpec; 16] = [
         name: "rig",
         value: Some("NAME"),
         default: Some("neutral-studio"),
-        help: "Light rig: neutral-studio, flat-beauty, harsh-sidelight, backlight, overcast-outdoor, golden-hour, reference.",
+        help: "Light rig: neutral-studio, flat-beauty, harsh-sidelight, backlight, overcast-outdoor, golden-hour, reference, three-point, rembrandt, loop, clamshell, rim-only, sunset.",
     },
     OptSpec {
         name: "hair",
@@ -154,6 +200,16 @@ pub struct RenderJob {
     /// Scalar parameter values set before the render: registry id and the value's text (checked
     /// to be a finite number).
     pub params: Vec<(String, String)>,
+    /// A portrait camera instead of the framing's own.
+    pub camera: Option<PortraitPreset>,
+    /// Depth of field: the f-number in hundredths (280 is f/2.8); `None`: everything sharp.
+    pub aperture: Option<u32>,
+    /// The focus distance, millimetres; `None`: the eye nearer the camera.
+    pub focus_mm: Option<u32>,
+    /// The backdrop.
+    pub backdrop: BackdropChoice,
+    /// Screen-space ambient occlusion and contact shadows.
+    pub occlusion: bool,
 }
 
 impl RenderJob {
@@ -176,8 +232,68 @@ impl RenderJob {
             hair: hair_options(p)?,
             close_up: [None, Some(CloseUp::Eye), Some(CloseUp::Mouth)][pick("close-up", &CLOSE_UPS)?],
             params: set_values(p.get("set").unwrap_or(""))?,
+            camera: match pick("camera", &CAMERAS)? {
+                0 => None,
+                i => PortraitPreset::ALL.get(i - 1).copied(),
+            },
+            aperture: aperture(p.get("aperture").unwrap_or("off"))?,
+            focus_mm: focus(p.get("focus").unwrap_or("eye"))?,
+            backdrop: BACKDROPS[pick("background", &BACKGROUNDS)?],
+            occlusion: pick("occlusion", &["on", "off"])? == 0,
         })
     }
+}
+
+/// `--aperture`: `off`, or an f-number inside [`Lens::F_NUMBER_RANGE`], kept in hundredths.
+fn aperture(text: &str) -> Result<Option<u32>, CliError> {
+    if text == "off" {
+        return Ok(None);
+    }
+    let [low, high] = Lens::F_NUMBER_RANGE;
+    match text.trim().parse::<f32>() {
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // Checked to be 0.7..=64.
+        Ok(f) if (low..=high).contains(&f) => Ok(Some((f * 100.0).round() as u32)),
+        _ => Err(CliError::Usage(crate::args::UsageError(format!(
+            "--aperture: `{text}` is not off or an f-number from {low} to {high}"
+        )))),
+    }
+}
+
+/// `--focus`: `eye`, or a distance from 1 cm to [`MAX_FOCUS_M`], kept in millimetres.
+fn focus(text: &str) -> Result<Option<u32>, CliError> {
+    if text == "eye" {
+        return Ok(None);
+    }
+    match text.trim().parse::<f32>() {
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // Checked to be 0.01..=100.
+        Ok(m) if (0.01..=MAX_FOCUS_M).contains(&m) => Ok(Some((m * 1000.0).round() as u32)),
+        _ => Err(CliError::Usage(crate::args::UsageError(format!(
+            "--focus: `{text}` is not eye or a distance from 0.01 to {MAX_FOCUS_M} metres"
+        )))),
+    }
+}
+
+/// What the portrait cameras frame on `model`: its head and its standing height.
+fn portrait_subject(model: &Model) -> PortraitSubject {
+    let (head_center, head_radius) = model.head_bounds();
+    let (lo, hi) = model.extent();
+    let (feet, top) = if lo.y <= hi.y { (lo.y, hi.y) } else { (head_center.y - 13.0 * head_radius, head_center.y) };
+    // The model's head sphere reaches the neck and the ears; a head is 13 % of the stature high.
+    PortraitSubject { head_center, head_radius: (0.065 * (top - feet)).min(head_radius), feet, top }
+}
+
+/// The distance along `camera`'s view axis to the eye nearer the camera (the front of the left
+/// eyeball, or its mirror image across the head's middle), or to the camera's target when the
+/// template has no fitted eyeball.
+fn eye_focus(model: &Model, camera: &Camera, aspect: f32) -> f32 {
+    let along = |p: Vec3| (p - camera.position).dot(camera.forward());
+    let Some(left) = close_up_camera(model, CloseUp::Eye, Framing::Head, aspect).map(|c| c.target) else {
+        return along(camera.target).max(0.01);
+    };
+    let middle = model.head_bounds().0.x;
+    let right = Vec3::new(2.0 * middle - left.x, left.y, left.z);
+    let nearer = if left.distance(camera.position) <= right.distance(camera.position) { left } else { right };
+    along(nearer).max(0.01)
 }
 
 /// The `--set` list: `id=value` pairs separated by commas.
@@ -196,7 +312,7 @@ fn set_values(list: &str) -> Result<Vec<(String, String)>, CliError> {
 }
 
 /// The hair options of a parsed `render` command line.
-fn hair_options(p: &Parsed) -> Result<Option<HairOptions>, CliError> {
+pub(crate) fn hair_options(p: &Parsed) -> Result<Option<HairOptions>, CliError> {
     let style = p.choice("hair", &HAIR_STYLES)?;
     let shade =
         HairShade::from_name(HAIR_SHADES[p.choice("hair-color", &HAIR_SHADES)?]).unwrap_or(HairShade::DarkBrown);
@@ -229,7 +345,7 @@ pub struct RenderSummary {
 }
 
 /// Loads every `*.json` registry file under `<data>/template/params`.
-fn load_registry(data: &Path) -> Result<Registry, CliError> {
+pub(crate) fn load_registry(data: &Path) -> Result<Registry, CliError> {
     let dir = data.join("template").join("params");
     let entries = std::fs::read_dir(&dir).map_err(|e| CliError::io(&dir, e))?;
     let mut files: Vec<(String, Vec<u8>)> = Vec::new();
@@ -250,7 +366,7 @@ fn load_registry(data: &Path) -> Result<Registry, CliError> {
 
 /// The template package `<data>/template/template.antmpl`, or the generated template when there is
 /// no package (as the editor does).
-fn load_template(data: &Path) -> Result<(Template, &'static str), CliError> {
+pub(crate) fn load_template(data: &Path) -> Result<(Template, &'static str), CliError> {
     let path = data.join("template").join("template.antmpl");
     if path.exists() {
         let bytes = std::fs::read(&path).map_err(|e| CliError::io(&path, e))?;
@@ -339,15 +455,29 @@ fn render_with(
         let s = viewer.settings_mut();
         s.quality = job.quality;
         s.rig = job.rig;
+        s.backdrop = job.backdrop;
+        s.occlusion = job.occlusion;
     }
     viewer.frame_model(model, job.framing);
+    let (w, h) = viewer.size();
+    #[allow(clippy::cast_precision_loss)] // Image sides are at most MAX_SIDE.
+    let aspect = w.max(1) as f32 / h.max(1) as f32;
+    if let Some(preset) = job.camera {
+        viewer.set_camera(Camera::portrait(preset, &portrait_subject(model), aspect));
+    }
     if let Some(close_up) = job.close_up {
-        let (w, h) = viewer.size();
-        #[allow(clippy::cast_precision_loss)] // Image sides are at most MAX_SIDE.
-        let aspect = w.max(1) as f32 / h.max(1) as f32;
         let camera = close_up_camera(model, close_up, job.framing, aspect)
             .ok_or(CliError::Data("the template has no eye or lip landmarks to frame a close-up on".to_owned()))?;
         viewer.set_camera(camera);
+    }
+    if let Some(hundredths) = job.aperture {
+        let camera = viewer.settings().camera;
+        #[allow(clippy::cast_precision_loss)] // At most 6400 and 100 000.
+        let (f_number, focus) = (
+            hundredths as f32 / 100.0,
+            job.focus_mm.map_or_else(|| eye_focus(model, &camera, aspect), |mm| mm as f32 / 1000.0),
+        );
+        viewer.settings_mut().lens = Some(Lens::new(f_number, focus));
     }
     for _ in 0..job.frames {
         let mut encoder =
@@ -391,6 +521,11 @@ mod tests {
         let d = job(&[]).unwrap();
         assert_eq!((d.framing, d.width, d.height, d.frames), (Framing::Body, 1080, 1350, 32));
         assert!(d.skin_surface);
+        // todo 1.9: review renders stand in front of studio paper with occlusion, everything sharp.
+        assert_eq!(
+            (d.camera, d.aperture, d.focus_mm, d.backdrop, d.occlusion),
+            (None, None, None, BackdropChoice::Studio, true)
+        );
         for bad in [
             &["--view", "side"][..],
             &["--width", "0"],
@@ -399,8 +534,73 @@ mod tests {
             &["--hair", "mohawk"],
             &["--hair-strands", "500000"],
             &["--body-hair", "yes"],
+            &["--rig", "disco"],
+            &["--camera", "selfie"],
+            &["--aperture", "0.1"],
+            &["--aperture", "wide"],
+            &["--aperture", "NaN"],
+            &["--focus", "0"],
+            &["--focus", "far"],
+            &["--focus", "1000"],
+            &["--background", "beach"],
+            &["--occlusion", "maybe"],
         ] {
             assert!(matches!(job(bad), Err(CliError::Usage(_))), "{bad:?}");
+        }
+    }
+
+    /// todo 1.9: the light and camera options of the command line.
+    #[test]
+    fn todo_1_9_light_and_camera_arguments_map_to_the_job() {
+        for (name, rig) in RIGS.iter().zip(BuiltinRig::ALL) {
+            assert_eq!(job(&["--rig", name]).unwrap().rig, rig);
+            assert_eq!(name.replace('-', "_").replace("reference", "reference_matched"), rig.name());
+        }
+        for (name, preset) in CAMERAS.iter().skip(1).zip(PortraitPreset::ALL) {
+            assert_eq!(job(&["--camera", name]).unwrap().camera, Some(preset));
+            assert_eq!(name.replace('-', "_"), preset.name());
+        }
+        let j =
+            job(&["--camera", "tight-face", "--aperture", "2.8", "--focus", "1.25", "--background", "flat"]).unwrap();
+        assert_eq!((j.camera, j.aperture, j.focus_mm), (Some(PortraitPreset::TightFace), Some(280), Some(1250)));
+        assert_eq!(j.backdrop, BackdropChoice::Flat);
+        let j = job(&["--aperture", "1.4", "--background", "environment", "--occlusion", "off"]).unwrap();
+        assert_eq!(
+            (j.aperture, j.focus_mm, j.backdrop, j.occlusion),
+            (Some(140), None, BackdropChoice::Environment, false)
+        );
+        assert_eq!(job(&["--background", "rig"]).unwrap().backdrop, BackdropChoice::Rig);
+        assert_eq!(job(&["--aperture", "off", "--focus", "2"]).unwrap().aperture, None);
+    }
+
+    /// todo 1.9: a portrait preset with a lens renders, focused on the nearer eye.
+    #[test]
+    fn todo_1_9_render_with_a_portrait_camera_and_a_lens() {
+        let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let out = std::env::temp_dir().join(format!("humanart-cli-lens-{}.png", std::process::id()));
+        let j = RenderJob {
+            out: out.clone(),
+            data: root.join("data"),
+            width: 200,
+            height: 250,
+            frames: 3,
+            ..job(&["--camera", "three-quarter", "--aperture", "2", "--rig", "rembrandt", "--hair", "none"]).unwrap()
+        };
+        run(&j).unwrap();
+        let bytes = std::fs::read(&out).unwrap();
+        assert_eq!(&bytes[1..4], b"PNG");
+        std::fs::remove_file(&out).unwrap();
+        // The focus is on the eye nearer the camera: closer than the head's centre in every preset.
+        let registry = load_registry(&j.data).unwrap();
+        let (template, _) = load_template(&j.data).unwrap();
+        let model = Model::new(Arc::new(template), &registry);
+        let subject = portrait_subject(&model);
+        for preset in PortraitPreset::ALL {
+            let camera = Camera::portrait(preset, &subject, 0.8);
+            camera.validate().unwrap();
+            let focus = eye_focus(&model, &camera, 0.8);
+            let centre = (subject.head_center - camera.position).dot(camera.forward());
+            assert!(focus > 0.2 && focus < centre, "{}: focus {focus} m, head centre {centre} m", preset.name());
         }
     }
 

@@ -158,7 +158,7 @@ fn map_blocking(gpu: &Gpu, staging: &wgpu::Buffer) -> Result<Vec<u8>, CompressEr
     staging.slice(..).map_async(wgpu::MapMode::Read, move |result| {
         let _ = tx.send(result);
     });
-    gpu.device.poll(wgpu::PollType::wait_indefinitely()).map_err(GpuError::from)?;
+    humanart_gpu::device::wait_for(&gpu.device, None, humanart_gpu::device::GPU_WAIT_LIMIT, "the queued work")?;
     match rx.recv() {
         Ok(Ok(())) => {}
         Ok(Err(e)) => return Err(GpuError::Map { message: e.to_string() }.into()),

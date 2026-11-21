@@ -47,7 +47,7 @@ struct Globals {
     surface: vec4<f32>,
     // melanin max, blood min, blood max, epidermis min mm.
     mapping0: vec4<f32>,
-    // epidermis max mm, carotene max mol/L, -, -.
+    // epidermis max mm, carotene max mol/L, melanin and haemoglobin tone variation amplitudes.
     mapping1: vec4<f32>,
 }
 

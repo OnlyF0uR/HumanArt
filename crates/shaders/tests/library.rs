@@ -15,10 +15,8 @@
 //! Every kernel is a compute entry point of a `test/*.wgsl` shader sharing the bindings of
 //! `test/harness.wgsl`: a `Params` uniform, an input and an output array of 4-word elements.
 
-use std::sync::OnceLock;
-
 use humanart_core::rng::Rng;
-use humanart_gpu::{DeviceRequest, Gpu};
+use humanart_gpu::Gpu;
 use humanart_math::color::{spaces, tonemap, transfer};
 use humanart_math::pack;
 use humanart_math::{DVec3, Quat, Vec2, Vec3, Vec4};
@@ -30,10 +28,8 @@ use humanart_shaders::{manifest, preprocess};
 
 /// One device for the whole test binary.
 fn gpu() -> &'static Gpu {
-    static GPU: OnceLock<Gpu> = OnceLock::new();
-    GPU.get_or_init(|| {
-        Gpu::headless_blocking(&DeviceRequest::default()).unwrap_or_else(|e| panic!("this machine has a GPU: {e}"))
-    })
+    // The process's shared device (ADR-040).
+    humanart_gpu::shared_headless().unwrap_or_else(|e| panic!("this machine has a GPU: {e}"))
 }
 
 /// One dispatch of a test kernel.

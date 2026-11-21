@@ -848,3 +848,24 @@ Amends ADR-002 (profiles).
   BodyParts3D references (CC BY 4.0), ANSUR II and the CIE table (ADR-038) are credited in a data
   attribution file (`todo.md` section 3) and `docs/data-provenance.md`.
 - Source: the owner, 2026-11-20 ("the typical dual licensing").
+
+## ADR-056: The scan-derived face model is published under HSRD-100's CC BY 4.0
+
+- **Context.** The default face (`data/template/face/face-model.hafm`, todo 1.1) is derived from 8
+  HSRD-100 scans. The dataset card on Hugging Face licenses the dataset CC BY 4.0; each scan's own
+  metadata carries `"license": "Commercial"` and a price. The file was kept out of the repository
+  until this was settled, which left a fresh clone unable to compile `humanart-model` (it embeds the
+  file). The licensor cannot be asked.
+- **Decision.** Publish the file under CC BY 4.0 with attribution. Reasons: the licensor published
+  this dataset on Hugging Face with CC BY 4.0 as its stated licence (card front matter and text, its
+  own citation block); the per-scan field reads as metadata copied from the vendor's shop
+  (HumanScanRepository), where the same scans are sold, and does not override the licence chosen for
+  this release; a CC licence cannot be revoked for material received under it. CC BY 4.0 allows
+  sharing adapted material, commercially too, with credit, a link to the licence and a note of the
+  changes: `DATA-ATTRIBUTION.md`, `docs/data-provenance.md` and the file's own description give them.
+  The file holds a mean of 8 fits and their principal components, no scan, texture or name.
+- **Consequences.** A clone builds and gets the same face. If the licensor ever states that the
+  per-scan terms govern, the file is replaced by one built from openly licensed scans (or the
+  procedural face, `scan_face: false`) and this ADR is revisited.
+- Source: the lead's judgement, delegated by the owner on 2026-11-21 ("fix the licensing thing, on
+  what you think is best").

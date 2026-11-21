@@ -1,7 +1,7 @@
 // render/frame.wgsl: the per-frame constants of the renderer [RND-03]: camera matrices (jittered for
 // rasterisation, unjittered for motion and reprojection), shadow matrices, exposure, viewport and
 // tile, environment, backdrop, counters and the light array. Mirrors `FrameUniforms` in
-// crates/render/src/uniforms.rs (1488 bytes); bound at group 0 from the uniform ring with a dynamic
+// crates/render/src/uniforms.rs (1568 bytes); bound at group 0 from the uniform ring with a dynamic
 // offset. Also the full-screen triangle every post pass draws.
 //
 // The including shader declares the binding:
@@ -54,8 +54,20 @@ struct Frame {
     jitter: vec4<f32>,
     // Environment scale (nits), rotation about +Y (radians), specular mip count, light count.
     environment: vec4<f32>,
-    // Backdrop radiance; w = 0 flat colour, 1 environment.
+    // Backdrop: w = 0 a flat radiance (rgb), 1 the environment, 2 studio paper (rgb its reflectance).
     background: vec4<f32>,
+    // Studio paper: the wall's unit normal (towards the camera), w its plane offset (n . p = w).
+    backdrop_wall: vec4<f32>,
+    // Studio paper: floor height, cove radius, falloff strength, falloff radius (metres).
+    backdrop_floor: vec4<f32>,
+    // Studio paper: the spot on the wall behind the subject.
+    backdrop_spot: vec4<f32>,
+    // Depth of field: focus distance (metres along the view axis), radius of the circle of
+    // confusion at infinity (pixels), largest radius drawn (pixels), on (1/0).
+    lens: vec4<f32>,
+    // Screen-space occlusion: ambient radius (metres), contact-shadow length (metres), tangent of
+    // half the vertical field of view, 0 off or the targets' resolution divisor (1 full, 2 half).
+    occlusion: vec4<f32>,
     // TAA: minimum blend weight, mode (0 TAA, 1 accumulate), frames accumulated, reset (1/0).
     taa: vec4<f32>,
     // Frame index, debug view, shadow map size, flags.

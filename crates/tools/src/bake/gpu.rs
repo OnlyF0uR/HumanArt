@@ -1108,7 +1108,6 @@ impl GpuBaker {
 pub(crate) mod tests {
     use std::sync::{Mutex, MutexGuard, OnceLock};
 
-    use humanart_gpu::DeviceRequest;
     use humanart_math::Vec3;
 
     use super::*;
@@ -1119,8 +1118,8 @@ pub(crate) mod tests {
     use crate::bake::thickness::bake_thickness;
 
     pub(crate) fn gpu() -> &'static Gpu {
-        static GPU: OnceLock<Gpu> = OnceLock::new();
-        GPU.get_or_init(|| Gpu::headless_blocking(&DeviceRequest::default()).expect("this machine has a GPU"))
+        // The process's shared device (ADR-040).
+        humanart_gpu::shared_headless().expect("this machine has a GPU")
     }
 
     pub(crate) fn baker() -> MutexGuard<'static, GpuBaker> {

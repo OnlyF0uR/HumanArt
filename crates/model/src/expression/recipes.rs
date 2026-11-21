@@ -46,8 +46,6 @@ pub const VISEME_WIDE: f32 = 0.24;
 pub const MIDLINE_BLEND: f32 = 0.006;
 /// The clearance kept between a closing eyelid and the eyeball surface, metres (authored).
 pub const LID_CLEARANCE: f32 = 0.0004;
-/// Rounds of local fold repair applied to every target ([`Shape::repair_folds`]).
-pub const FOLD_REPAIR_ROUNDS: usize = 30;
 /// Rounds of regularisation against folds and over-stretch applied to every target
 /// ([`Shape::regularize`]).
 pub const REGULARIZE_ROUNDS: usize = 80;
@@ -55,6 +53,24 @@ pub const REGULARIZE_ROUNDS: usize = 80;
 pub const TARGET_MIN_AREA_RATIO: f32 = 0.25;
 /// The largest triangle area ratio a target may produce (a margin inside the sweep's 5).
 pub const TARGET_MAX_AREA_RATIO: f32 = 4.0;
+/// The smallest cosine between a triangle's deformed and rest normals a target may produce: a
+/// margin of about 6 degrees inside the sweep's fold test (90 degrees), which the rounding of the
+/// evaluated positions can flip for a triangle stood on edge.
+pub const TARGET_MIN_NORMAL_COS: f32 = 0.1;
+/// [`TARGET_MIN_NORMAL_COS`] for triangles below the sweep's area floor or thinner than
+/// [`SLIVER_QUALITY`] (the template's slivers at the lip corners): at most 60 degrees of turn, so a combination with another target does
+/// not tip them over.
+pub const TARGET_MIN_NORMAL_COS_SMALL: f32 = 0.5;
+/// Rest height over longest edge below which a triangle is a sliver for
+/// [`TARGET_MIN_NORMAL_COS_SMALL`] (the lip-corner slivers are about 0.04).
+pub const SLIVER_QUALITY: f32 = 0.08;
+/// The reach of the lip line's ride on the upper lip, metres (authored, [`Recipes::ride_lips`]).
+pub const HELPER_REACH: f32 = 0.003;
+/// The straight distance (mm) from a lip corner within which the lining of the mouth follows a
+/// corner pull fully, and beyond which not at all (authored, [`Recipes::corner_mask`]).
+pub const LINING_INNER: f32 = 4.0;
+/// See [`LINING_INNER`].
+pub const LINING_OUTER: f32 = 14.0;
 /// Laplacian smoothing steps of the lid rotation field (authored).
 pub const LID_RELAX: usize = 4;
 /// The distance from a canthus over which the lid motion tapers in, metres (authored).
@@ -177,6 +193,11 @@ pub struct Recipes<'f, 't> {
     eyes: [Eye; 2],
     jaw_family: Vec<f32>,
     helper: u16,
+    /// Per mouth-helper node: the upper-lip nodes it rides and their weights (summing to 1,
+    /// [`Recipes::ride_lips`]).
+    helper_anchor: Vec<(u32, Vec<(u32, f32)>)>,
+    /// Per node: whether it lines the mouth (the `mouth-interior` region of the skin).
+    interior: Vec<bool>,
     bounds: AreaBounds,
 }
 
@@ -228,8 +249,59 @@ impl<'f, 't> Recipes<'f, 't> {
             max_ratio: TARGET_MAX_AREA_RATIO,
             min_area: MIN_RATIO_AREA,
             exempt_parts,
+            min_cos: TARGET_MIN_NORMAL_COS,
+            min_cos_small: TARGET_MIN_NORMAL_COS_SMALL,
+            sliver_quality: SLIVER_QUALITY,
         };
-        Ok(Self { f, body, lip_upper_share, lip_dist, corner_dist, margin_dist, eyes, jaw_family, helper, bounds })
+        // The lip line (mouth helper) is a thin tube along the contact line, connected to nothing:
+        // geodesic masks never reach it. Each of its nodes rides the nearest upper-lip node at
+        // the contact.
+        let upper_contact: Vec<usize> = (0..f.node_count())
+            .filter(|&n| f.part_of(n) == body && lip_upper_share[n] > 0.5 && lip_dist[n] < mm(1.5))
+            .collect();
+        // A smooth (Gaussian) average over the contact nodes within HELPER_REACH, so the nodes of
+        // one cross-section of the tube (at most 0.8 mm apart) ride nearly the same point.
+        let helper_anchor = (0..f.node_count())
+            .filter(|&n| f.part_of(n) == helper)
+            .filter_map(|n| {
+                let p = f.positions()[n];
+                let mut near: Vec<(u32, f32)> = upper_contact
+                    .iter()
+                    .filter_map(|&a| {
+                        let d = (f.positions()[a] - p).length();
+                        let w = (-(d / (0.5 * HELPER_REACH)).powi(2)).exp();
+                        (d < HELPER_REACH).then_some((u32::try_from(a).ok()?, w))
+                    })
+                    .collect();
+                if near.is_empty() {
+                    let best = upper_contact.iter().copied().min_by(|&a, &b| {
+                        (f.positions()[a] - p).length_squared().total_cmp(&(f.positions()[b] - p).length_squared())
+                    })?;
+                    near.push((u32::try_from(best).ok()?, 1.0));
+                }
+                let sum: f32 = near.iter().map(|x| x.1).sum();
+                for x in &mut near {
+                    x.1 /= sum;
+                }
+                Some((u32::try_from(n).ok()?, near))
+            })
+            .collect();
+        let lining = f.region("mouth-interior")?;
+        let interior = (0..f.node_count()).map(|n| f.part_of(n) == body && f.in_region(n, lining)).collect();
+        Ok(Self {
+            f,
+            body,
+            lip_upper_share,
+            lip_dist,
+            corner_dist,
+            margin_dist,
+            eyes,
+            jaw_family,
+            helper,
+            helper_anchor,
+            interior,
+            bounds,
+        })
     }
 
     fn eye(f: &FaceField<'_>, side: Side) -> ExprResult<Eye> {
@@ -603,7 +675,7 @@ impl<'f, 't> Recipes<'f, 't> {
     /// closer settings fold slivers at the meeting line).
     fn closed(&self, side: Side) -> Shape {
         let mut s = self.lids(side, 0.84, 0.14);
-        s.repair_folds(self.f, FOLD_REPAIR_ROUNDS);
+        self.regularize(&mut s);
         s
     }
 
@@ -612,7 +684,7 @@ impl<'f, 't> Recipes<'f, 't> {
     /// shape, driven by a tent curve peaking at 0.5 in the rig logic, keeps it on the arc.
     fn closed_inbetween(&self, side: Side) -> Shape {
         let mut s = self.lids(side, 0.42, 0.07);
-        s.repair_folds(self.f, FOLD_REPAIR_ROUNDS);
+        self.regularize(&mut s);
         s.add(&self.closed(side), -0.5);
         s
     }
@@ -716,7 +788,7 @@ impl<'f, 't> Recipes<'f, 't> {
 
     /// AU13: the corners pull up sharply (levator anguli oris); the lower lip follows less.
     fn au13(&self) -> ExprResult<Shape> {
-        let m = self.geo(&self.corner_seeds()?, 0.0, mm(18.0)).scale(|n| 0.35 + 0.65 * self.upper(n));
+        let m = self.corner_mask(0.0, mm(18.0))?.scale(|n| 0.35 + 0.65 * self.upper(n));
         let mut s = self.shape();
         self.sided(&mut s, &m, |side| Action::Translate { offset: v_mm(1.2 * sign(side), 4.8, -0.6) });
         s.relax(self.f, 4, 0.5, |n| self.f.part_of(n) == self.body);
@@ -756,9 +828,29 @@ impl<'f, 't> Recipes<'f, 't> {
         Ok(s)
     }
 
+    /// A corner mask: geodesic from the corner seeds over the skin, and for the lining of the
+    /// mouth by straight distance to the nearer corner: the lining of the corner recess is far
+    /// from the corner along the surface (round the inner lip) but right behind it, and when it
+    /// lagged the pulled corner opened onto it (the red lining showed at both corners in the
+    /// smile).
+    fn corner_mask(&self, inner: f32, outer: f32) -> ExprResult<Mask> {
+        let seeds = self.corner_seeds()?;
+        let pts: Vec<Vec3> = seeds.iter().map(|&s| self.f.positions()[s as usize]).collect();
+        let geo = self.geo(&seeds, inner, outer);
+        let lining = Mask::from_fn(self.f, |n| {
+            if !self.interior.get(n).copied().unwrap_or(false) {
+                return 0.0;
+            }
+            let p = self.f.positions()[n];
+            let d = pts.iter().map(|q| (*q - p).length()).fold(f32::INFINITY, f32::min);
+            falloff(d, mm(LINING_INNER), mm(LINING_OUTER))
+        });
+        Ok(geo.union(&lining))
+    }
+
     /// AU12: the lip corners pull up and back toward the cheekbones.
     fn au12(&self) -> ExprResult<Shape> {
-        let m = self.geo(&self.corner_seeds()?, mm(2.0), mm(30.0));
+        let m = self.corner_mask(mm(2.0), mm(30.0))?;
         let mut s = self.shape();
         for side in [Side::Left, Side::Right] {
             let l = letter(side);
@@ -978,7 +1070,18 @@ impl<'f, 't> Recipes<'f, 't> {
     /// for every skin and mouth-helper node, the displacement that the skinning (LBS or DQS by region, as the
     /// evaluator does) carries onto the authored result, a rotation by `angle · follow[n]` about
     /// the joint's rest position.
-    pub fn rotation_support(&self, joint: &str, axis: Vec3, angle: f32, follow: &[f32]) -> ExprResult<Shape> {
+    ///
+    /// `extra` is authored soft-tissue motion added to the rotated surface (the lips' own
+    /// behaviour when the jaw opens) before the surface is smoothed and regularised, so the folds
+    /// it would make together with the rotation are repaired with it.
+    pub fn rotation_support(
+        &self,
+        joint: &str,
+        axis: Vec3,
+        angle: f32,
+        follow: &[f32],
+        extra: Option<&Shape>,
+    ) -> ExprResult<Shape> {
         let f = self.f;
         let t = f.template();
         let sk = t.skeleton();
@@ -1022,21 +1125,23 @@ impl<'f, 't> Recipes<'f, 't> {
                 (skin(p + Vec3::Y * h) - base) / h,
                 (skin(p + Vec3::Z * h) - base) / h,
             );
-            let target = if f.part_of(n) == self.body || f.part_of(n) == self.helper {
+            let (target, added) = if f.part_of(n) == self.body || f.part_of(n) == self.helper {
                 *map = Some((base, m));
                 let w = follow.get(n).copied().unwrap_or(0.0);
-                pivot + Quat::from_axis_angle(axis, angle * w) * (p - pivot)
+                let added = extra.and_then(|e| e.displacements().get(n).copied()).unwrap_or(Vec3::ZERO);
+                (pivot + Quat::from_axis_angle(axis, angle * w) * (p - pivot), added)
             } else {
-                base
+                (base, Vec3::ZERO)
             };
             if let Some(x) = want.displacements_mut().get_mut(n) {
-                *x = target - p;
+                *x = target + added - p;
             }
         }
         // The lip corners join a moving and a still lip: spread their motion evenly; then repair
         // any fold of the authored surface before deriving the residual.
         want.relax(self.f, 8, 0.5, |n| maps[n].is_some() && self.corner_dist[n] < mm(12.0));
         want.regularize(self.f, REGULARIZE_ROUNDS, &self.bounds, |n| maps[n].is_some());
+        self.ride_lips(&mut want);
         let mut s = self.shape();
         for (n, map) in maps.iter().enumerate() {
             let Some((base, m)) = *map else { continue };
@@ -1056,16 +1161,16 @@ impl<'f, 't> Recipes<'f, 't> {
     /// behaviour: the upper lip stretches down a little at its centre, the corners move in by
     /// `narrow` metres.
     fn jaw_open(&self, follow: &[f32], angle: f32, narrow: f32) -> ExprResult<Shape> {
-        let mut s = self.rotation_support("jaw", Vec3::X, angle, follow)?;
+        let mut lips = self.shape();
         let upper = self
             .geo(&self.lip_line("upper", "inner")?, mm(1.0), mm(10.0))
             .scale(|n| self.upper(n) * self.off_corner(n, mm(10.0)));
-        s.apply(self.f, &upper, Action::Translate { offset: v_mm(0.0, -0.8 * angle / JAW_DROP, 0.0) });
+        lips.apply(self.f, &upper, Action::Translate { offset: v_mm(0.0, -0.8 * angle / JAW_DROP, 0.0) });
         if narrow != 0.0 {
             let m = self.geo(&self.corner_seeds()?, mm(2.0), mm(16.0));
-            self.sided(&mut s, &m, |side| Action::Translate { offset: Vec3::new(-narrow * sign(side), 0.0, 0.0) });
+            self.sided(&mut lips, &m, |side| Action::Translate { offset: Vec3::new(-narrow * sign(side), 0.0, 0.0) });
         }
-        Ok(s)
+        self.rotation_support("jaw", Vec3::X, angle, follow, Some(&lips))
     }
 
     /// AU29: the jaw pushes forward (no joint translation exists: a pure shape over the jaw's skin
@@ -1123,6 +1228,21 @@ impl<'f, 't> Recipes<'f, 't> {
 
     // ---------------------------------------------------------------- the whole set
 
+    /// The lip line (mouth helper) rides the upper lip: every helper node takes the displacement
+    /// of its upper-lip anchor. Left to the masks (which never reach it) or to the jaw's skin
+    /// share, it stayed between the parting lips and stretched into a sheet across the open
+    /// mouth.
+    fn ride_lips(&self, shape: &mut Shape) {
+        for (n, anchors) in &self.helper_anchor {
+            let d = anchors.iter().fold(Vec3::ZERO, |sum, &(a, w)| {
+                sum + shape.displacements().get(a as usize).copied().unwrap_or(Vec3::ZERO) * w
+            });
+            if let Some(x) = shape.displacements_mut().get_mut(*n as usize) {
+                *x = d;
+            }
+        }
+    }
+
     /// Adds a plain target after regularisation ([`Shape::regularize`] over the parts it moves).
     fn push(&self, out: &mut Vec<Target>, name: &str, kind: ExpressionKind, side: Side, facs: u16, shape: Shape) {
         let mut shape = shape;
@@ -1141,6 +1261,7 @@ impl<'f, 't> Recipes<'f, 't> {
             }
         }
         shape.regularize(self.f, REGULARIZE_ROUNDS, &self.bounds, |n| parts.contains(&self.f.part_of(n)));
+        self.ride_lips(shape);
     }
 
     /// Adds a target that is not a surface of its own (an in-between difference, a rest-space
@@ -1207,7 +1328,7 @@ impl<'f, 't> Recipes<'f, 't> {
         self.push(&mut out, "AU28", Au, c, 28, au28);
         self.push(&mut out, "AU29", Au, c, 29, self.au29());
         for side in [Side::Left, Side::Right] {
-            let s = self.rotation_support("jaw", Vec3::Y, JAW_SIDE * sign(side), &follow)?;
+            let s = self.rotation_support("jaw", Vec3::Y, JAW_SIDE * sign(side), &follow, None)?;
             Self::push_raw(&mut out, &format!("AU30-{}", letter(side)), Au, side, 30, s);
         }
         self.push(&mut out, "AU31", Au, c, 31, self.au31()?);
@@ -1265,5 +1386,118 @@ impl<'f, 't> Recipes<'f, 't> {
         Self::push_raw(&mut out, "viseme.jaw-open-wide", Viseme, c, 0, self.jaw_open(&follow, VISEME_WIDE, -mm(1.5))?);
         self.push(&mut out, "viseme.labiodental", Viseme, c, 0, self.lip_roll(false, 0.7)?);
         Ok(out)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::expression::integration::tests::expressive;
+
+    /// Diagnosis: a target's raw recipe shape and its regularised result: bad triangles (folds,
+    /// area ratios outside the target bounds) and the displacement (mm) of the nodes of the
+    /// vertices in `DIAG_V`. `DIAG_T` names the recipe (au25, au12, au27).
+    #[test]
+    #[ignore = "diagnostic: DIAG_T=au25 DIAG_V=1,2 cargo test diagnose_recipe -- --ignored --nocapture"]
+    fn diagnose_recipe() {
+        let t = expressive();
+        let f = FaceField::new(&t).unwrap();
+        let r = Recipes::new(&f).unwrap();
+        let verts: Vec<usize> =
+            std::env::var("DIAG_V").unwrap_or_default().split(',').filter_map(|s| s.trim().parse().ok()).collect();
+        let report = |label: &str, s: &Shape| {
+            let bad = s.bad_triangles(&f, &r.bounds);
+            println!("{label}: {} bad, {} inverted", bad.len(), s.inverted(&f).len());
+            let mc = r.mouth_centre().unwrap();
+            for &k in bad.iter().take(30) {
+                let tri = f.triangles()[k];
+                let p = |n: u32| f.positions()[n as usize];
+                let q = |n: u32| p(n) + s.displacements()[n as usize];
+                let n0 = (p(tri[1]) - p(tri[0])).cross(p(tri[2]) - p(tri[0]));
+                let n1 = (q(tri[1]) - q(tri[0])).cross(q(tri[2]) - q(tri[0]));
+                let c = ((p(tri[0]) + p(tri[1]) + p(tri[2])) / 3.0 - mc) * 1e3;
+                let reg = f.region_of(tri[0] as usize);
+                let rname = t.regions().regions.get(reg as usize).map_or("?", |x| x.name.as_str());
+                let d: Vec<String> = tri
+                    .iter()
+                    .map(|&n| {
+                        let d = s.displacements()[n as usize] * 1e3;
+                        format!("({:.2},{:.2},{:.2})", d.x, d.y, d.z)
+                    })
+                    .collect();
+                println!(
+                    "  {} {rname} at ({:.1},{:.1},{:.1}) a0 {:.4} ratio {:.3} n0 ({:.2},{:.2},{:.2}) nodes {tri:?} d {}",
+                    if n0.dot(n1) < 0.0 { "INV" } else { "   " },
+                    c.x,
+                    c.y,
+                    c.z,
+                    0.5 * n0.length() * 1e6,
+                    n1.length() / n0.length().max(1e-20),
+                    n0.normalize_or_zero().x,
+                    n0.normalize_or_zero().y,
+                    n0.normalize_or_zero().z,
+                    d.join(" ")
+                );
+            }
+            for &v in &verts {
+                let n = f.node_of(v) as usize;
+                let d = s.displacements()[n] * 1e3;
+                println!(
+                    "  v{v} n{n} ({:.3},{:.3},{:.3}) lipdist {:.2} upper {:.2}",
+                    d.x,
+                    d.y,
+                    d.z,
+                    r.lip_dist[n] * 1e3,
+                    r.upper(n)
+                );
+            }
+        };
+        let which = std::env::var("DIAG_T").unwrap_or_default();
+        if let Some(name) = which.strip_prefix("all:") {
+            let all = r.all().unwrap();
+            for tg in all.iter().filter(|x| name.split('+').any(|n| n == x.name)) {
+                report(&tg.name, &tg.shape);
+                let d = t.deltas();
+                let c = d.find(&tg.name).unwrap() as usize;
+                for &v in &verts {
+                    let stored = d
+                        .indices(c)
+                        .iter()
+                        .position(|&x| x as usize == v)
+                        .map_or(Vec3::ZERO, |i| crate::delta::DeltaBases::delta_f32(d.deltas(c)[i]));
+                    let mine = tg.shape.displacements()[f.node_of(v) as usize];
+                    println!("  v{v}: stored {:?} recipe {:?}", stored * 1e3, mine * 1e3);
+                }
+            }
+            return;
+        }
+        let mut s = match which.as_str() {
+            "au25" => r.au25().unwrap(),
+            "au12" => r.au12().unwrap(),
+            "au27" => {
+                let follow = r.jaw_follow().unwrap();
+                r.jaw_open(&follow, MOUTH_STRETCH, -mm(1.5)).unwrap()
+            }
+            "au44l" => r.au44(Side::Left).unwrap(),
+            "au44r" => r.au44(Side::Right).unwrap(),
+            "lids42" | "closed" => {
+                let (up, low) = if which == "closed" { (0.84, 0.14) } else { (0.42, 0.07) };
+                let mut s = r.lids(Side::Left, up, low);
+                report("raw lids", &s);
+                let left = s.repair_folds(&f, REGULARIZE_ROUNDS);
+                report(&format!("repaired ({left} left)"), &s);
+                return;
+            }
+            _ => return,
+        };
+        report("raw", &s);
+        let mut parts: Vec<u16> = Vec::new();
+        for (n, d) in s.displacements().iter().enumerate() {
+            if *d != Vec3::ZERO && !parts.contains(&f.part_of(n)) {
+                parts.push(f.part_of(n));
+            }
+        }
+        let left = s.regularize(&f, REGULARIZE_ROUNDS, &r.bounds, |n| parts.contains(&f.part_of(n)));
+        report(&format!("regularised ({left} left)"), &s);
     }
 }

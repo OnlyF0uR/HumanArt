@@ -1,6 +1,7 @@
 use humanart_core::platform::{ManualClock, MemoryFs, parent_path};
 use humanart_core::rng::Rng;
 use humanart_io::json::{self, Number, Object, Value};
+use std::sync::Mutex;
 
 use super::*;
 use crate::command::{Action, ObjectKind, RangePolicy};
@@ -400,6 +401,39 @@ fn ac_wp08_2_human_edit_protection_policy() {
     assert!((value(&s, "face.jaw.width") - 0.7).abs() < 1e-12);
 }
 
+/// `[LOCK-02]` `[PROP-01]` (todo 6): a human edit made on the main document after a proposal was
+/// opened is not in the proposal's branch, yet an agent change of the same parameter inside the
+/// proposal must still be flagged for review.
+#[test]
+fn lock02_proposal_sees_human_edits_made_after_it_was_opened() {
+    let reg = real_registry();
+    let fs = MemoryFs::new();
+    let clock = ManualClock::new(1_763_600_000_000);
+    let mut s = Session::new(fresh(), &reg, &fs, &clock, config(), seed(1));
+    let p = s.open_proposal(AGENT, "Jaw").unwrap();
+    s.execute(set(HUMAN, "face.jaw.width", 0.5)).unwrap();
+    // The branch still has the old value and no human author for the parameter.
+    assert!(!s.proposal(p).unwrap().doc.param_authors.contains_key("face.jaw.width"));
+    let review = |o: &Outcome, id: &str| {
+        o.warnings.iter().filter(|w| w.code == WarningCode::NeedsReview && w.target == id).count()
+    };
+    let o = s.execute_in(p, set(AGENT, "face.jaw.width", 0.7)).unwrap();
+    assert_eq!(review(&o, "face.jaw.width"), 1, "{:?}", o.warnings);
+    assert!(o.warnings.iter().find(|w| w.code == WarningCode::NeedsReview).unwrap().message.contains(HUMAN));
+    // A second agent change in the branch: the branch now says the agent changed it last, the
+    // main document still says the human did.
+    let o = s.execute_in(p, set(AGENT, "face.jaw.width", 0.8)).unwrap();
+    assert_eq!(review(&o, "face.jaw.width"), 1, "{:?}", o.warnings);
+    // A parameter no human touched raises nothing.
+    let o = s.execute_in(p, set(AGENT, "face.nose.length", 0.3)).unwrap();
+    assert!(o.warnings.iter().all(|w| w.code != WarningCode::NeedsReview), "{:?}", o.warnings);
+    // A human edit before the proposal was opened is warned once, not twice.
+    s.execute(set(HUMAN, "face.eyes.size", 0.2)).unwrap();
+    let q = s.open_proposal(AGENT, "Eyes").unwrap();
+    let o = s.execute_in(q, set(AGENT, "face.eyes.size", 0.4)).unwrap();
+    assert_eq!(review(&o, "face.eyes.size"), 1, "{:?}", o.warnings);
+}
+
 #[test]
 fn ac_wp08_2_proposal_accept_partial_accept_discard_and_conflicts() {
     let reg = real_registry();
@@ -791,11 +825,79 @@ fn perf_r1_steady_drag_frames_do_not_allocate() {
     s.drag_scalar(HUMAN, param, 0.2).unwrap();
     s.drag_scalar(HUMAN, param, 0.25).unwrap();
     let (total, worst, allocating) = counted_drag(&mut s, &clock, param, 300);
+    let batches = u32::try_from(300 * 16 / interval).unwrap();
     println!(
-        "project, {interval} ms batches, 16 ms frames: 300 frames, {allocating} allocate, {total} allocator calls \
-         (worst frame {worst})"
+        "project on MemoryFs, {interval} ms batches, 16 ms frames: 300 frames, {allocating} allocate, {total} \
+         allocator calls (worst frame {worst}), {batches} batches"
     );
-    let batches = u32::try_from(300 * 16 / interval + 1).unwrap();
-    assert!(allocating <= 2 * batches, "{allocating} frames allocate, {batches} batches");
+    // What is left is inside `MemoryFs::append` (it normalises the path into a new string and
+    // grows the file's vector); the session's own part is measured below.
+    assert!(allocating <= batches + 1, "{allocating} frames allocate, {batches} batches");
     assert!(s.end_gesture().unwrap().is_some());
+
+    // The same with a file system whose journal append allocates nothing: after the first batch
+    // (which sizes the reused line buffer) the batched journal writes allocate nothing either.
+    let fs = MemoryFs::new();
+    let quiet = QuietJournalFs { inner: &fs, path: format!("{ROOT}/journal/journal.log"), log: Mutex::new(Vec::new()) };
+    let mut s = Session::create(ROOT, fresh(), &reg, &quiet, &clock, cfg, seed(1)).unwrap();
+    s.drag_scalar(HUMAN, param, 0.2).unwrap();
+    s.drag_scalar(HUMAN, param, 0.25).unwrap();
+    let _ = counted_drag(&mut s, &clock, param, 20);
+    quiet.log.lock().unwrap().reserve(1 << 20);
+    let before = quiet.log.lock().unwrap().len();
+    let (total, worst, allocating) = counted_drag(&mut s, &clock, param, 300);
+    let written = quiet.log.lock().unwrap().len() - before;
+    println!(
+        "project, allocation-free append, {interval} ms batches: 300 frames, {total} allocator calls (worst frame \
+         {worst}), {written} journal bytes written"
+    );
+    assert_eq!((total, allocating), (0, 0), "[PERF-R1] batched journal writes allocate nothing");
+    assert!(written > 0);
+    // The journal written this way replays to the dragged value.
+    let last = value(&s, param);
+    s.end_gesture().unwrap();
+    drop(s);
+    fs.append(&quiet.path, &quiet.log.lock().unwrap()).unwrap();
+    let (again, _) = Session::open(ROOT, &reg, &fs, &clock, cfg, seed(2)).unwrap();
+    assert!((value(&again, param) - last).abs() < 1e-12);
+}
+
+/// A file system whose appends to `path` go into a vector the test reserves (allocation-free),
+/// everything else to `inner`.
+struct QuietJournalFs<'m> {
+    inner: &'m MemoryFs,
+    path: String,
+    log: Mutex<Vec<u8>>,
+}
+
+impl FileSystem for QuietJournalFs<'_> {
+    fn read(&self, path: &str) -> Result<Vec<u8>, humanart_core::error::PlatformError> {
+        self.inner.read(path)
+    }
+    fn write(&self, path: &str, bytes: &[u8]) -> Result<(), humanart_core::error::PlatformError> {
+        self.inner.write(path, bytes)
+    }
+    fn append(&self, path: &str, bytes: &[u8]) -> Result<(), humanart_core::error::PlatformError> {
+        if path == self.path {
+            self.log.lock().unwrap().extend_from_slice(bytes);
+            Ok(())
+        } else {
+            self.inner.append(path, bytes)
+        }
+    }
+    fn rename(&self, from: &str, to: &str) -> Result<(), humanart_core::error::PlatformError> {
+        self.inner.rename(from, to)
+    }
+    fn list(&self, dir: &str) -> Result<Vec<humanart_core::platform::DirEntry>, humanart_core::error::PlatformError> {
+        self.inner.list(dir)
+    }
+    fn metadata(&self, path: &str) -> Result<humanart_core::platform::Metadata, humanart_core::error::PlatformError> {
+        self.inner.metadata(path)
+    }
+    fn remove(&self, path: &str) -> Result<(), humanart_core::error::PlatformError> {
+        self.inner.remove(path)
+    }
+    fn create_dir_all(&self, path: &str) -> Result<(), humanart_core::error::PlatformError> {
+        self.inner.create_dir_all(path)
+    }
 }

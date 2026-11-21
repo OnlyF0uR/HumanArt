@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, OnceLock};
 
 use humanart_core::id::Id128;
-use humanart_core::platform::{FileSystem, ManualClock, MemoryFs};
+use humanart_core::platform::{FileSystem, ManualClock, MemoryFs, SeededEntropy};
 use humanart_doc::command::{Action, Command, RangePolicy};
 use humanart_doc::document::{Author, AuthorKind, Document};
 use humanart_doc::registry::{ParamKind, ParamValue, Registry, RegistryLimits};
@@ -86,12 +86,19 @@ pub struct Fixture {
     pub clock: ManualClock,
     /// The registry.
     pub registry: &'static Registry,
+    /// Deterministic randomness (agent server tokens).
+    pub entropy: SeededEntropy,
 }
 
 impl Fixture {
     /// A fresh fixture.
     pub fn new() -> Self {
-        Self { fs: MemoryFs::new(), clock: ManualClock::new(1_700_000_000_000), registry: registry() }
+        Self {
+            fs: MemoryFs::new(),
+            clock: ManualClock::new(1_700_000_000_000),
+            registry: registry(),
+            entropy: SeededEntropy::new(0x00a9_e417),
+        }
     }
 
     /// A document with a human and an agent author and human-edit protection off.
@@ -164,6 +171,10 @@ impl AppFixture {
             human: Author { id: HUMAN.into(), kind: AuthorKind::Human, name: "Owner".into() },
             settings_dir: "settings".into(),
             seed: Id128::from_u128(77),
+            entropy: &self.f.entropy,
+            agent: crate::agent_host::AgentServerOptions::new(
+                std::env::temp_dir().join(format!("humanart-app-agent-{}", std::process::id())),
+            ),
         }
     }
 

@@ -323,7 +323,14 @@ impl BaseValues {
     /// false for a target that is not a base attribute. Values are clamped to the attribute's
     /// range; non-finite values are ignored.
     pub fn set_target(&mut self, target: &str, value: f32) -> bool {
-        let attribute = match target {
+        let Some(attribute) = Self::attribute_of_target(target) else { return false };
+        self.set(attribute, value);
+        true
+    }
+
+    /// The base attribute a registry material target sets (`skin.melanin` -> melanin), if any.
+    pub fn attribute_of_target(target: &str) -> Option<Attribute> {
+        Some(match target {
             "skin.melanin" => Attribute::Melanin,
             "skin.eumelanin-ratio" => Attribute::EumelaninRatio,
             "skin.haemoglobin" => Attribute::Haemoglobin,
@@ -332,13 +339,16 @@ impl BaseValues {
             "skin.epidermis-thickness" => Attribute::EpidermalThickness,
             "skin.oiliness" => Attribute::Oiliness,
             "skin.wetness" => Attribute::Wetness,
-            _ => return false,
-        };
+            _ => return None,
+        })
+    }
+
+    /// Sets one attribute, clamped to its range; a non-finite value is ignored.
+    pub fn set(&mut self, attribute: Attribute, value: f32) {
         if value.is_finite() {
             let (lo, hi) = attribute.range();
             self.0[attribute.index()] = value.clamp(lo, hi);
         }
-        true
     }
 
     /// The value of one attribute.

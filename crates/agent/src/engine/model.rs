@@ -6,7 +6,8 @@
 //! (materials, grooms, editor values, measurements) do not move vertices and stay unbound
 //! ([`Model::coverage`] reports both). [`Model::sync`] reads the document's values into the input
 //! vectors, compares them with what was last evaluated and re-evaluates only when they differ,
-//! without allocating `[PERF-R1]`.
+//! without allocating `[PERF-R1]`. It also reads the document's `skin.*` material values
+//! ([`Model::skin`], todo 1.4), which the views hand to the skin compositor.
 //!
 //! [`Model::pick`] is the CPU fallback picking of `[VP-01]`: a ray cast against the evaluated
 //! triangles, reporting triangle, barycentrics, point and region. [`Model::region_outline`] gives
@@ -21,6 +22,7 @@ use humanart_doc::registry::{Evaluation, ParamValue, Registry};
 use humanart_math::{Quat, Vec3};
 use humanart_model::Template;
 use humanart_model::eval::{EvalInput, Evaluator, SkinningMode};
+use humanart_model::skin_appearance::values::{SkinTarget, SkinValues};
 
 use super::error::EngineError;
 
@@ -81,6 +83,12 @@ pub struct Model {
     /// The expression control rig driven from the document (`todo.md` 1.8); `None` when the
     /// template has no rig (test fixtures), then expression parameters bind straight to targets.
     drive: Option<ExpressionDrive>,
+    /// Registry index and destination of every `skin.*` material parameter the skin reads.
+    skin_bindings: Vec<(usize, SkinTarget)>,
+    /// The document's skin values (registry defaults until a document is read).
+    skin: SkinValues,
+    /// Counts up every time [`Model::skin`] changes.
+    skin_revision: u64,
 }
 
 fn scalar(value: &ParamValue) -> Option<f32> {
@@ -128,6 +136,21 @@ impl Model {
                 }
             })
             .collect();
+        let skin_bindings: Vec<(usize, SkinTarget)> = registry
+            .params()
+            .iter()
+            .enumerate()
+            .filter_map(|(i, p)| match &p.evaluation {
+                Evaluation::Material(target) => SkinTarget::from_target(target).map(|t| (i, t)),
+                _ => None,
+            })
+            .collect();
+        let mut skin = SkinValues::default();
+        for &(i, target) in &skin_bindings {
+            if let Some(v) = registry.params().get(i).and_then(|p| scalar(&p.default)) {
+                skin.set(target, v);
+            }
+        }
         // Expression parameters go through the template's control rig (jaw and tongue rotate).
         let drive = ExpressionDrive::new(t, registry).ok();
         let components = t.deltas().len();
@@ -147,6 +170,9 @@ impl Model {
             revision: 1,
             outlines: vec![None; regions],
             drive,
+            skin_bindings,
+            skin,
+            skin_revision: 1,
             template,
         }
     }
@@ -164,6 +190,17 @@ impl Model {
     /// How much of the registry drives the template.
     pub fn coverage(&self) -> Coverage {
         self.coverage
+    }
+
+    /// The document's skin values (`skin.*` material parameters; registry defaults before the
+    /// first [`Model::sync`]).
+    pub fn skin(&self) -> &SkinValues {
+        &self.skin
+    }
+
+    /// Counts up every time [`Model::skin`] changes.
+    pub fn skin_revision(&self) -> u64 {
+        self.skin_revision
     }
 
     /// Counts up every time the evaluated surface changes.
@@ -208,6 +245,17 @@ impl Model {
     pub fn sync(&mut self, doc: &Document, registry: &Registry) -> Result<bool, EngineError> {
         if registry.len() != self.bindings.len() {
             return Err(EngineError::Invalid { what: "the registry differs from the one the model was bound to" });
+        }
+        let mut skin = self.skin;
+        for &(i, target) in &self.skin_bindings {
+            let Some(param) = registry.params().get(i) else { continue };
+            if let Some(v) = scalar(doc.params.get(&param.id).unwrap_or(&param.default)) {
+                skin.set(target, v);
+            }
+        }
+        if skin != self.skin {
+            self.skin = skin;
+            self.skin_revision += 1;
         }
         self.shape.fill(0.0);
         self.expressions.fill(0.0);

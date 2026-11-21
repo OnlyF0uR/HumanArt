@@ -103,9 +103,26 @@ pub const ARM_ABDUCTION: f32 = 0.785;
 /// Elbow flexion in the rest pose, radians.
 pub const ELBOW_FLEXION: f32 = 0.21;
 
+/// Which auricle design the ear fill builds (`face::ear`); the finished head's other designs that
+/// must not touch the fitting base follow it too (the lip white roll in `face::mouth`, the C7 bump
+/// in `relief`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Auricle {
+    /// The design the scans were fitted to (`build::BASE_VERSION` 1): a thin auricle nearly in
+    /// the plane of the side of the head. The cage fit couples every vertex, so changing the ear
+    /// moves the face by up to 0.1 mm: the fitting base keeps this one.
+    #[default]
+    Base,
+    /// The finished template's auricle (todo 1.1 round 2): turned about 30 degrees off the head,
+    /// a rolled helix rim and a broad attachment.
+    Finished,
+}
+
 /// Anatomical points of the template (left side where sided), metres.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Anatomy {
+    /// The auricle design.
+    pub auricle: Auricle,
     /// Head frame origin: the midpoint between the tragions (ear canals).
     pub head_origin: Vec3,
     /// Eyeball centre (left).
@@ -187,6 +204,7 @@ impl Anatomy {
             // Eye centre height and depth in the head frame and the eye radius are unsourced.
             eye_center: head_origin + Vec3::new(INTERPUPILLARY * 0.5, 0.011, 0.074),
             eye_radius: 0.0120,
+            auricle: Auricle::Base,
             jaw_pivot: head_origin + Vec3::new(0.0, -0.006, 0.012),
             pelvis: Vec3::new(0.0, 0.965, -0.020),
             spine: [

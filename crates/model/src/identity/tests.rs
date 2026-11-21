@@ -80,9 +80,11 @@ fn registry_components() -> BTreeSet<(String, String)> {
 #[test]
 fn reg_01_bindings_match_the_registry_files() {
     let registry = registry_components();
-    let ours: BTreeSet<(String, String)> = BINDINGS.iter().map(|&(p, c)| (p.to_owned(), c.to_owned())).collect();
-    assert_eq!(ours, registry, "BINDINGS differ from data/template/params");
+    let ours: BTreeSet<(String, String)> =
+        BINDINGS.iter().chain(scan::SCAN_BINDINGS).map(|&(p, c)| (p.to_owned(), c.to_owned())).collect();
+    assert_eq!(ours, registry, "BINDINGS and SCAN_BINDINGS differ from data/template/params");
     assert_eq!(BINDINGS.len(), 72);
+    assert_eq!(scan::SCAN_BINDINGS.len(), 7);
 }
 
 #[test]
@@ -298,7 +300,7 @@ fn id_02_no_normal_discontinuity_at_region_borders() {
         let now = tri_normals(&t.deformed_positions(&w), &tris);
         let (b, inner) = dihedral_change(&pairs, &rest, &now);
         lines.push(format!("{name} at 2: border {b:.2} deg, interior {inner:.2} deg"));
-        if b > 45.0 {
+        if b > 45.0 || b > inner * 1.5 + 5.0 {
             for (d, c) in worst_border_edges(&pairs, &tris, t.mesh().positions(), &rest, &now, 3) {
                 lines.push(format!("  border edge {d:.1} deg at ({:.3}, {:.3}, {:.3})", c.x, c.y, c.z));
             }
@@ -383,7 +385,13 @@ fn ac_wp06_template_validates_and_round_trips() {
     let t = &*f.full;
     let report = crate::validate::validate(t);
     assert!(report.passed(), "{report}");
-    assert_eq!(t.scan_component_count(), 0, "[ID-07] no scan-derived components");
+    // [ID-07]: the authored components are not scan-derived; the 7 face-shape components of the
+    // scans (todo 1.2) are, and are the only ones.
+    assert_eq!(t.scan_component_count(), scan::SCAN_BINDINGS.len());
+    for &(_, name) in scan::SCAN_BINDINGS {
+        let c = t.deltas().find(name).unwrap() as usize;
+        assert_eq!(t.deltas().components()[c].kind, DeltaKind::IdentityGlobal, "{name}");
+    }
     assert_eq!(
         t.deltas().count_kind(DeltaKind::Semantic),
         f.base.deltas().count_kind(DeltaKind::Semantic) + BINDINGS.len()
@@ -872,5 +880,112 @@ fn id_02_body_shapes_have_no_stepped_falloff() {
     )
     .unwrap();
     assert!(rs > 1.5 * MAX_ROUGHNESS, "the measure does not separate steps: {rs}");
+    assert!(failures.is_empty(), "{failures:#?}");
+}
+
+/// The `min` and `max` of registry parameter `id` in `data/template/params/face.json`.
+fn registry_range(id: &str) -> (f32, f32) {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../data/template/params/face.json");
+    let value = humanart_io::json::parse(&std::fs::read(path).unwrap()).unwrap();
+    let root = value.node();
+    for p in root.field("parameters").unwrap().elements().unwrap() {
+        if p.field("id").unwrap().str().unwrap() == id {
+            let n = |k: &str| p.field(k).unwrap().f64().unwrap() as f32;
+            return (n("min"), n("max"));
+        }
+    }
+    panic!("{id} is not in face.json");
+}
+
+/// Triangles whose normal turned over between `rest` and `now` (rest area above 1e-12 m^2).
+fn folded(rest: &[Vec3], now: &[Vec3], tris: &[u32]) -> usize {
+    tris.chunks(3)
+        .filter(|c| {
+            let n = |p: &[Vec3]| (p[c[1] as usize] - p[c[0] as usize]).cross(p[c[2] as usize] - p[c[0] as usize]);
+            let n0 = n(rest);
+            n0.length() > 2.0e-12 && n0.dot(n(now)) < 0.0
+        })
+        .count()
+}
+
+/// `[WP-25]` todo 1.2: the 7 face-shape components of the scans are bound to the registry, are
+/// scan-derived, mirror-symmetric, move only the head and neck (with the eye joints), and fold no
+/// triangle anywhere inside their registry range. Also measures the no-fold limit of each (steps of
+/// 0.05 up to 3), written to `target/agents/face-scan/scan-ranges.txt`.
+#[test]
+fn todo_1_2_scan_components_are_bound_symmetric_and_fold_free_in_range() {
+    let f = fixture();
+    let t = &*f.full;
+    let space = Space::new(t).unwrap();
+    let tris = t.mesh().triangulate().indices;
+    let rest = t.mesh().positions();
+    let regions = t.regions();
+    let (head, neck) = (regions.find("head").unwrap(), regions.find("neck").unwrap());
+    let eye = t.skeleton().find("L.eye").unwrap();
+    let mut lines = Vec::new();
+    let mut failures = Vec::new();
+    for &(id, name) in scan::SCAN_BINDINGS {
+        let c = t.deltas().find(name).unwrap() as usize;
+        assert_eq!(t.deltas().components()[c].kind, DeltaKind::IdentityGlobal);
+        let mut w = vec![0.0; t.deltas().len()];
+        w[c] = 1.0;
+        let d: Vec<Vec3> = t.deformed_positions(&w).iter().zip(rest).map(|(a, b)| *a - *b).collect();
+        let max = d.iter().map(|x| x.length()).fold(0.0, f32::max);
+        assert!(max > 5.0e-4 && max < 0.03, "{name} moves {max} m at 1 SD");
+        for (v, x) in d.iter().enumerate() {
+            if x.length() > 1.0e-6 {
+                let r = regions.vertex_regions[v];
+                assert!(
+                    regions.is_within(r, head) || regions.is_within(r, neck),
+                    "{name} moves {}",
+                    regions.regions[r as usize].name
+                );
+            }
+        }
+        // Mirror-symmetric where the mirror map is exact.
+        let reps = space.field().representatives();
+        let mut worst = 0.0_f32;
+        for (n, &m) in space.mirror_map().iter().enumerate() {
+            if m == u32::MAX {
+                continue;
+            }
+            let (a, b) = (d[reps[n] as usize], d[reps[m as usize] as usize]);
+            if space.field().positions()[m as usize].distance(mirror(space.field().positions()[n]))
+                <= super::space::MIRROR_TOLERANCE
+            {
+                worst = worst.max((b - mirror(a)).length() - 2.0e-6 - 2.0e-3 * a.length().max(b.length()));
+            }
+        }
+        assert!(worst <= 0.0, "{name}: mirror error {worst}");
+        // The eye joints move with the eyes.
+        let (joints, offsets) = t.skeleton().regressor.component(c);
+        assert!(joints.contains(&eye) && offsets.iter().all(|o| o.is_finite()), "{name}: the eye joint stays");
+        // The no-fold limit of each sign, and the registry range inside it.
+        let mut limit = |sign: f32| {
+            let mut last = 0.0;
+            for k in 1..=60 {
+                let s = 0.05 * k as f32;
+                w[c] = sign * s;
+                if folded(rest, &t.deformed_positions(&w), &tris) > 0 {
+                    return last;
+                }
+                last = s;
+            }
+            last
+        };
+        let (minus, plus) = (limit(-1.0), limit(1.0));
+        let (lo, hi) = registry_range(id);
+        lines.push(format!(
+            "{id} ({name}): max {:.2} mm at 1 SD; folds from -{minus:.2} / +{plus:.2} on; registry {lo} .. {hi}",
+            max * 1e3
+        ));
+        if -lo > minus || hi > plus {
+            failures.push(format!("{id}: registry range {lo}..{hi} folds (limits -{minus} / +{plus})"));
+        }
+    }
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/agents/face-scan");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("scan-ranges.txt"), lines.join("\n")).unwrap();
+    println!("{}", lines.join("\n"));
     assert!(failures.is_empty(), "{failures:#?}");
 }

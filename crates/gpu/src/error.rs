@@ -111,6 +111,18 @@ pub enum GpuError {
     },
     /// Waiting for the GPU failed or timed out.
     Poll(wgpu::PollError),
+    /// A blocking wait for the GPU did not finish within its limit
+    /// ([`crate::device::wait_for`]): a slow, shared, hung or lost GPU gives this error instead of
+    /// a hang `[ERR-05]`.
+    Timeout {
+        /// What was being waited for.
+        what: &'static str,
+        /// The limit, in milliseconds.
+        limit_ms: u64,
+    },
+    /// A future could not be driven to completion on this thread (single-threaded wasm cannot
+    /// block, see [`humanart_core::executor::block_on`]).
+    Blocked(humanart_core::error::JobError),
     /// Bytes could not be cast to the requested type.
     Pod(PodError),
 }
@@ -154,6 +166,10 @@ impl fmt::Display for GpuError {
             Self::Stale { what } => write!(f, "{what} is no longer valid"),
             Self::Map { message } => write!(f, "a GPU buffer could not be mapped: {message}"),
             Self::Poll(e) => write!(f, "waiting for the GPU failed: {e}"),
+            Self::Timeout { what, limit_ms } => {
+                write!(f, "the GPU did not finish {what} within {limit_ms} ms (busy, hung or lost device)")
+            }
+            Self::Blocked(e) => write!(f, "a GPU request could not be waited for on this thread: {e}"),
             Self::Pod(e) => write!(f, "GPU data has the wrong shape: {e}"),
         }
     }
@@ -166,6 +182,7 @@ impl std::error::Error for GpuError {
             Self::Device(e) => Some(e),
             Self::Surface(e) => Some(e),
             Self::Poll(e) => Some(e),
+            Self::Blocked(e) => Some(e),
             Self::Pod(e) => Some(e),
             _ => None,
         }

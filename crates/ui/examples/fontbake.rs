@@ -8,36 +8,19 @@
 //! ```
 //!
 //! `tools/fontbake/bake.sh` runs the first form. Each baked file is reported with its glyph count,
-//! kerning pairs, pages and size.
+//! kerning pairs, pages and size. `humanart-cli fontbake` does the same from the command line
+//! (`--dir`, or `--font` with `--out` and `--kind`), through the same library functions.
 
 use std::path::{Path, PathBuf};
 use std::time::Instant;
 
-use humanart_io::ttf::Font;
-use humanart_ui::fontbake::{BakeOptions, all_mapped, bake, latin_charset};
+use humanart_ui::fontbake::{bake_shipped, source_file};
 use humanart_ui::theme::FontFace;
-
-/// The source font of each face.
-fn source(face: FontFace) -> &'static str {
-    match face {
-        FontFace::Regular => "Inter-Regular.ttf",
-        FontFace::SemiBold => "Inter-SemiBold.ttf",
-        FontFace::Italic => "Inter-Italic.ttf",
-        FontFace::Mono => "JetBrainsMono-Regular.ttf",
-        FontFace::Icons => "Lucide.ttf",
-    }
-}
 
 fn bake_one(input: &Path, output: &Path, icons: bool) -> Result<(), String> {
     let ttf = std::fs::read(input).map_err(|e| format!("{}: {e}", input.display()))?;
     let start = Instant::now();
-    let (chars, options) = if icons {
-        let font = Font::new(&ttf).map_err(|e| format!("{}: {e}", input.display()))?;
-        (all_mapped(&font), BakeOptions::ICONS)
-    } else {
-        (latin_charset(), BakeOptions::TEXT)
-    };
-    let baked = bake(&ttf, &chars, &options).map_err(|e| format!("{}: {e}", input.display()))?;
+    let baked = bake_shipped(&ttf, icons).map_err(|e| format!("{}: {e}", input.display()))?;
     let bytes = baked.to_bytes();
     std::fs::write(output, &bytes).map_err(|e| format!("{}: {e}", output.display()))?;
     println!(
@@ -70,7 +53,7 @@ fn run() -> Result<(), String> {
             let dir = PathBuf::from(dir);
             for face in FontFace::ALL {
                 let output = dir.join(format!("{}.anfont", face.name()));
-                bake_one(&dir.join(source(face)), &output, face == FontFace::Icons)?;
+                bake_one(&dir.join(source_file(face)), &output, face == FontFace::Icons)?;
             }
             Ok(())
         }

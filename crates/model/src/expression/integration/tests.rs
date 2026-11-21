@@ -60,8 +60,12 @@ fn triangle_colours(t: &Template, tris: &[u32]) -> Vec<Option<[f32; 3]>> {
         .map(|c| {
             let p = f.part_of(f.node_of(c[0] as usize) as usize) as usize;
             let name = parts.get(p).map_or("", |p| p.name.as_str());
+            let region = t.regions().vertex_regions.get(c[0] as usize).copied().unwrap_or(0);
+            let interior = t.regions().regions.get(region as usize).is_some_and(|r| r.name == "mouth-interior");
             match name {
+                "body" if interior => Some([0.75, 0.25, 0.25]),
                 "body" => Some([0.80, 0.56, 0.45]),
+                "mouth-helper" => Some([0.2, 0.5, 0.9]),
                 n if n.starts_with("eyeball") => Some([0.85, 0.85, 0.82]),
                 n if n.starts_with("teeth") => Some([0.92, 0.90, 0.80]),
                 n if n.starts_with("gums") => Some([0.75, 0.35, 0.35]),
@@ -357,12 +361,17 @@ fn preview_closeups() {
     let list = std::env::var("CLOSEUP").unwrap_or_else(|_| "eye:expression.au07_lid_tightener.l,expression.au42_slit.l,expression.au43_eyes_closed.l,expression.au44_squint.l".into());
     let (what, names) = list.split_once(':').unwrap();
     let names: Vec<&str> = std::iter::once("neutral").chain(names.split(',')).collect();
+    let half_scale: f32 = std::env::var("CLOSEUP_HALF").ok().and_then(|s| s.parse().ok()).unwrap_or(1.0);
     let mut front = Vec::new();
     let mut side = Vec::new();
     for name in &names {
         let mut c = vec![0.0; rig.controls().len()];
-        if let Some(i) = rig.controls().iter().position(|x| x == name) {
-            c[i] = 1.0;
+        // `a+b=0.5`: several controls, each at 1 or at its `=value`.
+        for item in name.split('+') {
+            let (control, value) = item.split_once('=').map_or((item, 1.0), |(a, b)| (a, b.parse().unwrap()));
+            if let Some(i) = rig.controls().iter().position(|x| x == control) {
+                c[i] = value;
+            }
         }
         let mut regs = vec![0.0; rig.register_count()];
         let mut w = vec![0.0; t.expressions().expressions.len()];
@@ -379,7 +388,16 @@ fn preview_closeups() {
             0.016,
             Vec3::new(-1.0, 0.0, -0.6),
         ),
-        "mouth" => (Vec3::new(0.0, 1.505, 0.1), 0.035, Vec3::new(-1.0, 0.0, -0.4)),
+        "mouth" => {
+            let at =
+                |n: &str| t.landmarks().iter().find(|l| l.name == n).unwrap().position(t.mesh().positions()).unwrap();
+            let dx: f32 = std::env::var("CLOSEUP_DX").ok().and_then(|s| s.parse().ok()).unwrap_or(0.0);
+            (
+                (at("lip.upper.inner.06") + at("lip.lower.inner.06")) * 0.5 + Vec3::X * dx,
+                0.035 * half_scale,
+                Vec3::new(-1.0, 0.0, -0.4),
+            )
+        }
         _ => (Vec3::new(0.0, 1.548, 0.1), 0.085, Vec3::new(-1.0, 0.0, -0.6)),
     };
     front.extend(side);
@@ -521,13 +539,22 @@ fn diagnose_sweep_failures() {
         * 0.5;
     let list = std::env::var("DIAG").unwrap_or_default();
     let steps: f32 = std::env::var("DIAG_STEP").ok().and_then(|s| s.parse().ok()).unwrap_or(1.0);
+    // `DIAG=a,b+c=0.5`: each comma-separated entry is one evaluation of `+`-joined controls, each
+    // at `=value` or at `DIAG_STEP`.
     for name in list.split(',').filter(|s| !s.is_empty()) {
         let mut c = vec![0.0; rig.controls().len()];
-        let Some(i) = rig.controls().iter().position(|x| x == name) else {
+        let mut missing = false;
+        for item in name.split('+') {
+            let (control, value) = item.split_once('=').map_or((item, steps), |(a, b)| (a, b.parse().unwrap()));
+            match rig.controls().iter().position(|x| x == control) {
+                Some(i) => c[i] = value,
+                None => missing = true,
+            }
+        }
+        if missing {
             println!("{name}: no such control");
             continue;
-        };
-        c[i] = steps;
+        }
         let mut regs = vec![0.0; rig.register_count()];
         let mut w = vec![0.0; t.expressions().expressions.len()];
         let mut pose = vec![Quat::IDENTITY; t.skeleton().joints.len()];
@@ -590,8 +617,9 @@ fn diagnose_skin() {
     }
 }
 
-/// Diagnosis: displacement (mm) of the vertices in `DIAG_V` under expression `DIAG_E` at weight 1
-/// without pose, and under the jaw pose of `DIAG_JAW` radians alone.
+/// Diagnosis: neutral position (mm, relative to the mouth centre) and displacement (mm) of the
+/// vertices in `DIAG_V` under each expression of `DIAG_E` (comma separated) at weight 1 without
+/// pose, and under the jaw pose of `DIAG_JAW` radians alone.
 #[test]
 #[ignore = "diagnostic"]
 fn diagnose_target() {
@@ -599,22 +627,34 @@ fn diagnose_target() {
     let mut ev = Evaluator::new(t.clone());
     ev.evaluate(&EvalInput::default()).unwrap();
     let neutral = ev.positions().to_vec();
-    let e = std::env::var("DIAG_E").unwrap_or_default();
+    let mesh = t.mesh();
+    let at = |name: &str| t.landmarks().iter().find(|l| l.name == name).unwrap().position(mesh.positions()).unwrap();
+    let mc = (at("lip.upper.inner.06") + at("lip.lower.inner.06")) * 0.5;
+    let list: Vec<usize> =
+        std::env::var("DIAG_V").unwrap_or_default().split(',').filter_map(|s| s.trim().parse::<usize>().ok()).collect();
+    for v in &list {
+        let p = (neutral[*v] - mc) * 1e3;
+        println!("{v}: neutral ({:.2},{:.2},{:.2})", p.x, p.y, p.z);
+    }
     let jaw_angle: f32 = std::env::var("DIAG_JAW").ok().and_then(|s| s.parse().ok()).unwrap_or(0.0);
-    let k = t.expressions().expressions.iter().position(|x| x.name == e).unwrap();
-    let mut w = vec![0.0; t.expressions().expressions.len()];
-    w[k] = 1.0;
-    ev.evaluate(&EvalInput { expressions: &w, ..EvalInput::default() }).unwrap();
-    let a = ev.positions().to_vec();
     let jaw = t.skeleton().find("jaw").unwrap() as usize;
     let mut pose = vec![Quat::IDENTITY; t.skeleton().joints.len()];
     pose[jaw] = local_pose(&t, jaw, Quat::from_axis_angle(Vec3::X, jaw_angle));
     ev.evaluate(&EvalInput { pose: &pose, ..EvalInput::default() }).unwrap();
     let b = ev.positions().to_vec();
-    let list = std::env::var("DIAG_V").unwrap_or_default();
-    for v in list.split(',').filter_map(|s| s.trim().parse::<usize>().ok()) {
-        let d = (a[v] - neutral[v]) * 1e3;
-        let q = (b[v] - neutral[v]) * 1e3;
-        println!("{v}: target ({:.3},{:.3},{:.3}) pose ({:.3},{:.3},{:.3})", d.x, d.y, d.z, q.x, q.y, q.z);
+    for v in &list {
+        let q = (b[*v] - neutral[*v]) * 1e3;
+        println!("{v}: jaw {jaw_angle} ({:.3},{:.3},{:.3})", q.x, q.y, q.z);
+    }
+    for e in std::env::var("DIAG_E").unwrap_or_default().split(',').filter(|s| !s.is_empty()) {
+        let k = t.expressions().expressions.iter().position(|x| x.name == e).unwrap();
+        let mut w = vec![0.0; t.expressions().expressions.len()];
+        w[k] = 1.0;
+        ev.evaluate(&EvalInput { expressions: &w, ..EvalInput::default() }).unwrap();
+        let a = ev.positions().to_vec();
+        for v in &list {
+            let d = (a[*v] - neutral[*v]) * 1e3;
+            println!("{v}: {e} ({:.3},{:.3},{:.3})", d.x, d.y, d.z);
+        }
     }
 }

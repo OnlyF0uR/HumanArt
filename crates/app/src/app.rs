@@ -11,7 +11,7 @@ use std::sync::Arc;
 
 use humanart_agent::engine::{Engine, Framing, Highlight, Model, ViewSettings, view::frame_camera};
 use humanart_core::id::Id128;
-use humanart_core::platform::{Clock, FileSystem};
+use humanart_core::platform::{Clock, Entropy, FileSystem};
 use humanart_doc::command::{Command, CommandError};
 use humanart_doc::document::{Author, AuthorKind, Document};
 use humanart_doc::history::Scope;
@@ -27,6 +27,7 @@ use humanart_ui::theme::Theme;
 use humanart_ui::ui::{FrameOutput, Ui};
 use humanart_ui::views::LogLevel;
 
+use crate::agent_host::{AgentHost, AgentServerOptions, policy_of};
 use crate::agent_link::AgentLink;
 use crate::error::AppError;
 use crate::modes::Mode;
@@ -151,6 +152,10 @@ pub struct Env<'a> {
     pub settings_dir: String,
     /// Seed of command ids (random per session).
     pub seed: Id128,
+    /// Randomness for the agent server's token and session ids.
+    pub entropy: &'a dyn Entropy,
+    /// Where and as whom the agent is served when the human grants the link.
+    pub agent: AgentServerOptions,
 }
 
 impl std::fmt::Debug for Env<'_> {
@@ -174,6 +179,7 @@ pub struct App<'a> {
     pub provenance: Provenance,
     /// The agent link `[APP-04]`.
     pub agent: AgentLink,
+    agent_server: AgentHost,
     /// The shell's UI state.
     pub shell: Shell,
     /// The viewports.
@@ -252,6 +258,7 @@ impl<'a> App<'a> {
             prefs,
             provenance: Provenance::new(),
             agent: AgentLink::new(),
+            agent_server: AgentHost::new(),
             shell,
             viewports: [viewport; MAX_VIEWPORTS],
             intents: Vec::with_capacity(16),
@@ -327,7 +334,7 @@ impl<'a> App<'a> {
         }
         self.remember_project(root);
         self.engine.update()?;
-        Ok(())
+        self.rebind_agent()
     }
 
     /// Creates the project directory `root` from the current document and continues in it.
@@ -346,7 +353,76 @@ impl<'a> App<'a> {
         self.project = Some(root.to_owned());
         self.remember_project(root);
         self.shell.log(LogLevel::Info, self.ui.time(), &format!("Created {root}"));
+        self.rebind_agent()
+    }
+
+    /// The agent server (running while the human grants the link).
+    pub fn agent_server(&self) -> &AgentHost {
+        &self.agent_server
+    }
+
+    /// The human grants the agent access: the link opens and the agent server starts on
+    /// loopback HTTP, with the agent admitted into the document `[APP-04]`, `[AG-01]`.
+    ///
+    /// # Errors
+    /// [`AppError::AgentServer`] / [`AppError::Command`] when the server cannot start.
+    pub fn grant_agent(&mut self) -> Result<(), AppError> {
+        self.agent.grant();
+        if self.agent_server.is_running() {
+            return Ok(());
+        }
+        let project = self.project.as_deref().map(std::path::Path::new);
+        self.agent_server.start(
+            &mut self.engine,
+            &self.env.human.id,
+            &self.env.agent,
+            policy_of(&self.prefs.agent),
+            self.env.entropy,
+            project,
+        )?;
+        self.agent_server.sync_gate(&self.agent);
+        self.agent.connect(&self.env.agent.agent_name);
+        let now = self.ui.time();
+        let text = format!("Agent server on {}", self.agent_server.url().unwrap_or_default());
+        self.shell.log(LogLevel::Info, now, &text);
         Ok(())
+    }
+
+    /// The human revokes the agent's access: the link refuses it, the server answers what is
+    /// queued with "access revoked", ends its subscriptions and stops listening. Returns how many
+    /// commands the link dropped.
+    pub fn revoke_agent(&mut self) -> usize {
+        let dropped = self.agent.revoke();
+        self.agent_server.sync_gate(&self.agent);
+        if self.agent_server.is_running() {
+            self.agent_server.stop();
+            self.agent.disconnect();
+        }
+        dropped
+    }
+
+    /// Handles what the agent sent (the gate follows the link first) and re-syncs the model
+    /// when something was handled; returns how many messages. The frame calls it; the host may
+    /// also call it between frames and redraw when it returns more than zero. Allocation free
+    /// when nothing is waiting.
+    pub fn pump_agent(&mut self) -> usize {
+        if !self.agent_server.is_running() {
+            return 0;
+        }
+        self.agent_server.sync_gate(&self.agent);
+        let handled = self.agent_server.pump(&mut self.engine, self.env.fs);
+        if handled > 0
+            && let Err(e) = self.engine.update()
+        {
+            self.shell.log(LogLevel::Error, self.ui.time(), &e.to_string());
+        }
+        handled
+    }
+
+    /// Re-admits the agent after the session was replaced.
+    fn rebind_agent(&mut self) -> Result<(), AppError> {
+        let project = self.project.as_deref().map(std::path::Path::new);
+        self.agent_server.rebind(&mut self.engine, &self.env.human.id, &self.env.agent, project)
     }
 
     fn remember_project(&mut self, root: &str) {
@@ -382,6 +458,7 @@ impl<'a> App<'a> {
                 model: self.engine.model(),
                 provenance: &self.provenance,
                 agent: &self.agent,
+                agent_server: self.agent_server.url().zip(self.agent_server.token()),
                 prefs: &self.prefs,
                 human: &self.env.human.id,
                 project: self.project.as_deref(),
@@ -394,6 +471,7 @@ impl<'a> App<'a> {
         let out = self.ui.end_frame().clone();
         self.shell.read_layout(&self.ui, &mut self.viewports);
         self.apply_intents();
+        self.pump_agent();
         if let Err(e) = self.engine.update() {
             self.shell.log(LogLevel::Error, now, &e.to_string());
         }
@@ -489,16 +567,16 @@ impl<'a> App<'a> {
                 }
                 Intent::AgentRevoke(revoke) => {
                     if revoke {
-                        let dropped = self.agent.revoke();
+                        let dropped = self.revoke_agent();
                         self.shell.log(
                             LogLevel::Warn,
                             now,
                             &format!("Agent access revoked ({dropped} queued commands dropped)"),
                         );
+                        Ok(())
                     } else {
-                        self.agent.grant();
+                        self.grant_agent()
                     }
-                    Ok(())
                 }
                 Intent::SavePrefs => self.save_prefs(),
                 Intent::ApplyPrefs => {
@@ -506,6 +584,7 @@ impl<'a> App<'a> {
                         self.prefs = p;
                     }
                     self.ui.set_theme(theme_of(&self.prefs));
+                    self.agent_server.set_policy(policy_of(&self.prefs.agent));
                     Ok(())
                 }
                 Intent::MarkLooked => {

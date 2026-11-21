@@ -9,6 +9,7 @@ use humanart_model::eval::EvalError;
 use humanart_model::skin_appearance::error::SkinError;
 use humanart_render::deform::DeformError;
 use humanart_render::error::RenderError;
+use humanart_tools::bake::BakeError;
 
 /// What can go wrong in the engine.
 #[derive(Debug)]
@@ -27,6 +28,8 @@ pub enum EngineError {
     Command(CommandError),
     /// The skin data (zone masks, micro-detail plan) could not be built.
     Skin(SkinError),
+    /// The skin's thickness or occlusion could not be baked.
+    Bake(BakeError),
     /// A request did not fit the engine's state.
     Invalid {
         /// What was wrong.
@@ -44,6 +47,7 @@ impl fmt::Display for EngineError {
             Self::Gpu(e) => write!(f, "GPU: {e}"),
             Self::Command(e) => write!(f, "command: {e}"),
             Self::Skin(e) => write!(f, "skin: {e}"),
+            Self::Bake(e) => write!(f, "skin bake: {e}"),
             Self::Invalid { what } => write!(f, "invalid request: {what}"),
         }
     }
@@ -59,6 +63,7 @@ impl std::error::Error for EngineError {
             Self::Gpu(e) => Some(e),
             Self::Command(e) => Some(e),
             Self::Skin(e) => Some(e),
+            Self::Bake(e) => Some(e),
             Self::Invalid { .. } => None,
         }
     }
@@ -97,6 +102,12 @@ impl From<GpuError> for EngineError {
 impl From<SkinError> for EngineError {
     fn from(e: SkinError) -> Self {
         Self::Skin(e)
+    }
+}
+
+impl From<BakeError> for EngineError {
+    fn from(e: BakeError) -> Self {
+        Self::Bake(e)
     }
 }
 

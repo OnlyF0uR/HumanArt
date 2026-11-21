@@ -13,6 +13,8 @@ const HAIR_COVERAGE_ONE: f32 = 256.0;
 const HAIR_MAX_STEPS: i32 = 4096;
 // Widest strand footprint across a segment, pixels.
 const HAIR_MAX_WIDTH: f32 = 4.0;
+// Side of the scene depth tiles of the hidden-segment test, pixels.
+const HAIR_TILE: u32 = 16u;
 // Fixed-point unit of the voxel fibre density (square metres of fibre side area per unit).
 const HAIR_VOXEL_UNIT: f32 = 1e-9;
 
@@ -49,6 +51,7 @@ struct HairView {
 const HAIR_FLAG_DUAL: u32 = 1u;
 const HAIR_FLAG_OCCLUSION: u32 = 2u;
 const HAIR_FLAG_SKIN_SHADOW: u32 = 4u;
+const HAIR_FLAG_CULL: u32 = 8u;
 
 struct HairDraw {
     // Strands, points per strand, point stride (far field), groom index.

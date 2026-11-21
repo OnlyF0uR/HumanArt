@@ -8,10 +8,10 @@
 //! (the page's source square box-averaged down to the page's mip) into a page-sized staging
 //! texture and a texture copy from it into the pool slot.
 //!
-//! The pool's own upload path still writes each new slot once (with zeros) when it hands it out;
-//! those queue writes run at the start of the next submission, before the command buffers in it,
-//! so the copies recorded here overwrite them as long as the encoder goes out in the same
-//! submission as (or any submission after) the update — submit it in the frame it was recorded.
+//! The pool only hands out the slots (`StreamingPool::update_external`): it uploads no texels for
+//! them, so the copies recorded here are the only write of a new slot. Submit the encoder in the
+//! frame it was recorded, before the pool is sampled; until then a new slot shows what it held
+//! before (an evicted page's texels, or zeros).
 //!
 //! Everything is created in [`ResolvedPages::new`] (`[PERF-R4]`); per update the parameter block of
 //! every copy is written from a preallocated buffer and the request list reuses its capacity

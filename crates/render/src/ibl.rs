@@ -360,7 +360,8 @@ impl Ibl {
         match source {
             EnvironmentSource::Procedural(kind) => {
                 let sun = match kind {
-                    ProceduralEnvironment::ClearSky { sun_direction } => {
+                    ProceduralEnvironment::ClearSky { sun_direction }
+                    | ProceduralEnvironment::Sunset { sun_direction } => {
                         let s = sun_direction.normalize_or(humanart_math::Vec3::Y);
                         [s.x, s.y, s.z, 0.0]
                     }

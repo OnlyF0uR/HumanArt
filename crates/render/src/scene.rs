@@ -22,6 +22,8 @@ use humanart_gpu::pod::slice_as_bytes;
 use humanart_gpu::resources::{BufferDesc, BufferId, Category, Resources, Tag};
 use humanart_math::{Aabb, Mat4, Sphere, Vec2, Vec3};
 
+use crate::focus::CasterSlabs;
+
 use crate::deform::GpuDeformer;
 use crate::error::RenderError;
 use crate::sss::{SKIN_CLASS, SkinShading};
@@ -470,6 +472,61 @@ impl Scene {
         Sphere { center: bounds.center(), radius: bounds.half_extents().length().max(1e-3) }
     }
 
+    /// Whether every object that only receives shadows lies inside the box around the casters (to
+    /// a centimetre): a tear line on an eye does, a ground does not. Only then can a shadow map be
+    /// narrowed to the casters the camera sees: a receiver elsewhere may be in view, far from
+    /// them, in the shadow of a caster outside the view.
+    pub fn receivers_within_casters(&self) -> bool {
+        let mut casters = Aabb::EMPTY;
+        let mut receivers = Aabb::EMPTY;
+        for object in &self.objects {
+            let Some(mesh) = self.meshes.get(object.mesh) else { continue };
+            for p in &mesh.positions {
+                let p = object.transform.transform_point3(*p);
+                if object.casts_shadow {
+                    casters = casters.extend(p);
+                } else {
+                    receivers = receivers.extend(p);
+                }
+            }
+        }
+        if receivers.is_empty() {
+            return true;
+        }
+        let slack = Vec3::splat(0.01);
+        let (lo, hi) = (casters.min - slack, casters.max + slack);
+        !casters.is_empty()
+            && receivers.min.x >= lo.x
+            && receivers.min.y >= lo.y
+            && receivers.min.z >= lo.z
+            && receivers.max.x <= hi.x
+            && receivers.max.y <= hi.y
+            && receivers.max.z <= hi.z
+    }
+
+    /// The shadow casters as boxes per band of height ([`crate::focus`]): what a shadow map is
+    /// narrowed to when the camera sees only part of them.
+    pub fn shadow_slabs(&self) -> CasterSlabs {
+        let mut bounds = Aabb::EMPTY;
+        let casters =
+            || self.objects.iter().filter(|o| o.casts_shadow).filter_map(|o| self.meshes.get(o.mesh).map(|m| (o, m)));
+        for (object, mesh) in casters() {
+            for p in &mesh.positions {
+                bounds = bounds.extend(object.transform.transform_point3(*p));
+            }
+        }
+        if bounds.is_empty() {
+            return CasterSlabs::EMPTY;
+        }
+        let mut slabs = CasterSlabs::new(bounds.min.y, bounds.max.y);
+        for (object, mesh) in casters() {
+            for p in &mesh.positions {
+                slabs.add(object.transform.transform_point3(*p));
+            }
+        }
+        slabs
+    }
+
     /// The material test scene: a ground plane, two rows of five spheres (dielectric and metal,
     /// roughness 0.1 to 1.0) and a head-sized bust in the middle, around the origin, head at 1.6 m.
     pub fn material_test() -> Self {
@@ -631,6 +688,8 @@ pub struct GpuScene {
     /// Bumped whenever streams are attached or detached (the renderer rebuilds its bind groups).
     stream_generation: u64,
     bounds: Sphere,
+    slabs: CasterSlabs,
+    focusable: bool,
     vertex_count: u32,
     index_count: u32,
 }
@@ -741,6 +800,8 @@ impl GpuScene {
             gpu_objects,
             objects_dirty: false,
             bounds: scene.shadow_bounds(),
+            slabs: scene.shadow_slabs(),
+            focusable: scene.receivers_within_casters(),
             vertex_count: (positions.len() / 3) as u32,
             index_count: indices.len() as u32,
         })
@@ -749,6 +810,17 @@ impl GpuScene {
     /// The bounding sphere of the shadow casters at upload (what shadow maps are fitted to).
     pub fn bounds(&self) -> Sphere {
         self.bounds
+    }
+
+    /// The shadow casters at upload as boxes per band of height ([`crate::focus`]).
+    pub fn caster_slabs(&self) -> &CasterSlabs {
+        &self.slabs
+    }
+
+    /// Whether a shadow map may be narrowed to the casters the camera sees ([`crate::focus`]):
+    /// see [`Scene::receivers_within_casters`].
+    pub fn shadow_focusable(&self) -> bool {
+        self.focusable
     }
 
     /// The draws, one per object.

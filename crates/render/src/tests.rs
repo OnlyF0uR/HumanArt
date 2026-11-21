@@ -2,10 +2,10 @@
 //! wired into the passes `[EVAL-05]` with correct motion vectors `[RND-04]`, and blocking GPU waits
 //! that end with an error instead of hanging `[ERR-05]`.
 
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
+use humanart_gpu::Gpu;
 use humanart_gpu::resources::{Budget, Resources};
-use humanart_gpu::{DeviceRequest, Gpu};
 use humanart_math::{Vec2, Vec3, f16_bits_to_f32, ndc_to_screen};
 use humanart_model::eval::EvalInput;
 
@@ -19,8 +19,8 @@ use crate::renderer::{FrameInput, RenderConfig, Renderer};
 use crate::scene::{GpuScene, Material, Mesh, Scene};
 
 fn gpu() -> &'static Gpu {
-    static GPU: OnceLock<Gpu> = OnceLock::new();
-    GPU.get_or_init(|| Gpu::headless_blocking(&DeviceRequest::default()).expect("this machine has a GPU"))
+    // The process's shared device (ADR-040).
+    humanart_gpu::shared_headless().expect("this machine has a GPU")
 }
 
 /// Reads a whole buffer as f32 words (blocking: tests only).

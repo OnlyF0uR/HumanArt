@@ -83,9 +83,14 @@ static LIBRARIES: &[Library] = &[
 static SHADERS: &[ShaderDesc] = &[
     ShaderDesc {
         path: "hair/raster.wgsl",
-        summary: "compute software rasteriser of sub-pixel strands: coverage sum and nearest depth, visibility records with motion, fibre density grid [HR-01] [HR-04] [HR-05]",
+        summary: "compute software rasteriser of sub-pixel strands: coverage sum and nearest depth, visibility records with motion, fibre density grid, scene depth tiles of the hidden-segment test [HR-01] [HR-04] [HR-05]",
         purpose: Purpose::Runtime,
-        entry_points: &[compute("raster_depth"), compute("raster_records"), compute("voxelize")],
+        entry_points: &[
+            compute("raster_depth"),
+            compute("raster_records"),
+            compute("voxelize"),
+            compute("depth_tiles"),
+        ],
         overrides: &[],
         flag_sets: NO_FLAGS,
         targets: Targets::NONE,

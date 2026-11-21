@@ -36,6 +36,8 @@ pub enum AppError {
     },
     /// The preferences.
     Prefs(PrefsError),
+    /// The agent server could not be started (sandbox, entropy, socket).
+    AgentServer(String),
     /// A request that does not fit the state.
     Invalid {
         /// What was wrong.
@@ -54,6 +56,7 @@ impl fmt::Display for AppError {
             Self::Doc(e) => write!(f, "{e}"),
             Self::Platform { path, source } => write!(f, "{path}: {source}"),
             Self::Prefs(e) => write!(f, "{e}"),
+            Self::AgentServer(what) => write!(f, "agent server: {what}"),
             Self::Invalid { what } => write!(f, "{what}"),
         }
     }
@@ -70,7 +73,7 @@ impl std::error::Error for AppError {
             Self::Doc(e) => Some(e),
             Self::Platform { source, .. } => Some(source),
             Self::Prefs(e) => Some(e),
-            Self::Invalid { .. } => None,
+            Self::AgentServer(_) | Self::Invalid { .. } => None,
         }
     }
 }

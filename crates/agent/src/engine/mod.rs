@@ -194,7 +194,6 @@ pub(crate) mod tests {
         use humanart_doc::registry::ParamValue;
         use humanart_doc::session::SessionConfig;
         use humanart_gpu::resources::{Budget, Resources};
-        use humanart_gpu::{DeviceRequest, Gpu};
 
         let fs = MemoryFs::new();
         let clock = ManualClock::new(1_700_000_000_000);
@@ -210,9 +209,9 @@ pub(crate) mod tests {
         engine.update().unwrap();
         assert!(!engine.update().unwrap(), "nothing happened since");
 
-        let gpu = Gpu::headless_blocking(&DeviceRequest::default()).expect("this machine has a GPU");
-        let mut res = Resources::new(&gpu, Budget::UNLIMITED);
-        let mut viewer = Viewer::new(&gpu, &mut res, engine.model(), 360, 640).unwrap();
+        let gpu = humanart_gpu::shared_headless().expect("this machine has a GPU");
+        let mut res = Resources::new(gpu, Budget::UNLIMITED);
+        let mut viewer = Viewer::new(gpu, &mut res, engine.model(), 360, 640).unwrap();
         let render = |engine: &mut Engine<'_>, viewer: &mut Viewer, res: &mut Resources, name: &str| {
             for _ in 0..4 {
                 let mut enc = gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("t") });

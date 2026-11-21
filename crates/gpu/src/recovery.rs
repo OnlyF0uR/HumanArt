@@ -311,7 +311,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
 
         // The loss.
         simulate_loss(&gpu);
-        let _ = gpu.device.poll(wgpu::PollType::wait_indefinitely());
+        let _ = crate::device::wait_for(&gpu.device, None, crate::device::GPU_WAIT_LIMIT, "the queued work");
         assert!(gpu.is_lost());
         let lost = std::iter::from_fn(|| gpu.events().poll()).find(|event| matches!(event, DeviceEvent::Lost { .. }));
         assert!(lost.is_some(), "the loss is reported as an event");
@@ -357,7 +357,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
             1
         );
         assert!(streaming.lookup(TileRequest { texture: face, mip: 0, x: 0, y: 0 }).is_some());
-        gpu.device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+        crate::device::wait_for(&gpu.device, None, crate::device::GPU_WAIT_LIMIT, "the queued work").unwrap();
         assert_eq!(gpu.events().pending(), 0, "no error on the new device");
         let mut owners: [&mut dyn Rebuild; 1] = [&mut ring];
         assert_eq!(recovery.check(&mut gpu, None, &mut resources, &mut owners).unwrap(), RecoveryOutcome::Healthy);

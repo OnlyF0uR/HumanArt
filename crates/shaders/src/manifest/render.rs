@@ -31,6 +31,8 @@ static SOURCES: &[SourceFile] = &[
     source!("render/overlay.wgsl"),
     source!("render/pick.wgsl"),
     source!("render/ibl.wgsl"),
+    source!("render/occlusion.wgsl"),
+    source!("render/dof.wgsl"),
 ];
 
 /// The renderer's include-only files.
@@ -63,7 +65,11 @@ static LIBRARIES: &[Library] = &[
             "env_prefiltered",
             "dfg_lookup",
             "shadow_linear_depth",
-            "vogel_disk",
+            "golden_turn",
+            "shadow_coords",
+            "shadow_search_taps",
+            "shadow_filter_taps",
+            "shadow_sample",
             "shadow_visibility",
             "polygon_form_factor",
             "incident_light",
@@ -74,12 +80,12 @@ static LIBRARIES: &[Library] = &[
     Library {
         path: "render/subsurface.wgsl",
         summary: "skin in the geometry pass: profile transmittance, shadow-map thickness, pre-integrated falloff [SHD-03] [SHD-04]",
-        functions: &["profile_plane", "skin_transmittance", "shadow_thickness", "preintegrated_falloff"],
+        functions: &["profile_plane", "skin_transmittance", "shadow_slab", "shadow_thickness", "preintegrated_falloff"],
         purpose: Purpose::Runtime,
     },
     Library {
         path: "render/skin_surface.wgsl",
-        summary: "surfaced skin at group 3: resolved set and zone masks, Langer-oriented anti-tiled micro-detail, wrinkles, coat, sheen [SKN-20] [SKN-30] [SHD-06..09]",
+        summary: "surfaced skin at group 3: resolved set and zone masks, Langer-oriented anti-tiled micro-detail, wrinkles, coat, sheen, meso mottling [SKN-20] [SKN-30] [SHD-06..09]",
         functions: &[
             "surface_frame",
             "langer_direction",
@@ -158,6 +164,25 @@ static SHADERS: &[ShaderDesc] = &[
         targets: Targets { color: &[HDR], depth: None },
     },
     ShaderDesc {
+        path: "render/occlusion.wgsl",
+        summary: "screen-space ambient occlusion (horizon-based) and per-light contact shadows from the prepass depth (todo 1.9)",
+        purpose: Purpose::Runtime,
+        entry_points: &[vertex("vs_occlusion"), fragment("fs_occlusion")],
+        overrides: &[],
+        flag_sets: NO_FLAGS,
+        targets: Targets { color: &[wgpu::TextureFormat::R8Unorm, DISPLAY], depth: None },
+    },
+    ShaderDesc {
+        path: "render/dof.wgsl",
+        summary: "thin-lens depth of field for stills: one scatter-as-gather pass before the temporal accumulation (todo 1.9)",
+        purpose: Purpose::Runtime,
+        entry_points: &[vertex("vs_dof"), fragment("fs_dof")],
+        // Taps of the spiral: Review and Still, Interactive.
+        overrides: &[Override { name: "DOF_TAPS", ty: OverrideType::U32, values: &[48.0, 24.0] }],
+        flag_sets: NO_FLAGS,
+        targets: Targets { color: &[HDR], depth: None },
+    },
+    ShaderDesc {
         path: "render/taa.wgsl",
         summary: "temporal anti-aliasing and still accumulation with motion-vector reprojection [RND-03] 10 [QUAL-02]",
         purpose: Purpose::Runtime,
@@ -186,12 +211,12 @@ static SHADERS: &[ShaderDesc] = &[
     },
     ShaderDesc {
         path: "render/pick.wgsl",
-        summary: "picking buffer: object pick id and depth under the cursor",
+        summary: "picking buffer: object pick id, depth, triangle and barycentrics under the cursor [VP-01]",
         purpose: Purpose::Runtime,
         entry_points: &[vertex("vs_pick"), fragment("fs_pick")],
         overrides: &[],
         flag_sets: NO_FLAGS,
-        targets: Targets { color: &[wgpu::TextureFormat::Rg32Uint], depth: DEPTH },
+        targets: Targets { color: &[wgpu::TextureFormat::Rgba32Uint], depth: DEPTH },
     },
     ShaderDesc {
         path: "render/detail_mips.wgsl",

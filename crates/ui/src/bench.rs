@@ -10,8 +10,9 @@
 //! (when the counting allocator of `humanart_core::alloc` is installed).
 //!
 //! CPU times come from the clock the application installs (`humanart_core::time`); without one
-//! they are 0 and [`UiBenchReport::cpu_timed`] is false. The application (`humanart-cli bench`)
-//! installs its clock and allocator, runs this and writes [`UiBenchReport::to_json`].
+//! they are 0 and [`UiBenchReport::cpu_timed`] is false. `humanart-cli bench --scenario 10` installs
+//! its clock, runs this and writes [`UiBenchReport::to_value`] into its report; the shipped binary
+//! keeps the system allocator, so its `allocations` is `null` (the tests count them).
 
 use humanart_gpu::Gpu;
 use humanart_gpu::profiler::GpuProfiler;
@@ -213,8 +214,8 @@ pub struct UiBenchReport {
 }
 
 impl UiBenchReport {
-    /// The report as JSON (for `humanart-cli bench`).
-    pub fn to_json(&self) -> Result<String, UiError> {
+    /// The report as a JSON value (`humanart-cli bench` puts it into its own report).
+    pub fn to_value(&self) -> Value {
         let triple = |v: [f64; 3]| {
             let mut o = Object::new();
             o.insert("median", v[0]);
@@ -234,7 +235,12 @@ impl UiBenchReport {
         o.insert("instances", self.instances);
         o.insert("semantic_widgets", self.semantic_widgets);
         o.insert("allocations", self.allocations.map_or(Value::Null, Value::from));
-        json::to_string_pretty(&Value::from(o)).map_err(|e| UiError::DockLayout(format!("bench report: {e}")))
+        Value::from(o)
+    }
+
+    /// The report as JSON text.
+    pub fn to_json(&self) -> Result<String, UiError> {
+        json::to_string_pretty(&self.to_value()).map_err(|e| UiError::DockLayout(format!("bench report: {e}")))
     }
 }
 
@@ -323,7 +329,8 @@ pub fn run_benchmark(gpu: &Gpu, fonts: &Fonts, options: &BenchOptions) -> Result
         let t2 = humanart_core::time::now_nanos();
         queue.submit([encoder.finish()]);
         profiler.after_submit();
-        device.poll(wgpu::PollType::wait_indefinitely()).map_err(|e| UiError::Gpu(e.into()))?;
+        humanart_gpu::device::wait_for(device, None, humanart_gpu::device::GPU_WAIT_LIMIT, "the queued work")
+            .map_err(UiError::Gpu)?;
         if profiler.collect()
             && measured
             && let Some(ns) = profiler.latest().gpu_total_nanos()
@@ -337,7 +344,8 @@ pub fn run_benchmark(gpu: &Gpu, fonts: &Fonts, options: &BenchOptions) -> Result
     }
     // Late timestamp results of the last frames.
     for _ in 0..3 {
-        device.poll(wgpu::PollType::wait_indefinitely()).map_err(|e| UiError::Gpu(e.into()))?;
+        humanart_gpu::device::wait_for(device, None, humanart_gpu::device::GPU_WAIT_LIMIT, "the queued work")
+            .map_err(UiError::Gpu)?;
         if profiler.collect()
             && let Some(ns) = profiler.latest().gpu_total_nanos()
         {

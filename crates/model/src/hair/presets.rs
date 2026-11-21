@@ -17,7 +17,7 @@ use humanart_math::Vec3;
 use super::collide::SdfGrid;
 use super::error::{HairError, HairResult};
 use super::params::GroomParams;
-use super::placement::ScalpMask;
+use super::placement::{PartLine, ScalpMask};
 use super::strands::{Guides, MAX_GUIDE_POINTS, MAX_GUIDES};
 use super::surface::{HairSurface, RootFrame, normalize_or};
 
@@ -56,6 +56,9 @@ pub struct PresetGroom {
     pub params: GroomParams,
     /// The triangles the groom grows on: the mask to place its strands with.
     pub area: Vec<u32>,
+    /// The parting combed into the guides, if the style has one: place the strands with
+    /// [`place_parted`](super::placement::place_parted) so they do not blend across it.
+    pub part: Option<PartLine>,
 }
 
 /// How [`grow_guide`] shapes a guide.
@@ -197,6 +200,63 @@ fn smoothstep(e0: f32, e1: f32, x: f32) -> f32 {
     t * t * (3.0 - 2.0 * t)
 }
 
+/// The parting of the falling styles on a scalp mask with bounds `lo`..`hi`: a side part above
+/// the character's left eye (`side`) or a centre part, over the top of the head from the front
+/// hairline to the crown (a styling choice).
+fn part_line(lo: Vec3, hi: Vec3, side: bool) -> PartLine {
+    let (centre, size) = ((lo + hi) * 0.5, hi - lo);
+    let x = if side { centre.x + 0.18 * size.x } else { centre.x };
+    PartLine {
+        point: Vec3::new(x, hi.y, centre.z),
+        normal: Vec3::X,
+        top_y: lo.y + 0.55 * size.y,
+        // Ends before the crown: a part combed through it left a bare patch there.
+        crown_z: centre.z,
+    }
+}
+
+/// How strongly hair near a parting is combed away from it, relative to the style's comb.
+const PART_COMB: f32 = 2.0;
+
+/// The comb away from `part` at `origin`: toward the part's normal on its positive side and
+/// away on the other, strongest at the part and gone 8 cm from it, faded out at the region's
+/// edges.
+fn part_comb(part: &PartLine, origin: Vec3) -> Vec3 {
+    if !part.in_region(origin) {
+        return Vec3::ZERO;
+    }
+    let d = part.side(origin);
+    let side = if d >= 0.0 { 1.0 } else { -1.0 };
+    let near = 1.0 - smoothstep(0.0, 0.08, d.abs());
+    let fade =
+        smoothstep(part.crown_z, part.crown_z + 0.06, origin.z) * smoothstep(part.top_y, part.top_y + 0.03, origin.y);
+    part.normal * (side * PART_COMB * near * fade)
+}
+
+/// The afro's volume on a scalp mask with bounds `lo`..`hi`: an ellipsoid (centre, semi-axes)
+/// a little above and behind the head's centre, about 7 cm out from the scalp at the sides and on
+/// top and less in front; its rounded top keeps the volume from rising into a peak (a styling
+/// choice).
+fn afro_volume(lo: Vec3, hi: Vec3) -> (Vec3, Vec3) {
+    let (centre, size) = ((lo + hi) * 0.5, hi - lo);
+    let c = centre + Vec3::new(0.0, 0.12 * size.y, -0.08 * size.z);
+    let axes = Vec3::new(0.5 * size.x + 0.075, 0.5 * size.y + 0.04, 0.5 * size.z + 0.065);
+    (c, axes)
+}
+
+/// The distance from `origin` along unit `d` to the surface of the ellipsoid (`c`, `axes`); 0
+/// when `origin` is outside it.
+fn to_ellipsoid(origin: Vec3, d: Vec3, c: Vec3, axes: Vec3) -> f32 {
+    let inv = Vec3::new(1.0 / axes.x.max(1e-6), 1.0 / axes.y.max(1e-6), 1.0 / axes.z.max(1e-6));
+    let (e, dd) = ((origin - c) * inv, d * inv);
+    let (a, b, cc) = (dd.dot(dd), 2.0 * e.dot(dd), e.dot(e) - 1.0);
+    let disc = b * b - 4.0 * a * cc;
+    if cc >= 0.0 || disc < 0.0 || a <= 0.0 {
+        return 0.0;
+    }
+    (-b + disc.sqrt()) / (2.0 * a)
+}
+
 /// The three-strand braid: lane `lane` (0..3) at braid parameter `s` metres below the nape, as an
 /// offset in the plane facing −Z (x across, z depth) plus the drop.
 fn braid_offset(lane: usize, s: f32, width: f32, period: f32) -> Vec3 {
@@ -236,6 +296,12 @@ pub fn preset_groom(
     };
     let back = Vec3::new(0.0, -0.3, -1.0);
     let spec_name = spec.name;
+    let part = match spec.name {
+        "medium_straight" | "long_straight" => Some(part_line(lo, hi, true)),
+        "wavy" | "long_wavy" => Some(part_line(lo, hi, false)),
+        _ => None,
+    };
+    let afro = afro_volume(lo, hi);
     match spec.name {
         "short_crop" => {
             params.noise = 0.1;
@@ -252,10 +318,11 @@ pub fn preset_groom(
         }
         "wavy" | "long_wavy" => {
             // The wave itself is in the guides (`wave_guide`, in phase across neighbouring guides,
-            // so the strands blended from them wave together like real locks); the strands only
-            // add a little wave of their own.
-            params.wave_amplitude = 0.002;
-            params.wave_frequency = 14.0;
+            // so the strands blended from them wave together like real locks); the strands add
+            // only a slight wave of their own (out of phase from strand to strand, a stronger one
+            // read as crimp at head distance).
+            params.wave_amplitude = 0.000_5;
+            params.wave_frequency = 9.0;
             params.clump_strength = 0.5;
         }
         "curly" => {
@@ -332,17 +399,14 @@ pub fn preset_groom(
                 grow_guide(&frame, &spec, points, sdf)
             }
             "afro" => {
-                // A round volume: out from a centre above and behind the head's, every tip
-                // reaching about the same sphere, so roots near its surface (front hairline,
-                // temples) grow short and the crown and back grow long.
-                let size = hi - lo;
-                let ball = centre + Vec3::new(0.0, 0.15 * size.y, -0.15 * size.z);
-                let reach = 0.5 * size.x.max(size.z) + 0.08;
+                // A rounded volume (`afro_volume`): every guide leaves along the skin normal,
+                // turns out from the volume's centre and ends near its surface, so roots near the
+                // surface (front hairline, temples) grow short and the crown and back long, and
+                // the top is a dome instead of a peak.
+                let (ball, axes) = afro;
                 let radial = normalize_or(frame.origin - ball, frame.n);
-                // Shorter where the hair leaves forward (the front of the crown stood out as a
-                // pointed tuft over the forehead in profile).
-                let front = 1.0 - 0.45 * radial.z.max(0.0);
-                let length = ((reach - (frame.origin - ball).length()) * front).clamp(0.03, 0.15) * jitter;
+                let out = normalize_or(radial + frame.n * 0.5, frame.n);
+                let length = to_ellipsoid(frame.origin, out, ball, axes).clamp(0.025, 0.14) * jitter;
                 let spec = GrowSpec { length, comb: radial, comb_rate: 25.0, gravity: 2.0, offset: 0.006 };
                 grow_guide(&frame, &spec, points, sdf)
             }
@@ -358,7 +422,11 @@ pub fn preset_groom(
                 // temples), straight down over the back of the head (where `back` is nearly the
                 // skin normal, so its tangent part alone would point anywhere).
                 let down = 0.9 * outward.x.abs() + 1.5 * (-outward.z).max(0.0);
-                let comb = Vec3::new(outward.x, 0.0, outward.z) * 0.3 + back + (-Vec3::Y) * down;
+                let mut comb = Vec3::new(outward.x, 0.0, outward.z) * 0.3 + back + (-Vec3::Y) * down;
+                // Away from the parting on both sides of it.
+                if let Some(line) = &part {
+                    comb += part_comb(line, frame.origin);
+                }
                 let spec = GrowSpec { length: length * jitter, comb, comb_rate: rate, gravity, offset: 0.004 };
                 let mut world = grow_falling_guide(&frame, &spec, 0.25, points, sdf);
                 if matches!(spec_name, "wavy" | "long_wavy") {
@@ -386,7 +454,7 @@ pub fn preset_groom(
     if guides.is_empty() {
         return Err(HairError::invalid("groom", 0, "no guide could be placed on the mask"));
     }
-    Ok(PresetGroom { name: spec.name, guides, params, area: mask.triangles().to_vec() })
+    Ok(PresetGroom { name: spec.name, guides, params, area: mask.triangles().to_vec(), part })
 }
 
 /// The guide wave of the wavy styles: period, amplitude (metres), and where it starts and reaches
@@ -403,9 +471,10 @@ pub struct GuideWave {
     pub full: f32,
 }
 
-/// The wave of `wavy` and `long_wavy`: 8 cm periods of 1 cm, from 4 cm below the root, full at
-/// 12 cm (a styling choice, not a measurement).
-pub const WAVE: GuideWave = GuideWave { period: 0.08, amplitude: 0.01, start: 0.04, full: 0.12 };
+/// The wave of `wavy` and `long_wavy`: loose 11 cm periods of 1.5 cm, from 5 cm below the root,
+/// full at 14 cm (a styling choice, not a measurement; 8 cm periods of 1 cm read as crimp at
+/// head distance).
+pub const WAVE: GuideWave = GuideWave { period: 0.11, amplitude: 0.015, start: 0.05, full: 0.14 };
 
 /// Adds `wave` to a hanging guide (`points` in world space, root first, `centre` the head's):
 /// each point moves sideways (across the strand, along the head's surface) by a sine of its
@@ -571,17 +640,39 @@ mod tests {
         let hanging = w.iter().filter(|c| c[c.len() - 1].y < c[0].y - 0.05).count();
         let flaring = w.iter().filter(|c| c[c.len() - 1].z < lo.z - 0.06).count();
         assert!(hanging > 180 && flaring < 10, "{hanging} hang, {flaring} stand out behind");
+        // The side part: guides rooted in the parted region within 3 cm of it leave it on their
+        // own side.
+        let line = mp.part.expect("medium straight has a part");
+        let (mut near, mut away) = (0, 0);
+        for c in &w {
+            let d = line.side(c[0]);
+            if line.in_region(c[0]) && d.abs() < 0.03 {
+                near += 1;
+                away += usize::from(line.side(c[4]) * d.signum() > d.abs());
+            }
+        }
+        assert!(near > 3 && away * 10 >= near * 8, "{away} of {near} guides leave the part on their side");
         // The afro stands out in a round volume: tips further out than their roots and at
         // similar distances from the volume's centre.
         let af = preset_groom("afro", s, &h.mask, 200, Some(&h.sdf), 9).unwrap();
-        let size = hi - lo;
-        let ball = (lo + hi) * 0.5 + Vec3::new(0.0, 0.15 * size.y, -0.15 * size.z);
+        let (ball, axes) = afro_volume(lo, hi);
         let w = world(&af.guides, s);
         let out = w.iter().filter(|c| (c[c.len() - 1] - ball).length() > (c[0] - ball).length() + 0.02).count();
-        let tips: Vec<f32> = w.iter().map(|c| (c[c.len() - 1] - ball).length()).collect();
+        // Tips near the volume's surface: their ellipsoid radius (1 on the surface).
+        let radius = |p: Vec3| {
+            let e = p - ball;
+            Vec3::new(e.x / axes.x, e.y / axes.y, e.z / axes.z).length()
+        };
+        let tips: Vec<f32> = w.iter().map(|c| radius(c[c.len() - 1])).collect();
         let mean = tips.iter().sum::<f32>() / tips.len() as f32;
         let spread = (tips.iter().map(|d| (d - mean) * (d - mean)).sum::<f32>() / tips.len() as f32).sqrt();
-        assert!(out > 180 && spread < 0.25 * mean, "{out} out, tip distance {mean} +- {spread}");
+        assert!(out > 180 && spread < 0.25 * mean, "{out} out, tip radius {mean} +- {spread}");
+        // No peak on top: the highest tip is not far above the tips around it (the highest
+        // tenth's spread in height is small).
+        let mut heights: Vec<f32> = w.iter().map(|c| c[c.len() - 1].y).collect();
+        heights.sort_by(f32::total_cmp);
+        let top = heights[heights.len() - 1] - heights[heights.len() * 9 / 10];
+        assert!(top < 0.03, "the afro rises {top} m above its top tenth: a peak");
         // No tuft over the forehead: the volume reaches less far in front than behind.
         let front = w.iter().map(|c| c[c.len() - 1].z).fold(f32::MIN, f32::max) - hi.z;
         let behind = lo.z - w.iter().map(|c| c[c.len() - 1].z).fold(f32::MAX, f32::min);
@@ -652,7 +743,7 @@ mod tests {
         // Nothing near the root, about the full amplitude further down.
         assert!(sa[..3].iter().all(|d| d.abs() < 1e-4), "{sa:?}");
         let peak = sa[12..].iter().fold(0.0_f32, |m, d| m.max(d.abs()));
-        assert!((0.007..=0.0101).contains(&peak), "{peak}");
+        assert!((0.7 * WAVE.amplitude..=1.01 * WAVE.amplitude).contains(&peak), "{peak}");
         // Correlation of the two sideways offsets over the waved part.
         let dot: f32 = sa[12..].iter().zip(&sb[12..]).map(|(x, y)| x * y).sum();
         let na: f32 = sa[12..].iter().map(|x| x * x).sum::<f32>().sqrt();

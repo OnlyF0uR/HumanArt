@@ -139,6 +139,8 @@ impl Studio {
             if let Some(viewer) = slot.as_mut() {
                 viewer.resize(&mut self.resources, w, h)?;
                 *viewer.settings_mut() = v.settings;
+                // The document's skin.* values reach the compositor (todo 1.4).
+                viewer.sync_skin(gpu, model)?;
                 viewer.record(&mut self.resources, encoder, model, v.highlights)?;
             }
             let Some(viewer) = self.viewers.get(v.slot).and_then(Option::as_ref) else { continue };

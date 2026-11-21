@@ -12,7 +12,7 @@
 //! LTC-based rect shading `[LIT-01]` names is not implemented yet: it needs a fitted LTC table.
 
 use humanart_math::color::temperature::blackbody_rgb;
-use humanart_math::{Mat4, Vec3};
+use humanart_math::{Mat4, Sphere, Vec3};
 
 use crate::error::RenderError;
 
@@ -294,6 +294,16 @@ pub enum ProceduralEnvironment {
     },
     /// The same radiance (1) in every direction: the white furnace of the IBL tests.
     Uniform,
+    /// A sun close to the horizon: an orange band along the horizon that is brightest around the
+    /// sun, a sky that turns blue towards the zenith, a dark ground.
+    Sunset {
+        /// Unit vector towards the sun.
+        sun_direction: Vec3,
+    },
+    /// The dark studio of [`ProceduralEnvironment::Studio`] without its panels: the rigs whose
+    /// softboxes are rect lights use it, so a catchlight in the eye is the rig's own source and
+    /// not a panel painted somewhere else.
+    StudioRoom,
 }
 
 impl ProceduralEnvironment {
@@ -304,6 +314,8 @@ impl ProceduralEnvironment {
             Self::Overcast => 1,
             Self::ClearSky { .. } => 2,
             Self::Uniform => 3,
+            Self::Sunset { .. } => 4,
+            Self::StudioRoom => 5,
         }
     }
 }
@@ -316,6 +328,61 @@ pub enum Background {
     Gray(f32),
     /// The environment itself.
     Environment,
+    /// Seamless studio paper behind and under the subject, lit by the rig (todo 1.9).
+    Backdrop(Backdrop),
+}
+
+/// Which backdrop a viewer shows behind the character.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
+pub enum BackdropChoice {
+    /// What the rig says (a flat grey for the studio rigs: the tests' backdrop).
+    #[default]
+    Rig,
+    /// Seamless studio paper where the rig has a flat grey ([`LightRig::with_studio_backdrop`]):
+    /// the review default of the command-line tool.
+    Studio,
+    /// A flat middle grey, whatever the rig says.
+    Flat,
+    /// The rig's environment.
+    Environment,
+}
+
+/// A seamless paper backdrop: a wall behind the subject (as the camera sees it) that curves into
+/// the floor under the subject's feet. It is shaded as a matte surface by the rig's lights and
+/// environment, receives the subject's shadow, and darkens softly away from the spot behind the
+/// subject.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct Backdrop {
+    /// The paper's reflectance, linear Rec.709.
+    pub color: [f32; 3],
+    /// How far behind the subject's centre the wall stands, metres.
+    pub distance: f32,
+    /// How much darker the paper is far from the spot behind the subject, `[0, 1]` (0: even).
+    pub falloff: f32,
+    /// The distance from that spot at which the falloff is complete, metres.
+    pub falloff_radius: f32,
+}
+
+impl Backdrop {
+    /// Mid-grey paper 2.5 m behind the subject with a gentle falloff: the review default.
+    pub const GRAY: Self = Self { color: [0.45, 0.45, 0.46], distance: 2.5, falloff: 0.5, falloff_radius: 2.4 };
+    /// Near-black paper for rim and low-key rigs.
+    pub const BLACK: Self = Self { color: [0.02, 0.02, 0.022], distance: 3.0, falloff: 0.5, falloff_radius: 2.0 };
+
+    /// Checks the parameters.
+    pub fn validate(&self) -> Result<(), RenderError> {
+        let ok = self.color.iter().all(|c| (0.0..=1.0).contains(c))
+            && (0.2..=50.0).contains(&self.distance)
+            && (0.0..=1.0).contains(&self.falloff)
+            && (0.1..=100.0).contains(&self.falloff_radius);
+        if ok {
+            Ok(())
+        } else {
+            Err(RenderError::InvalidParameter {
+                what: "backdrop: colour and falloff in [0, 1], distance 0.2-50 m, falloff radius 0.1-100 m",
+            })
+        }
+    }
 }
 
 /// A lighting rig `[LIT-02]`: lights, the environment light and the backdrop.
@@ -354,11 +421,26 @@ pub enum BuiltinRig {
     GoldenHour,
     /// The starting point of a manually matched rig: one neutral key, to be edited.
     ReferenceMatched,
+    /// Three-point portrait light from soft sources with a visible size: a softbox key 40 degrees
+    /// to the side, a larger and weaker fill by the camera, a strip light behind as the rim.
+    ThreePoint,
+    /// Rembrandt: a small softbox high and 50 degrees to the character's right, almost no fill: the
+    /// left cheek keeps only a triangle of light. The three-quarter camera (from the left) looks
+    /// into that shadow side (short light).
+    Rembrandt,
+    /// Loop: the key 30 degrees to the side and a little above, a 4:1 fill, a hair light.
+    Loop,
+    /// Clamshell: a wide softbox above the lens and a reflector below it, two catchlights.
+    Clamshell,
+    /// Two strip lights behind the subject and nothing from the front: the outline only.
+    RimOnly,
+    /// A low orange sun in a sunset sky.
+    Sunset,
 }
 
 impl BuiltinRig {
     /// Every built-in rig.
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 13] = [
         Self::NeutralStudio,
         Self::FlatBeauty,
         Self::HarshSidelight,
@@ -366,7 +448,32 @@ impl BuiltinRig {
         Self::OvercastOutdoor,
         Self::GoldenHour,
         Self::ReferenceMatched,
+        Self::ThreePoint,
+        Self::Rembrandt,
+        Self::Loop,
+        Self::Clamshell,
+        Self::RimOnly,
+        Self::Sunset,
     ];
+
+    /// The stable name (the `name` of the rig [`LightRig::builtin`] makes).
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::NeutralStudio => "neutral_studio",
+            Self::FlatBeauty => "flat_beauty",
+            Self::HarshSidelight => "harsh_sidelight",
+            Self::Backlight => "backlight",
+            Self::OvercastOutdoor => "overcast_outdoor",
+            Self::GoldenHour => "golden_hour",
+            Self::ReferenceMatched => "reference_matched",
+            Self::ThreePoint => "three_point",
+            Self::Rembrandt => "rembrandt",
+            Self::Loop => "loop",
+            Self::Clamshell => "clamshell",
+            Self::RimOnly => "rim_only",
+            Self::Sunset => "sunset",
+        }
+    }
 }
 
 impl LightRig {
@@ -478,7 +585,139 @@ impl LightRig {
                     9.0,
                 )
             }
+            BuiltinRig::ThreePoint => {
+                let key = at(0.62, 0.42, 0.74);
+                let fill = at(-0.55, 0.05, 0.95);
+                let rim = at(-0.6, 0.75, -0.75);
+                let (fw, rw, rh) = (size * 1.6, size * 0.4, size * 1.6);
+                let mut fill_light = Light::softbox(fill, center, fw, fw, nits_for(500.0, fill, fw, fw), 5600.0);
+                fill_light.shadow.enabled = false;
+                base(
+                    "three_point",
+                    vec![
+                        Light::softbox(key, center, size, size * 1.3, nits_for(1900.0, key, size, size * 1.3), 5600.0),
+                        fill_light,
+                        Light::softbox(rim, center, rw, rh, nits_for(1500.0, rim, rw, rh), 6000.0),
+                    ],
+                    ProceduralEnvironment::StudioRoom,
+                    45.0,
+                    gray,
+                    9.0,
+                )
+            }
+            BuiltinRig::Rembrandt => {
+                let key = at(-0.74, 0.62, 0.52);
+                let fill = at(0.8, 0.0, 0.7);
+                let small = size * 0.6;
+                let (fw, fh) = (size * 1.5, size * 2.0);
+                let mut fill_light = Light::softbox(fill, center, fw, fh, nits_for(160.0, fill, fw, fh), 5600.0);
+                fill_light.shadow.enabled = false;
+                base(
+                    "rembrandt",
+                    vec![
+                        Light::softbox(key, center, small, small, nits_for(2400.0, key, small, small), 5200.0),
+                        fill_light,
+                    ],
+                    ProceduralEnvironment::StudioRoom,
+                    18.0,
+                    gray,
+                    9.0,
+                )
+            }
+            BuiltinRig::Loop => {
+                let key = at(0.48, 0.42, 0.86);
+                let fill = at(-0.7, 0.1, 0.8);
+                let hair = at(-0.35, 0.95, -0.55);
+                let (fw, hw) = (size * 1.4, size * 0.5);
+                let mut fill_light = Light::softbox(fill, center, fw, fw, nits_for(480.0, fill, fw, fw), 5600.0);
+                fill_light.shadow.enabled = false;
+                base(
+                    "loop",
+                    vec![
+                        Light::softbox(key, center, size, size, nits_for(1900.0, key, size, size), 5600.0),
+                        fill_light,
+                        Light::softbox(hair, center, hw, hw, nits_for(900.0, hair, hw, hw), 6000.0),
+                    ],
+                    ProceduralEnvironment::StudioRoom,
+                    40.0,
+                    gray,
+                    9.0,
+                )
+            }
+            BuiltinRig::Clamshell => {
+                let key = at(0.0, 0.55, 0.95);
+                let fill = at(0.0, -0.6, 0.85);
+                let (kw, kh) = (size * 1.6, size);
+                let (fw, fh) = (size * 1.5, size * 0.6);
+                let mut fill_light = Light::softbox(fill, center, fw, fh, nits_for(850.0, fill, fw, fh), 5600.0);
+                fill_light.shadow.enabled = false;
+                base(
+                    "clamshell",
+                    vec![Light::softbox(key, center, kw, kh, nits_for(1700.0, key, kw, kh), 5600.0), fill_light],
+                    ProceduralEnvironment::StudioRoom,
+                    45.0,
+                    gray,
+                    9.0,
+                )
+            }
+            BuiltinRig::RimOnly => {
+                let left = at(0.85, 0.25, -0.7);
+                let right = at(-0.85, 0.25, -0.7);
+                let (w, h) = (size * 0.4, size * 1.8);
+                base(
+                    "rim_only",
+                    vec![
+                        Light::softbox(left, center, w, h, nits_for(2600.0, left, w, h), 5600.0),
+                        Light::softbox(right, center, w, h, nits_for(2200.0, right, w, h), 5600.0),
+                    ],
+                    ProceduralEnvironment::StudioRoom,
+                    6.0,
+                    Background::Gray(0.01),
+                    9.0,
+                )
+            }
+            BuiltinRig::Sunset => {
+                let sun_direction = Vec3::new(0.72, 0.1, 0.68).normalize_or(Vec3::Y);
+                let mut sun = Light::directional(-sun_direction, 5500.0, 2600.0);
+                sun.kind = LightKind::Directional { angular_diameter: 0.0093 };
+                base(
+                    "sunset",
+                    vec![sun],
+                    ProceduralEnvironment::Sunset { sun_direction },
+                    900.0,
+                    Background::Environment,
+                    11.0,
+                )
+            }
         }
+    }
+
+    /// The rig with the backdrop a viewer chose.
+    #[must_use]
+    pub fn with_backdrop(mut self, choice: BackdropChoice) -> Self {
+        match choice {
+            BackdropChoice::Rig => self,
+            BackdropChoice::Studio => self.with_studio_backdrop(),
+            BackdropChoice::Flat => {
+                self.background = Background::Gray(0.18);
+                self
+            }
+            BackdropChoice::Environment => {
+                self.background = Background::Environment;
+                self
+            }
+        }
+    }
+
+    /// The rig with seamless paper in place of a flat backdrop (todo 1.9: review renders): a
+    /// [`Background::Gray`] becomes [`Backdrop::GRAY`], or [`Backdrop::BLACK`] when the grey was
+    /// darker than 0.05; an environment backdrop and a paper one stay.
+    #[must_use]
+    pub fn with_studio_backdrop(mut self) -> Self {
+        if let Background::Gray(g) = self.background {
+            self.background = Background::Backdrop(if g < 0.05 { Backdrop::BLACK } else { Backdrop::GRAY });
+        }
+        self
     }
 
     /// Checks every light and the counts.
@@ -492,6 +731,9 @@ impl LightRig {
         }
         if !(self.environment_nits.is_finite() && self.environment_nits >= 0.0 && self.ev100.is_finite()) {
             return Err(RenderError::InvalidParameter { what: "environment intensity and EV100 must be finite" });
+        }
+        if let Background::Backdrop(b) = &self.background {
+            b.validate()?;
         }
         self.lights.iter().try_for_each(Light::validate)
     }
@@ -526,15 +768,28 @@ impl ShadowFrustum {
     /// the panel's centre.
     pub fn fit(light: &Light, center: Vec3, radius: f32) -> Self {
         let radius = radius.max(1e-3);
+        Self::fit_focused(light, Sphere { center, radius }, Sphere { center, radius })
+    }
+
+    /// The frustum of `light` whose map covers only the sphere `focus` (what the camera sees,
+    /// [`crate::focus`]) while its depth range still holds every caster of the sphere `casters`:
+    /// a caster outside the view shadows what is inside it. With `focus` equal to `casters` this
+    /// is [`ShadowFrustum::fit`].
+    pub fn fit_focused(light: &Light, casters: Sphere, focus: Sphere) -> Self {
+        let caster_radius = casters.radius.max(1e-3);
+        let radius = focus.radius.max(1e-3);
+        let center = focus.center;
         let d = light.direction.normalize_or(-Vec3::Y);
         let up_for = |dir: Vec3| if dir.normalize_or(Vec3::Y).y.abs() > 0.99 { Vec3::Z } else { Vec3::Y };
         match light.kind {
             LightKind::Directional { angular_diameter } => {
-                let eye = center - d * (radius * 2.0);
+                // Along the light, the casters span `along - R ..= along + R` from the focus centre.
+                let along = (casters.center - center).dot(d);
+                let eye = center + d * (along - caster_radius * 2.0);
                 let view = Mat4::look_to_rh(eye, d, up_for(d));
                 // The far plane reaches well past the casters so receivers behind them (the floor) keep
                 // a real depth for the penumbra estimate.
-                let (near, far) = (radius * 0.5, radius * 12.0);
+                let (near, far) = (caster_radius * 0.5, caster_radius * 12.0);
                 Self {
                     view_projection: Mat4::orthographic_reversed_z(-radius, radius, -radius, radius, near, far) * view,
                     perspective: false,
@@ -551,8 +806,9 @@ impl ShadowFrustum {
                 let view = Mat4::look_to_rh(eye, to_center, up_for(to_center));
                 // The cone that just contains the sphere, with 5 % margin.
                 let half = (radius / distance).clamp(1e-3, 0.999).asin() * 1.05;
-                let near = (distance - radius).max(distance * 0.02);
                 let far = distance + radius;
+                // The nearest a caster can be to the light, never behind the focus sphere's front.
+                let near = (casters.center.distance(eye) - caster_radius).min(distance - radius).max(far * 0.02);
                 let penumbra = match light.kind {
                     LightKind::Spot { radius, .. } => 2.0 * radius,
                     LightKind::Rect { width, height } => width.max(height),
@@ -601,6 +857,58 @@ mod tests {
         let key = studio.lights[0].illuminance_at(center);
         assert!((key - 1800.0).abs() / 1800.0 < 0.01, "the key gives its design illuminance: {key}");
         assert_eq!(studio.background, Background::Gray(0.18), "[LIT-04] grey backdrop by default");
+    }
+
+    /// todo 1.9: the portrait rigs put their key where their name says (the character faces +Z,
+    /// its left is +X), with soft sources of a visible size; the viewer's backdrop choice swaps
+    /// only a flat grey for paper and keeps the rest of the rig.
+    #[test]
+    fn todo_1_9_portrait_rigs_and_backdrop_choices() {
+        let center = Vec3::new(0.0, 1.6, 0.0);
+        let rig = |kind| LightRig::builtin(kind, center, 0.12);
+        let key = |kind| {
+            let r = rig(kind);
+            let l = r.lights[0];
+            assert!(matches!(l.kind, LightKind::Rect { .. }), "{}: a soft key", kind.name());
+            (l.position - center).normalize_or(Vec3::Z)
+        };
+        let rembrandt = key(BuiltinRig::Rembrandt);
+        assert!(rembrandt.x < -0.5 && rembrandt.y > 0.4, "Rembrandt: high, to the character's right");
+        let clamshell = key(BuiltinRig::Clamshell);
+        assert!(clamshell.x.abs() < 1e-4 && clamshell.y > 0.4 && clamshell.z > 0.6, "clamshell: above the lens");
+        let fill = rig(BuiltinRig::Clamshell).lights[1].position - center;
+        assert!(fill.y < 0.0 && fill.z > 0.0, "clamshell: a reflector below");
+        let loop_key = key(BuiltinRig::Loop);
+        assert!(loop_key.x > 0.3 && loop_key.z > 0.6, "loop: 30 degrees to the side");
+        for l in &rig(BuiltinRig::RimOnly).lights {
+            assert!(l.position.z < center.z, "rim only: every light behind the subject");
+        }
+        // The key's design illuminance, and every new rig's lights are soft with a visible size.
+        let three = rig(BuiltinRig::ThreePoint);
+        assert!((three.lights[0].illuminance_at(center) - 1900.0).abs() < 19.0);
+        let names: Vec<&str> = BuiltinRig::ALL.iter().map(|k| k.name()).collect();
+        for (i, n) in names.iter().enumerate() {
+            assert!(!names[..i].contains(n), "{n} is unique");
+            assert_eq!(rig(BuiltinRig::ALL[i]).name, *n);
+        }
+
+        let studio = rig(BuiltinRig::NeutralStudio);
+        assert_eq!(studio.clone().with_backdrop(BackdropChoice::Rig), studio);
+        let paper = studio.clone().with_backdrop(BackdropChoice::Studio);
+        assert_eq!(paper.background, Background::Backdrop(Backdrop::GRAY));
+        assert_eq!(paper.lights, studio.lights);
+        assert_eq!(
+            rig(BuiltinRig::RimOnly).with_backdrop(BackdropChoice::Studio).background,
+            Background::Backdrop(Backdrop::BLACK),
+            "a dark grey becomes black paper"
+        );
+        let outdoor = rig(BuiltinRig::GoldenHour);
+        assert_eq!(outdoor.clone().with_backdrop(BackdropChoice::Studio).background, Background::Environment);
+        assert_eq!(outdoor.with_backdrop(BackdropChoice::Flat).background, Background::Gray(0.18));
+        assert_eq!(studio.with_backdrop(BackdropChoice::Environment).background, Background::Environment);
+        Backdrop::GRAY.validate().unwrap();
+        Backdrop::BLACK.validate().unwrap();
+        assert!(Backdrop { distance: 0.0, ..Backdrop::GRAY }.validate().is_err());
     }
 
     #[test]

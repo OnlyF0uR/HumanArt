@@ -5,7 +5,9 @@
 //! Three stages, each a pure function of its inputs:
 //!
 //! 1. **Shape** ([`shape_strand`], one strand at a time, rest pose): blend the strand's guides
-//!    (resampled to the groom's point count) in the root frame; set the length (guide length x
+//!    (resampled to the groom's point count) in the root frame, or in world directions turned into
+//!    the root frame (`GenerateInput::world_curves`, what [`generate_groom`] and the template's
+//!    grooms use); set the length (guide length x
 //!    `length.scale` x length map x random variation) by resampling along the curve, extrapolating
 //!    past its end; turn the strand about the root normal by the direction map, the parting, the
 //!    cowlicks and the per-strand noise; add the curl helix, the planar wave, frizz and flyaways;
@@ -91,8 +93,14 @@ pub struct Generated {
 pub struct GenerateInput<'a> {
     /// The strand layout.
     pub layout: &'a GroomLayout,
-    /// The guides resampled to `params.point_count()` points ([`Guides::resampled`]).
+    /// The guides resampled to `params.point_count()` points: offsets in each guide's root frame
+    /// ([`Guides::resampled`]), or world-space offsets from each guide's root with
+    /// `world_curves` ([`Guides::resampled_world`]).
     pub curves: &'a [Vec3],
+    /// The curves are world-space offsets: the strand blends its guides in world directions and
+    /// turns the blend into its own root frame, so guides whose root frames' tangents disagree
+    /// (across a UV seam) blend into the shape they have in the world instead of a bent one.
+    pub world_curves: bool,
     /// The parameters.
     pub params: &'a GroomParams,
     /// The rest root frame of every strand ([`root_frames`]).
@@ -125,14 +133,14 @@ pub fn shape_strand(input: &GenerateInput<'_>, i: usize, out: &mut [Vec3]) {
     let factors = l.factors[i];
     let mut base = [Vec3::ZERO; MAX_STRAND_POINTS as usize];
     let mut res = [Vec3::ZERO; MAX_STRAND_POINTS as usize];
-    // 1. Blend the guides in the root frame.
+    // 1. Blend the guides (in the root frame, or in world directions turned into it).
     for (k, b) in base.iter_mut().enumerate().take(n) {
         let mut acc = Vec3::ZERO;
         for j in 0..4 {
             let g = l.guides[i][j] as usize;
             acc += input.curves.get(g * n + k).copied().unwrap_or(Vec3::ZERO) * l.weights[i][j];
         }
-        *b = acc;
+        *b = if input.world_curves { frame.dir_to_local(acc) } else { acc };
     }
     // 2. Length: resample along the curve to the target length, extrapolating the last segment.
     let mut lb = 0.0_f32;
@@ -288,7 +296,9 @@ pub fn finish_strand(input: &GenerateInput<'_>, shape: &[Vec3], i: usize, out: &
     for k in 1..n {
         length += (out[k] - out[k - 1]).length();
     }
-    let width_root = p.thickness * (1.0 + p.thickness_variation * (2.0 * hash01(key, salt::THICKNESS) - 1.0));
+    let width_root = p.thickness
+        * input.layout.width_factor(i)
+        * (1.0 + p.thickness_variation * (2.0 * hash01(key, salt::THICKNESS) - 1.0));
     StrandAttributes {
         length,
         width_root,
@@ -346,7 +356,8 @@ pub fn generate(input: &GenerateInput<'_>) -> HairResult<Generated> {
     Ok(Generated { shape, world, strands })
 }
 
-/// Convenience: resamples `guides`, builds the rest frames and runs [`generate`].
+/// Convenience: resamples `guides` in world directions ([`Guides::resampled_world`]), builds the
+/// rest frames and runs [`generate`] with the world blend.
 pub fn generate_groom(
     surface: &HairSurface,
     layout: &GroomLayout,
@@ -354,9 +365,9 @@ pub fn generate_groom(
     params: &GroomParams,
     sdf: Option<&SdfGrid>,
 ) -> HairResult<Generated> {
-    let curves = guides.resampled(params.point_count());
+    let curves = guides.resampled_world(params.point_count(), surface)?;
     let frames = root_frames(layout, surface)?;
-    generate(&GenerateInput { layout, curves: &curves, params, frames: &frames, sdf })
+    generate(&GenerateInput { layout, curves: &curves, params, frames: &frames, sdf, world_curves: true })
 }
 
 /// Stage 3: the world points of `strands` on the deformed surface (`positions`, `normals` replace

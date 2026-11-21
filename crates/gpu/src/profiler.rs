@@ -598,7 +598,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
             gpu.device.poll(wgpu::PollType::Poll).unwrap();
             reports += usize::from(profiler.collect());
         }
-        gpu.device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+        crate::device::wait_for(&gpu.device, None, crate::device::GPU_WAIT_LIMIT, "the queued work").unwrap();
         reports += usize::from(profiler.collect());
         assert!(reports >= 1);
         let report = profiler.latest().clone();
@@ -633,7 +633,7 @@ fn main(@builtin(global_invocation_id) id: vec3<u32>) {
         let mut small = GpuProfiler::new(gpu, &mut resources, 1, 1).unwrap();
         frame(gpu, &mut small, &work);
         assert_eq!(small.stats().overflowed, 1);
-        gpu.device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+        crate::device::wait_for(&gpu.device, None, crate::device::GPU_WAIT_LIMIT, "the queued work").unwrap();
         assert!(small.collect());
         assert_eq!((small.latest().passes, small.latest().scopes.len()), (2, 1));
         small.destroy(&mut resources);

@@ -66,6 +66,12 @@ fn composite(@builtin(global_invocation_id) gid: vec3<u32>) {
             }
         }
     }
+    // Low-frequency tone variation (humanart_model::skin_appearance::variation): the baked value in
+    // the first input layer's blue channel, 0.5 neutral, scaled into melanin (attribute 0) and
+    // haemoglobin (attribute 2).
+    let tone = 2.0 * (textureLoad(inputs, p, i32(tile * 4u), 0).z - 0.5);
+    v[0] += tone * globals.mapping1.z;
+    v[2] += tone * globals.mapping1.w;
     for (var l = 0u; l < params.layer_count; l += 1u) {
         let layer = layers[l];
         let mode = layer.head.x;

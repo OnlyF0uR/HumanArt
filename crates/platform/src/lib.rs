@@ -73,6 +73,11 @@ impl Shims {
     }
 }
 
+// [PERF-R1] The test binary counts allocations so the file-system tests can measure them.
+#[cfg(test)]
+#[global_allocator]
+static ALLOCATOR: humanart_core::alloc::CountingAllocator = humanart_core::alloc::CountingAllocator;
+
 #[cfg(test)]
 mod tests {
     use super::*;

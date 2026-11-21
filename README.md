@@ -46,4 +46,4 @@ at your option. Unless you state otherwise, any contribution you submit for incl
 as above, without any additional terms.
 
 Data and fonts keep their own licences (SIL Open Font License, ISC, CC BY 4.0, CC BY-SA 4.0 and
-others); `docs/data-provenance.md` lists every file with its source and licence.
+others); `DATA-ATTRIBUTION.md` gives the credits those licences require and `docs/data-provenance.md` lists every file with its source and licence.

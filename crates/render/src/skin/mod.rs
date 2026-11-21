@@ -493,8 +493,8 @@ impl SkinCompositor {
             mapping.epidermis_min_mm,
             mapping.epidermis_max_mm,
             mapping.carotene_max_molar,
-            0.0,
-            0.0,
+            f64::from(zones.variation_melanin),
+            f64::from(zones.variation_haemoglobin),
         ];
         for (dst, v) in words[m..m + 8].iter_mut().zip(mapping_words) {
             *dst = v as f32;

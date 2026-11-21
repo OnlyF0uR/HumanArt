@@ -3,7 +3,8 @@
 // Three entry points, the three stages of humanart_model::hair::generate (the CPU reference; the
 // code follows it operation for operation, see that module for what each step means):
 //
-// - `shape`, one invocation per strand: blend the strand's guides in its root frame, set the
+// - `shape`, one invocation per strand: blend the strand's guides in its root frame (or in world
+//   directions turned into it, when the curves are world offsets), set the
 //   length by resampling along the curve, turn it about the root normal (direction map, parting,
 //   cowlicks, noise), add curl, wave, frizz and flyaways, write world points to `shape`.
 // - `finish`, one invocation per strand, after `shape` for every strand: clump towards the clump
@@ -12,10 +13,10 @@
 // - `attach`, one invocation per control point, every frame the skin moves: the stored offsets in
 //   the deformed root frames, written to `world` as (position, diameter).
 //
-// Strand records (`strands`, six vec4<u32> per strand): (v0, v1, v2, clump centre),
+// Strand records (`strands`, seven vec4<u32> per strand): (v0, v1, v2, clump centre),
 // (bary.u, bary.v, tangent coef 0, tangent coef 1) as f32 bits, (guide 0..3), (weight 0..3) as f32
 // bits, (length, clump, curl, frizz map factors) as f32 bits, (direction x, direction y, colour
-// offset as f32 bits, key). Positions and normals are packed f32 xyz (the deformation outputs).
+// offset as f32 bits, key), (width factor as f32 bits, unused x3). Positions and normals are packed f32 xyz (the deformation outputs).
 
 #include "groom/common.wgsl"
 
@@ -24,7 +25,8 @@ const MAX_POINTS: u32 = 32u;
 struct Params {
     // strand count, points per strand, guide count, workgroups along x of the per-strand dispatch.
     counts: vec4<u32>,
-    // workgroups along x of the per-point dispatch, has a distance grid, unused, unused.
+    // workgroups along x of the per-point dispatch, has a distance grid, the curves are world
+    // offsets (blend in world directions, then turn into the root frame), unused.
     flags: vec4<u32>,
     // length scale, length variation, direction strength, noise.
     shape: vec4<f32>,
@@ -72,8 +74,8 @@ fn rest_normal(v: u32) -> vec3<f32> {
 }
 
 fn rest_frame(i: u32) -> RootFrame {
-    let r0 = strands[6u * i];
-    let r1 = bitcast<vec4<f32>>(strands[6u * i + 1u]);
+    let r0 = strands[7u * i];
+    let r1 = bitcast<vec4<f32>>(strands[7u * i + 1u]);
     return groom_root_frame(
         rest_position(r0.x), rest_position(r0.y), rest_position(r0.z),
         rest_normal(r0.x), rest_normal(r0.y), rest_normal(r0.z),
@@ -82,8 +84,8 @@ fn rest_frame(i: u32) -> RootFrame {
 }
 
 fn deformed_frame(i: u32) -> RootFrame {
-    let r0 = strands[6u * i];
-    let r1 = bitcast<vec4<f32>>(strands[6u * i + 1u]);
+    let r0 = strands[7u * i];
+    let r1 = bitcast<vec4<f32>>(strands[7u * i + 1u]);
     let p0 = vec3<f32>(positions[3u * r0.x], positions[3u * r0.x + 1u], positions[3u * r0.x + 2u]);
     let p1 = vec3<f32>(positions[3u * r0.y], positions[3u * r0.y + 1u], positions[3u * r0.y + 2u]);
     let p2 = vec3<f32>(positions[3u * r0.z], positions[3u * r0.z + 1u], positions[3u * r0.z + 2u]);
@@ -108,20 +110,24 @@ fn shape(@builtin(global_invocation_id) gid: vec3<u32>) {
     }
     let guide_count = max(params.counts.z, 1u);
     let frame = rest_frame(i);
-    let guides = strands[6u * i + 2u];
-    let weights = bitcast<vec4<f32>>(strands[6u * i + 3u]);
-    let factors = bitcast<vec4<f32>>(strands[6u * i + 4u]);
-    let r5 = strands[6u * i + 5u];
+    let guides = strands[7u * i + 2u];
+    let weights = bitcast<vec4<f32>>(strands[7u * i + 3u]);
+    let factors = bitcast<vec4<f32>>(strands[7u * i + 4u]);
+    let r5 = strands[7u * i + 5u];
     let direction = bitcast<vec2<f32>>(r5.xy);
     let key = r5.w;
     var base: array<vec3<f32>, 32>;
     var res: array<vec3<f32>, 32>;
-    // 1. Blend the guides.
+    // 1. Blend the guides (in the root frame, or in world directions turned into it).
+    let world_curves = params.flags.z != 0u;
     for (var k = 0u; k < n; k++) {
         var acc = vec3<f32>(0.0);
         for (var j = 0u; j < 4u; j++) {
             let g = min(guides[j], guide_count - 1u);
             acc += curves[g * n + k].xyz * weights[j];
+        }
+        if (world_curves) {
+            acc = vec3<f32>(dot(acc, frame.t), dot(acc, frame.b), dot(acc, frame.n));
         }
         base[k] = acc;
     }
@@ -286,9 +292,9 @@ fn finish(@builtin(global_invocation_id) gid: vec3<u32>) {
         return;
     }
     let frame = rest_frame(i);
-    let centre = min(strands[6u * i].w, count - 1u);
-    let factors = bitcast<vec4<f32>>(strands[6u * i + 4u]);
-    let key = strands[6u * i + 5u].w;
+    let centre = min(strands[7u * i].w, count - 1u);
+    let factors = bitcast<vec4<f32>>(strands[7u * i + 4u]);
+    let key = strands[7u * i + 5u].w;
     let strength = params.clump.x * factors.y;
     let offset = params.clump.w;
     var prev = vec3<f32>(0.0);
@@ -316,7 +322,9 @@ fn finish(@builtin(global_invocation_id) gid: vec3<u32>) {
         let l = groom_to_local(frame, q);
         stored[i * n + k] = vec2<u32>(pack2x16float(l.xy), pack2x16float(vec2<f32>(l.z, 0.0)));
     }
-    let width_root = params.thickness.x * (1.0 + params.thickness.z * (2.0 * groom_rand(key, 9u) - 1.0));
+    let width_factor = bitcast<f32>(strands[7u * i + 6u].x);
+    let width_root =
+        params.thickness.x * width_factor * (1.0 + params.thickness.z * (2.0 * groom_rand(key, 9u) - 1.0));
     let color_id = groom_hash(key ^ groom_hash(10u)) & 0xFFFFu;
     var grey = 0u;
     if (groom_rand(key, 11u) < params.thickness.w) {

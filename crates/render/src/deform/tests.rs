@@ -2,11 +2,11 @@
 //! `[AC-WP10-1]`, timings against section 14.2 `[AC-WP10-2]`, incremental drift `[AC-WP10-3]`,
 //! motion vectors, sculpt layers, levels of detail and the allocation-free plan.
 
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use humanart_core::rng::Rng;
+use humanart_gpu::Gpu;
 use humanart_gpu::resources::{Budget, Resources};
-use humanart_gpu::{DeviceRequest, Gpu};
 use humanart_math::{Quat, Transform, Vec2, Vec3, Vec4};
 use humanart_model::delta::{DeltaBasesBuilder, DeltaKind};
 use humanart_model::eval::normals::{TriangleFrames, normal_corner_gather};
@@ -343,8 +343,8 @@ pub(crate) mod fixtures {
 }
 
 fn gpu() -> &'static Gpu {
-    static GPU: OnceLock<Gpu> = OnceLock::new();
-    GPU.get_or_init(|| Gpu::headless_blocking(&DeviceRequest::default()).expect("this machine has a GPU"))
+    // The process's shared device (ADR-040).
+    humanart_gpu::shared_headless().expect("this machine has a GPU")
 }
 
 fn resources() -> Resources {
@@ -372,7 +372,8 @@ fn read_f32(buffer: &wgpu::Buffer) -> Vec<f32> {
     encoder.copy_buffer_to_buffer(buffer, 0, &staging, 0, buffer.size());
     gpu.queue.submit([encoder.finish()]);
     staging.slice(..).map_async(wgpu::MapMode::Read, |r| r.expect("the readback maps"));
-    gpu.device.poll(wgpu::PollType::wait_indefinitely()).expect("the device answers");
+    humanart_gpu::device::wait_for(&gpu.device, None, humanart_gpu::device::GPU_WAIT_LIMIT, "the queued work")
+        .expect("the device answers");
     let words = {
         let bytes = staging.slice(..).get_mapped_range().expect("mapped").to_vec();
         bytes.as_chunks::<4>().0.iter().map(|c| f32::from_le_bytes(*c)).collect()

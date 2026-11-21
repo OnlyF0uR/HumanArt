@@ -12,6 +12,8 @@
 //! - [`parts`]: eyeballs, tear lines, eye occlusion, teeth, gums, tongue, lip-line helper.
 //! - [`regions`]: region, chart and tile tables.
 //! - [`relief`]: surface anatomy (bony and muscular landmarks under the skin, ADR-039).
+//! - [`scan_face`]: the scanned mean face and its shape components `[WP-25]`.
+//! - [`finish`]: the cranium and the nose root, after the scanned face.
 //! - [`landmarks`]: the named surface points `[MOD-06]`.
 //! - [`rig`]: the skeleton and skin weights `[MOD-07]` `[SKIN-01]`.
 //! - [`uv`]: UV islands, cuts, conformal flattening and packing `[MOD-04]`.
@@ -24,6 +26,7 @@ pub mod body;
 pub mod build;
 pub mod cage;
 pub mod face;
+pub mod finish;
 pub mod genitals;
 pub mod landmarks;
 pub mod limbs;
@@ -31,6 +34,7 @@ pub mod parts;
 pub mod regions;
 pub mod relief;
 pub mod rig;
+pub mod scan_face;
 pub mod tube;
 pub mod uv;
 
@@ -75,7 +79,12 @@ pub fn body_surface() -> Result<Surface> {
 
 /// Builds the body surface `[MOD-01]` with the given genital variant (ADR-039).
 pub fn body_surface_with(variant: Variant) -> Result<Surface> {
-    let anatomy = Anatomy::neutral();
+    body_surface_for(variant, anatomy::Auricle::Base)
+}
+
+/// Builds the body surface `[MOD-01]` with the given genital variant (ADR-039) and auricle design.
+pub fn body_surface_for(variant: Variant, auricle: anatomy::Auricle) -> Result<Surface> {
+    let anatomy = Anatomy { auricle, ..Anatomy::neutral() };
     let mut body = body::build_with(&anatomy, variant)?;
     let creases: std::collections::HashSet<(u32, u32)> =
         body.loops.creases.iter().map(|&(a, b)| (a.min(b), a.max(b))).collect();

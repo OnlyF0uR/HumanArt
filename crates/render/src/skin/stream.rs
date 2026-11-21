@@ -188,10 +188,12 @@ impl SkinStreaming {
     }
 
     /// Loads up to `max_loads` (at most [`MAX_COPIES_PER_UPDATE`]) queued pages from the
-    /// compositor's textures on the GPU: the pool assigns the slots and updates the page table, and
-    /// the page contents are recorded into `encoder` (box-averaged to the page's mip, then copied
-    /// into the slot). Submit `encoder` in this frame. The pool's format must be that of `pages`
-    /// and its UV tiles the size of the source's.
+    /// compositor's textures on the GPU: the pool assigns the slots and updates the page table
+    /// ([`StreamingPool::update_external`]: no texels are uploaded from the CPU, only the changed
+    /// page-table rows), and the page contents are recorded into `encoder` (box-averaged to the
+    /// page's mip, then copied into the slot). Submit `encoder` in this frame, before the pool is
+    /// sampled: until then a new slot shows what it held before. The pool's format must be that of
+    /// `pages` and its UV tiles the size of the source's.
     pub fn update_from_gpu(
         &mut self,
         gpu: &Gpu,
@@ -209,14 +211,17 @@ impl SkinStreaming {
         let max_loads = max_loads.min(MAX_COPIES_PER_UPDATE as u32);
         pages.pending.clear();
         let pending = &mut pages.pending;
-        let report = self.pool.update(resources, max_loads, |request, out| {
-            // Overwritten by the GPU copy recorded below (see the module documentation).
-            out.fill(0);
-            if pending.len() < pending.capacity() {
-                pending.push(request);
+        // The pool hands out the slots and uploads nothing for them: the copies recorded below are
+        // the only write of their texels. A page that cannot be recorded is refused, so it stays
+        // missing instead of resident with another page's texels.
+        let updated = self.pool.update_external(resources, max_loads, |request, _| {
+            if pending.len() >= MAX_COPIES_PER_UPDATE {
+                return Err(GpuError::Invalid { what: "more pages than one update can copy" });
             }
+            pending.push(request);
             Ok(())
-        })?;
+        });
+        // Pages that got a slot before a failure are resident: their copies are recorded too.
         let pool_texture = resources
             .texture(self.pool.pool_texture())
             .ok_or(GpuError::Invalid { what: "the streaming pool texture is gone" })?
@@ -236,6 +241,6 @@ impl SkinStreaming {
             n += 1;
         }
         pages.record(gpu, encoder, pool_texture, targets_buffer[..n].iter().copied())?;
-        Ok(report)
+        Ok(updated?)
     }
 }

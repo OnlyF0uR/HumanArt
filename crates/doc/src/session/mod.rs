@@ -190,6 +190,13 @@ pub struct Session<'a> {
     ids: u64,
     link: JournalLink,
     pending: Option<Pending>,
+    /// The project's journal path (empty without a project), kept so that a batched write does
+    /// not build it `[PERF-R1]`.
+    journal_path: String,
+    /// The record line being written, reused between batches `[PERF-R1]`.
+    line: Vec<u8>,
+    /// The edits of the last batch written, reused by the next drag batch `[PERF-R1]`.
+    spare_edits: Vec<Edit>,
     gesture_ms: u64,
     since_autosave: u32,
     last_change_ms: u64,
@@ -235,6 +242,9 @@ impl<'a> Session<'a> {
             ids: 0,
             link: JournalLink::default(),
             pending: None,
+            journal_path: String::new(),
+            line: Vec::new(),
+            spare_edits: Vec::new(),
             gesture_ms: now,
             since_autosave: 0,
             last_change_ms: now,
@@ -254,6 +264,7 @@ impl<'a> Session<'a> {
     ) -> Result<Self, CommandError> {
         let project = Project::create(fs, root, &doc, registry).map_err(storage_or_invalid)?;
         let mut session = Self::new(doc, registry, fs, clock, config, seed);
+        session.journal_path = project.journal_path();
         session.project = Some(project);
         Ok(session)
     }
@@ -305,6 +316,7 @@ impl<'a> Session<'a> {
                 }
             }
         };
+        session.journal_path = project.journal_path();
         session.project = Some(project);
         session.seal_open()?;
         // Obsolete proposal files are retried by every save and tick if this fails.
@@ -481,16 +493,54 @@ impl<'a> Session<'a> {
         }
     }
 
+    /// Journals the batched gesture frames. A failed write keeps them pending.
     fn flush_pending(&mut self) -> Result<(), DocError> {
         let Some(p) = self.pending.take() else { return Ok(()) };
-        let record = Record::Extend { id: p.id, edits: p.edits, last_ms: p.last_ms, elements: p.elements };
-        if let Err(e) = self.append(&record) {
-            if let Record::Extend { id, edits, last_ms, elements } = record {
-                self.pending = Some(Pending { id, edits, since_ms: p.since_ms, last_ms, elements });
+        match self.append_extend(&p) {
+            Ok(()) => {
+                // Their strings are reused by the next batch of a drag.
+                self.spare_edits = p.edits;
+                Ok(())
             }
-            return Err(e);
+            Err(e) => {
+                self.pending = Some(p);
+                Err(e)
+            }
         }
-        Ok(())
+    }
+
+    /// Appends the `extend` record of `p`. In the steady state (journal started and in step, all
+    /// edits sets) the line is written into the reused buffer and appended directly, so nothing
+    /// is allocated here `[PERF-R1]`; the bytes are those of [`Session::append`].
+    fn append_extend(&mut self, p: &Pending) -> Result<(), DocError> {
+        /// A buffer grown past this by a large record is not kept.
+        const KEEP_LINE_BYTES: usize = 64 << 10;
+        if self.project.is_some() && self.link.restart.is_none() && !self.link.suspect {
+            let seq = self.link.seq + 1;
+            let encoded = crate::journal::encode_record_into(&mut self.line, seq, |out| {
+                crate::save::write_extend(out, p.id, &p.edits, p.last_ms, p.elements)
+            });
+            let result = match encoded {
+                Ok(true) => match self.fs.append(&self.journal_path, &self.line) {
+                    Ok(()) => {
+                        self.link.seq = seq;
+                        Ok(true)
+                    }
+                    Err(e) => {
+                        self.link.suspect = true;
+                        Err(DocError::platform(&self.journal_path, e))
+                    }
+                },
+                other => other,
+            };
+            if self.line.capacity() > KEEP_LINE_BYTES {
+                self.line = Vec::new();
+            }
+            if result? {
+                return Ok(());
+            }
+        }
+        self.append(&Record::Extend { id: p.id, edits: p.edits.clone(), last_ms: p.last_ms, elements: p.elements })
     }
 
     /// Ends an open gesture: journals its last frames, seals the entry and emits its event.
@@ -800,9 +850,10 @@ impl<'a> Session<'a> {
             &self.history,
             Mode::Proposal,
         )?);
-        // Locks set on the main document after the proposal was opened apply too; protection
-        // only warns here, and those warnings are already in.
-        lock::check(
+        // Locks set on the main document after the proposal was opened apply too, and so does
+        // protection of what a human changed there since: the branch document does not see that
+        // edit, so its `needs_review` warning comes from this check (once per target).
+        for w in lock::check(
             &self.doc,
             self.registry,
             &resolved.edits,
@@ -810,7 +861,11 @@ impl<'a> Session<'a> {
             &resolved.regions,
             &self.history,
             Mode::Proposal,
-        )?;
+        )? {
+            if !warnings.iter().any(|x| x.code == w.code && x.target == w.target) {
+                warnings.push(w);
+            }
+        }
         let before = self.scorer.map(|s| s.score(&p.doc, self.registry));
         apply_edits(&mut p.doc, self.registry, &resolved.edits)?;
         let after = self.scorer.map(|s| s.score(&p.doc, self.registry));

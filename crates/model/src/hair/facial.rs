@@ -163,7 +163,7 @@ pub fn facial_groom(
     if guides.is_empty() {
         return Err(HairError::invalid("facial hair", 0, "no guide could be placed"));
     }
-    Ok(PresetGroom { name: spec.name, guides, params, area: mask.triangles().to_vec() })
+    Ok(PresetGroom { name: spec.name, guides, params, area: mask.triangles().to_vec(), part: None })
 }
 
 /// Settings of [`body_hair`].
@@ -286,7 +286,7 @@ pub fn body_hair(
     if guides.is_empty() {
         return Err(HairError::invalid("body hair", 0, "no guide could be placed"));
     }
-    Ok(PresetGroom { name: "body", guides, params, area: area.triangles().to_vec() })
+    Ok(PresetGroom { name: "body", guides, params, area: area.triangles().to_vec(), part: None })
 }
 
 #[cfg(test)]

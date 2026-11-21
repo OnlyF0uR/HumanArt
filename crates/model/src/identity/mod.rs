@@ -36,6 +36,7 @@
 //! - [`measure`]: measurements on the template and the ANSUR II calibration.
 //! - [`body`]: global axes, body proportions, torso and breast shape, hands and feet.
 //! - [`face`]: face, ears, neck, eyes, teeth and the asymmetry components.
+//! - [`scan`]: the face-shape components measured from scans (scan-derived, not authored).
 //!
 //! Entry points: [`build`] returns the components with their regressor rows; [`with_identity`]
 //! returns a new template that has them (existing components are kept and re-indexed by name).
@@ -44,6 +45,7 @@ pub mod body;
 pub mod error;
 pub mod face;
 pub mod measure;
+pub mod scan;
 pub mod skeletal;
 pub mod space;
 

@@ -24,9 +24,15 @@
 //! - [`spectrum`]: FFT, power spectra, autocorrelation and the tiling detector `[AC-WP13-2]`.
 //! - [`features`]: the procedural skin features library `[OTH-02]`.
 //! - [`noise`]: the PCG hash and periodic noise shared with the WGSL.
+//! - [`regional`]: measured regional specular and sebum per face zone (todo 1.4).
+//! - [`values`]: the document's global skin values and what they set (todo 1.4).
+//! - [`wrinkle_author`]: the template's procedural expression wrinkle maps (todo 1.4).
+//! - [`variation`]: low-frequency skin tone variation over the rest surface (todo 1.4).
+//! - [`baked`]: baked thickness and occlusion to the compositor's input bytes (todo 1.4).
 //! - [`error`]: the error enum, [`SkinError`].
 
 pub mod antitile;
+pub mod baked;
 pub mod channels;
 pub mod dirty;
 pub mod error;
@@ -35,10 +41,14 @@ pub mod layers;
 pub mod microdetail;
 pub mod noise;
 pub mod pigment;
+pub mod regional;
 pub mod resolve;
 mod spectra_table;
 pub mod spectrum;
+pub mod values;
+pub mod variation;
 pub mod wrinkle;
+pub mod wrinkle_author;
 pub mod zone_bake;
 pub mod zones;
 

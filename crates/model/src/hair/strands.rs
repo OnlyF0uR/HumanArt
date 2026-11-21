@@ -253,6 +253,26 @@ impl Guides {
         out
     }
 
+    /// Like [`resampled`](Self::resampled), but every point as a world-space offset from its
+    /// guide's root (the root frame's rotation applied, no translation): the curves of the world
+    /// blend (`GenerateInput::world_curves`), which do not depend on how the root frames' tangents
+    /// happen to turn from guide to guide (they flip across a UV seam).
+    ///
+    /// # Errors
+    /// [`HairError::Invalid`] when a guide's root is not on `surface`.
+    pub fn resampled_world(&self, points: u32, surface: &HairSurface) -> HairResult<Vec<Vec3>> {
+        let p = points as usize;
+        let mut out = self.resampled(points);
+        for i in 0..self.len() {
+            let frame =
+                self.frame(i, surface).ok_or_else(|| HairError::invalid("guide", i, "root not on the surface"))?;
+            for o in &mut out[i * p..(i + 1) * p] {
+                *o = frame.dir_to_world(*o);
+            }
+        }
+        Ok(out)
+    }
+
     /// Checks every root against `surface` and every offset for finiteness.
     pub fn check(&self, surface: &HairSurface) -> HairResult<()> {
         for i in 0..self.len() {

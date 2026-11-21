@@ -5,11 +5,14 @@
 //! | pass        | shader                     | item | reads                                   | writes |
 //! |-------------|----------------------------|------|-----------------------------------------|--------|
 //! | `shadows`   | `render/shadow.wgsl`       | 4    | scene                                   | shadow atlas (imported) |
-//! | `geometry`  | `render/geometry.wgsl`     | 5    | scene, lights, IBL, shadow atlas        | diffuse, specular (rgba16f), surface (rgba32u), depth (d32f) |
+//! | `prepass`   | `render/shadow.wgsl`       | -    | scene                                   | prepass depth (d32f); only with occlusion |
+//! | `occlusion` | `render/occlusion.wgsl`    | -    | prepass depth                           | ambient (r8), contact (rgba8); only with occlusion |
+//! | `geometry`  | `render/geometry.wgsl`     | 5    | scene, lights, IBL, shadow atlas, ambient, contact | diffuse, specular (rgba16f), surface (rgba32u), depth (d32f) |
 //! | `sss_h`     | `render/sss.wgsl`          | 6    | diffuse, specular (profile scale)       | sss temp (rgba16f) |
 //! | `sss_v`     | `render/sss.wgsl`          | 6    | sss temp, specular                      | diffuse sss (rgba16f) |
 //! | `composite` | `render/composite.wgsl`    | 9    | diffuse (sss), specular, surface, depth | hdr (rgba16f) |
-//! | `taa`       | `render/taa.wgsl`          | 10   | hdr, history in, surface, depth         | history out (imported) |
+//! | `dof`       | `render/dof.wgsl`          | -    | hdr, depth                              | focused (rgba16f); only with a lens |
+//! | `taa`       | `render/taa.wgsl`          | 10   | hdr (or focused), history in, surface, depth | history out (imported) |
 //! | `tonemap`   | `post/tonemap.wgsl`        | 10   | history out (or hdr without TAA)        | display (imported) |
 //! | `debug`     | `render/debug.wgsl`        | 11   | diffuse, specular, surface, depth, hdr  | display (replaces `tonemap`) |
 //! | `overlay`   | `render/overlay.wgsl`      | 11   | depth                                   | display |
@@ -37,9 +40,9 @@ use humanart_gpu::resources::{BufferDesc, BufferId, Category, Resources, Sampler
 use humanart_gpu::uniform_ring::{UniformRing, UniformRingDesc};
 use humanart_gpu::{Gpu, GpuError};
 use humanart_math::color::tonemap::ToneMapper;
-use humanart_math::{Vec2, taa_jitter_pixels};
+use humanart_math::{Vec2, Vec3, taa_jitter_pixels};
 
-use crate::camera::{Camera, TileRect, ViewMatrices};
+use crate::camera::{Camera, Lens, TileRect, ViewMatrices};
 use crate::error::RenderError;
 use crate::graph::{CompiledGraph, GraphBuilder, ResourceId, TextureInfo};
 use crate::ibl::{EnvironmentSource, Ibl, SPECULAR_MIPS};
@@ -54,14 +57,27 @@ pub const HDR_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba16Float;
 pub const SURFACE_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba32Uint;
 /// Depth format: reversed-Z, 32-bit float `[RND-02]`.
 pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
-/// Format of the picking target: pick id, depth bits.
-pub const PICK_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rg32Uint;
+/// Format of the picking target: pick id, depth bits, triangle, packed barycentrics
+/// (`shaders/render/pick.wgsl`).
+pub const PICK_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba32Uint;
 /// Most overlay primitives per frame.
 pub const MAX_OVERLAY_PRIMITIVES: usize = 4096;
 /// Largest render target side the renderer accepts; bigger images are tiled stills `[QUAL-04]`.
 pub const MAX_TARGET_SIDE: u32 = 8192;
 /// Frames of the TAA jitter sequence (Halton 2, 3).
 pub const JITTER_PERIOD: u32 = 16;
+/// Radius of the screen-space ambient occlusion, metres: a lid fold, a nostril wing, the gap
+/// between two fingers. Larger shapes are the baked occlusion's and the shadow maps'.
+pub const OCCLUSION_RADIUS: f32 = 0.025;
+/// Length of the contact-shadow rays, metres.
+pub const CONTACT_SHADOW_LENGTH: f32 = 0.015;
+/// The farthest a screen-space pass reads from a pixel (`MAX_REACH_PIXELS` of
+/// `render/occlusion.wgsl`, the largest circle of confusion of `render/dof.wgsl`): the overlap a
+/// tiled still needs to equal the untiled one when occlusion or a lens is on `[QUAL-04]`.
+pub const SCREEN_SPACE_REACH: u32 = 96;
+/// Formats of the occlusion pass's targets: the ambient term and the contact shadows per layer.
+const AMBIENT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::R8Unorm;
+const CONTACT_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Rgba8Unorm;
 
 /// The quality tiers `[QUAL-01]`: they choose shader variants (override constants).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -81,6 +97,25 @@ impl Quality {
         match self {
             Self::Interactive => 1,
             Self::Review | Self::Still => 0,
+        }
+    }
+
+    /// Taps of the depth-of-field gather (`DOF_TAPS` of `render/dof.wgsl`).
+    pub const fn dof_taps(self) -> u32 {
+        match self {
+            Self::Interactive => 24,
+            Self::Review | Self::Still => 48,
+        }
+    }
+
+    /// The occlusion pass's resolution divisor: 2 (half resolution, the four pixels of a block
+    /// taken in turn and averaged by the temporal accumulation) below the Still tier, 1 for stills.
+    /// At full resolution the pass took 0.9 ms of a 2560 x 1440 frame (todo 1.9, the viewport's
+    /// budget); a block of 2 x 2 pixels is far smaller than the 25 mm the occlusion reaches.
+    pub const fn occlusion_scale(self) -> u32 {
+        match self {
+            Self::Interactive | Self::Review => 2,
+            Self::Still => 1,
         }
     }
 
@@ -198,6 +233,14 @@ pub struct RenderConfig {
     pub tone_mapper: ToneMapper,
     /// Side of each shadow-map layer.
     pub shadow_map_size: u32,
+    /// Fit the shadow maps to what the camera sees of the casters ([`crate::focus`]) instead of
+    /// to all of them: finer shadows on a face (todo 1.9). Off, the maps do not depend on the
+    /// camera.
+    pub shadow_focus: bool,
+    /// Screen-space ambient occlusion and contact shadows (todo 1.9): a depth prepass and the
+    /// `occlusion` pass before the geometry pass. Off in [`RenderConfig::new`]; the viewers of
+    /// the editor and the command-line tool turn it on.
+    pub occlusion: bool,
 }
 
 impl RenderConfig {
@@ -213,6 +256,8 @@ impl RenderConfig {
             taa: true,
             tone_mapper: ToneMapper::PbrNeutral,
             shadow_map_size: 2048,
+            shadow_focus: true,
+            occlusion: false,
         }
     }
 
@@ -306,6 +351,30 @@ pub struct PickHit {
     pub pick_id: u32,
     /// Reversed-Z depth of the hit (0 when nothing).
     pub depth: f32,
+    /// The triangle hit `[VP-01]`: its index in the object's mesh (indices `3 t .. 3 t + 3` of
+    /// [`crate::scene::Mesh::indices`]); `None` when nothing was hit.
+    pub triangle: Option<u32>,
+    /// The hit point's barycentric weights of the triangle's three corners (sum 1, each to about
+    /// 1.5e-5); zero when nothing was hit.
+    pub barycentric: [f32; 3],
+}
+
+impl PickHit {
+    /// Decodes the picking target's texel (four little-endian `u32`: pick id, depth bits,
+    /// triangle, barycentrics as two unorm16) read back for `pixel`; `None` when it is short.
+    pub fn decode(pixel: [u32; 2], texel: &[u8]) -> Option<Self> {
+        let word = |i: usize| -> Option<u32> {
+            let b = texel.get(4 * i..4 * i + 4)?;
+            Some(u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
+        };
+        let (pick_id, depth, triangle, packed) = (word(0)?, f32::from_bits(word(1)?), word(2)?, word(3)?);
+        if pick_id == 0 {
+            return Some(Self { pixel, pick_id, depth, triangle: None, barycentric: [0.0; 3] });
+        }
+        let b1 = f32::from(u16::try_from(packed & 0xffff).unwrap_or(0)) / 65535.0;
+        let b2 = f32::from(u16::try_from(packed >> 16).unwrap_or(0)) / 65535.0;
+        Some(Self { pixel, pick_id, depth, triangle: Some(triangle), barycentric: [(1.0 - b1 - b2).max(0.0), b1, b2] })
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -314,6 +383,9 @@ enum Key {
     Geometry(u32, u32),
     Sss(bool),
     Shadow,
+    Prepass,
+    Occlusion,
+    Dof(u32),
     Composite,
     Taa,
     Tonemap(u32),
@@ -329,6 +401,10 @@ enum Key {
 pub enum PassKind {
     /// Shadow maps.
     Shadows,
+    /// Depth alone, ahead of the geometry pass, for the occlusion pass.
+    Prepass,
+    /// Screen-space ambient occlusion and contact shadows.
+    Occlusion,
     /// Opaque geometry with lighting.
     Geometry,
     /// Subsurface scattering of skin along x.
@@ -339,6 +415,8 @@ pub enum PassKind {
     Composite,
     /// Hair: deep opacity maps, visibility, resolve over the composite, motion (`crate::hair`).
     Hair,
+    /// Depth of field of the still's lens.
+    DepthOfField,
     /// Temporal anti-aliasing.
     Taa,
     /// Display transform.
@@ -361,6 +439,10 @@ struct GraphResources {
     surface: ResourceId,
     depth: ResourceId,
     hdr: ResourceId,
+    /// The prepass depth, the ambient occlusion and the contact shadows, with occlusion on.
+    occlusion: Option<[ResourceId; 3]>,
+    /// The image after the depth of field, with a lens.
+    focused: Option<ResourceId>,
 }
 
 /// Bind-group layouts and pipeline layouts, created once.
@@ -374,6 +456,10 @@ struct Layouts {
     debug: wgpu::BindGroupLayout,
     overlay: wgpu::BindGroupLayout,
     sss: wgpu::BindGroupLayout,
+    occlusion: wgpu::BindGroupLayout,
+    dof: wgpu::BindGroupLayout,
+    occlusion_pipeline: wgpu::PipelineLayout,
+    dof_pipeline: wgpu::PipelineLayout,
     geometry_pipeline: wgpu::PipelineLayout,
     sss_pipeline: wgpu::PipelineLayout,
     shadow_pipeline: wgpu::PipelineLayout,
@@ -402,6 +488,11 @@ struct Targets {
     taa_bind: [wgpu::BindGroup; 2],
     tonemap_bind: [wgpu::BindGroup; 2],
     debug_bind: wgpu::BindGroup,
+    /// With occlusion on: the light resources with this configuration's ambient and contact
+    /// targets (instead of the renderer's own, which holds white), and the occlusion pass's input.
+    occlusion_binds: Option<[wgpu::BindGroup; 2]>,
+    /// With a lens: the depth-of-field pass's inputs.
+    dof_bind: Option<wgpu::BindGroup>,
 }
 
 /// The group-1 bind groups of the bound scene: the shared streams, and one per deformed mesh
@@ -456,7 +547,14 @@ pub struct Renderer {
     ibl: Ibl,
     shadow_atlas: TextureId,
     shadow_layers: Vec<wgpu::TextureView>,
+    atlas_view: wgpu::TextureView,
+    compare_sampler: wgpu::Sampler,
+    lut_view: wgpu::TextureView,
+    /// A white texel: the ambient and contact inputs of the geometry pass without occlusion.
+    white: TextureId,
     lighting_bind: wgpu::BindGroup,
+    /// The lens of the depth of field, when on.
+    lens: Option<Lens>,
     preintegrated: TextureId,
     /// The eye and mouth table of the geometry pass (`crate::eye::FeatureTable`).
     features: BufferId,
@@ -535,8 +633,13 @@ impl Layouts {
                 texture_entry(6, FLOAT, D2),
                 // The eye and mouth table [EYE-01] [MTH-01] (crate::eye::FeatureTable).
                 storage_entry(7, wgpu::ShaderStages::FRAGMENT),
+                // Screen-space ambient occlusion and contact shadows (render/occlusion.wgsl).
+                texture_entry(8, FLOAT, D2),
+                texture_entry(9, FLOAT, D2),
             ],
         );
+        let occlusion = bgl("occlusion inputs", &[texture_entry(0, DEPTH, D2)]);
+        let dof = bgl("depth of field inputs", &[texture_entry(0, FLOAT, D2), texture_entry(1, DEPTH, D2)]);
         let composite = bgl(
             "composite inputs",
             &[
@@ -619,6 +722,10 @@ impl Layouts {
             overlay_pipeline: pl("overlay", &[Some(ring), Some(&scene), Some(&overlay)]),
             pick_pipeline: pl("pick", &[Some(ring), Some(&scene)]),
             sss_pipeline: pl("subsurface", &[Some(ring), Some(&sss)]),
+            occlusion_pipeline: pl("occlusion", &[Some(ring), Some(&occlusion)]),
+            dof_pipeline: pl("depth of field", &[Some(ring), Some(&dof)]),
+            occlusion,
+            dof,
             sss,
             scene,
             lighting,
@@ -650,6 +757,38 @@ fn color_attachment(view: &wgpu::TextureView, clear: Option<wgpu::Color>) -> wgp
             store: wgpu::StoreOp::Store,
         },
     }
+}
+
+/// The light resources of group 2: the IBL, the shadow atlas, the skin table, the eye and mouth
+/// table, and the ambient occlusion and contact shadows (`views`: atlas, skin table, ambient,
+/// contact).
+fn lighting_bind_group(
+    device: &wgpu::Device,
+    layout: &wgpu::BindGroupLayout,
+    ibl: &Ibl,
+    sh: &wgpu::Buffer,
+    features: &wgpu::Buffer,
+    views: [&wgpu::TextureView; 4],
+    compare: &wgpu::Sampler,
+) -> wgpu::BindGroup {
+    let [atlas, lut, ambient, contact] = views;
+    let tv = wgpu::BindingResource::TextureView;
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("lighting"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry { binding: 0, resource: tv(ibl.specular_view()) },
+            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(ibl.sampler()) },
+            wgpu::BindGroupEntry { binding: 2, resource: tv(ibl.dfg_view()) },
+            wgpu::BindGroupEntry { binding: 3, resource: sh.as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 4, resource: tv(atlas) },
+            wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::Sampler(compare) },
+            wgpu::BindGroupEntry { binding: 6, resource: tv(lut) },
+            wgpu::BindGroupEntry { binding: 7, resource: features.as_entire_binding() },
+            wgpu::BindGroupEntry { binding: 8, resource: tv(ambient) },
+            wgpu::BindGroupEntry { binding: 9, resource: tv(contact) },
+        ],
+    })
 }
 
 /// The tone mapper's index in `lib/color.wgsl`.
@@ -733,20 +872,24 @@ impl Renderer {
             tag: Tag::shared(Category::Other, "eye and mouth table"),
         })?;
         let features_buffer = raw_buffer(resources, features)?.clone();
-        let lighting_bind = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: Some("lighting"),
-            layout: &layouts.lighting,
-            entries: &[
-                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(ibl.specular_view()) },
-                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(ibl.sampler()) },
-                wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::TextureView(ibl.dfg_view()) },
-                wgpu::BindGroupEntry { binding: 3, resource: sh.as_entire_binding() },
-                wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(&atlas_view) },
-                wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::Sampler(&compare) },
-                wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::TextureView(&lut_view) },
-                wgpu::BindGroupEntry { binding: 7, resource: features_buffer.as_entire_binding() },
-            ],
-        });
+        let (white, _) = resources.create_texture(&TextureDesc::d2(
+            1,
+            1,
+            CONTACT_FORMAT,
+            wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            Tag::shared(Category::Textures, "white texel"),
+        ))?;
+        resources.write_texture_level(white, 0, 0, &[255; 4])?;
+        let white_view = raw_texture(resources, white)?.create_view(&wgpu::TextureViewDescriptor::default());
+        let lighting_bind = lighting_bind_group(
+            &device,
+            &layouts.lighting,
+            &ibl,
+            &sh,
+            &features_buffer,
+            [&atlas_view, &lut_view, &white_view, &white_view],
+            &compare,
+        );
         let (overlay_buffer, _) = resources.create_buffer(&BufferDesc {
             size: (MAX_OVERLAY_PRIMITIVES * std::mem::size_of::<OverlayPrimitive>()) as u64,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
@@ -794,7 +937,12 @@ impl Renderer {
             ibl,
             shadow_atlas,
             shadow_layers,
+            atlas_view,
+            compare_sampler: compare,
+            lut_view,
+            white,
             lighting_bind,
+            lens: None,
             preintegrated,
             features,
             sss_kernel,
@@ -913,6 +1061,8 @@ impl Renderer {
             "render/shadow.wgsl",
             "render/composite.wgsl",
             "render/sss.wgsl",
+            "render/occlusion.wgsl",
+            "render/dof.wgsl",
             "render/taa.wgsl",
             "post/tonemap.wgsl",
             "render/debug.wgsl",
@@ -1003,6 +1153,39 @@ impl Renderer {
             // Reversed-Z: a negative bias moves stored depths away from the light.
             depth.bias = wgpu::DepthBiasState { constant: -4, slope_scale: -2.0, clamp: 0.0 };
             make(p, "shadow", "render/shadow.wgsl", &layouts.shadow_pipeline, "vs_shadow", None, &[], Some(depth), &[])
+        })?;
+        // The prepass draws the scene with the shadow shader: the first matrix of the frame block is
+        // the camera's jittered world-to-clip, where that shader expects its light's.
+        self.cache.render_pipeline(Key::Prepass, |p| {
+            let depth = Some(depth_state(true));
+            make(p, "prepass", "render/shadow.wgsl", &layouts.shadow_pipeline, "vs_shadow", None, &[], depth, &[])
+        })?;
+        self.cache.render_pipeline(Key::Occlusion, |p| {
+            make(
+                p,
+                "occlusion",
+                "render/occlusion.wgsl",
+                &layouts.occlusion_pipeline,
+                "vs_occlusion",
+                Some("fs_occlusion"),
+                &[target(AMBIENT_FORMAT, None), target(CONTACT_FORMAT, None)],
+                None,
+                &[],
+            )
+        })?;
+        let dof_taps = config.quality.dof_taps();
+        self.cache.render_pipeline(Key::Dof(dof_taps), |p| {
+            make(
+                p,
+                "depth of field",
+                "render/dof.wgsl",
+                &layouts.dof_pipeline,
+                "vs_dof",
+                Some("fs_dof"),
+                &[target(HDR_FORMAT, None)],
+                None,
+                &[("DOF_TAPS", f64::from(dof_taps))],
+            )
         })?;
         self.cache.render_pipeline(Key::Composite, |p| {
             make(
@@ -1118,7 +1301,26 @@ impl Renderer {
         let display = g.import("display", TextureInfo::d2(w, h, wgpu::TextureFormat::Rgba8Unorm, rt));
         let pick = g.import("pick", TextureInfo::d2(1, 1, PICK_FORMAT, rt));
         g.pass("shadows", PassKind::Shadows).write(shadow);
-        g.pass("geometry", PassKind::Geometry).read(shadow).write(diffuse).write(specular).write(surface).write(depth);
+        let occlusion = if c.occlusion {
+            let pre_depth = g.texture("prepass depth", TextureInfo::d2(w, h, DEPTH_FORMAT, rt));
+            let s = c.quality.occlusion_scale();
+            let (ow, oh) = (w.div_ceil(s), h.div_ceil(s));
+            let ambient = g.texture("ambient", TextureInfo::d2(ow, oh, AMBIENT_FORMAT, rt));
+            let contact = g.texture("contact", TextureInfo::d2(ow, oh, CONTACT_FORMAT, rt));
+            g.pass("prepass", PassKind::Prepass).write(pre_depth);
+            g.pass("occlusion", PassKind::Occlusion).read(pre_depth).write(ambient).write(contact);
+            Some([pre_depth, ambient, contact])
+        } else {
+            None
+        };
+        {
+            let geometry = g.pass("geometry", PassKind::Geometry).read(shadow);
+            let geometry = match occlusion {
+                Some([_, ambient, contact]) => geometry.read(ambient).read(contact),
+                None => geometry,
+            };
+            geometry.write(diffuse).write(specular).write(surface).write(depth);
+        }
         let (sss_temp, diffuse_sss) = if c.quality.sss_mode() == 0 {
             let temp = g.texture("sss temp", TextureInfo::d2(w, h, HDR_FORMAT, rt));
             let out = g.texture("diffuse sss", TextureInfo::d2(w, h, HDR_FORMAT, rt));
@@ -1140,11 +1342,20 @@ impl Renderer {
                 .write(surface)
                 .write(depth);
         }
+        // The depth of field works on the composited image (hair included) and its depth.
+        let focused = if self.lens.is_some() && c.debug == DebugView::Beauty {
+            let out = g.texture("focused", TextureInfo::d2(w, h, HDR_FORMAT, rt));
+            g.pass("dof", PassKind::DepthOfField).read(hdr).read(depth).write(out);
+            Some(out)
+        } else {
+            None
+        };
+        let image = focused.unwrap_or(hdr);
         if c.taa {
-            g.pass("taa", PassKind::Taa).read(hdr).read(history_in).read(surface).read(depth).write(history_out);
+            g.pass("taa", PassKind::Taa).read(image).read(history_in).read(surface).read(depth).write(history_out);
         }
         if c.debug == DebugView::Beauty {
-            g.pass("tonemap", PassKind::Tonemap).read(if c.taa { history_out } else { hdr }).write(display);
+            g.pass("tonemap", PassKind::Tonemap).read(if c.taa { history_out } else { image }).write(display);
             if c.taa {
                 g.output(history_out);
             }
@@ -1196,7 +1407,7 @@ impl Renderer {
         let (h0, h0v) = make(resources, HDR_FORMAT, "taa history")?;
         let (h1, h1v) = make(resources, HDR_FORMAT, "taa history")?;
         let (display_id, display_view) = make(resources, wgpu::TextureFormat::Rgba8Unorm, "display")?;
-        let res = GraphResources { diffuse, sss_temp, diffuse_sss, specular, surface, depth, hdr };
+        let res = GraphResources { diffuse, sss_temp, diffuse_sss, specular, surface, depth, hdr, occlusion, focused };
         // A view of a resource; an unused one (culled) gets the display view, never bound.
         let view_of = |r: ResourceId| graph.physical(r).and_then(|s| views.get(s)).unwrap_or(&display_view);
         let device = resources.device();
@@ -1239,7 +1450,7 @@ impl Renderer {
                 label: Some("taa inputs"),
                 layout: &self.layouts.taa,
                 entries: &[
-                    wgpu::BindGroupEntry { binding: 0, resource: tv(view_of(hdr)) },
+                    wgpu::BindGroupEntry { binding: 0, resource: tv(view_of(image)) },
                     wgpu::BindGroupEntry { binding: 1, resource: tv(&history_views[1 - parity]) },
                     wgpu::BindGroupEntry { binding: 2, resource: tv(view_of(surface)) },
                     wgpu::BindGroupEntry { binding: 3, resource: tv(view_of(depth)) },
@@ -1249,7 +1460,7 @@ impl Renderer {
         });
         let tonemap_buffer = raw_buffer(resources, self.tonemap_buffer)?;
         let tonemap_bind = [0, 1].map(|parity: usize| {
-            let source = if c.taa { &history_views[parity] } else { view_of(hdr) };
+            let source = if c.taa { &history_views[parity] } else { view_of(image) };
             device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some("tonemap inputs"),
                 layout: &self.layouts.tonemap,
@@ -1271,7 +1482,41 @@ impl Renderer {
                 wgpu::BindGroupEntry { binding: 5, resource: tv(view_of(diffuse)) },
             ],
         });
+        let occlusion_binds = match occlusion {
+            Some([pre_depth, ambient, contact]) => {
+                let sh = raw_buffer(resources, self.ibl.sh_buffer())?;
+                let features = raw_buffer(resources, self.features)?;
+                let lighting = lighting_bind_group(
+                    device,
+                    &self.layouts.lighting,
+                    &self.ibl,
+                    sh,
+                    features,
+                    [&self.atlas_view, &self.lut_view, view_of(ambient), view_of(contact)],
+                    &self.compare_sampler,
+                );
+                let input = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("occlusion inputs"),
+                    layout: &self.layouts.occlusion,
+                    entries: &[wgpu::BindGroupEntry { binding: 0, resource: tv(view_of(pre_depth)) }],
+                });
+                Some([lighting, input])
+            }
+            None => None,
+        };
+        let dof_bind = focused.map(|_| {
+            device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("depth of field inputs"),
+                layout: &self.layouts.dof,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: tv(view_of(hdr)) },
+                    wgpu::BindGroupEntry { binding: 1, resource: tv(view_of(depth)) },
+                ],
+            })
+        });
         Ok(Targets {
+            occlusion_binds,
+            dof_bind,
             graph,
             res,
             physical,
@@ -1300,13 +1545,45 @@ impl Renderer {
         if self.config.taa {
             t.history.get(1 - self.state.parity).copied()
         } else {
-            t.graph.physical(t.res.hdr).and_then(|s| t.physical.get(s)).copied()
+            t.graph.physical(t.res.focused.unwrap_or(t.res.hdr)).and_then(|s| t.physical.get(s)).copied()
         }
+    }
+
+    /// The lens of the depth of field, when on.
+    pub fn lens(&self) -> Option<&Lens> {
+        self.lens.as_ref()
+    }
+
+    /// Sets (or removes) the lens of the depth of field (todo 1.9): with one, the `dof` pass runs
+    /// between the composite (and the hair) and the temporal accumulation, and the history starts
+    /// again. The graph is recompiled only when the pass appears or goes.
+    ///
+    /// # Errors
+    /// [`RenderError::InvalidParameter`] for an f-number or focus distance out of range.
+    pub fn set_lens(&mut self, resources: &mut Resources, lens: Option<Lens>) -> Result<(), RenderError> {
+        if let Some(l) = &lens {
+            l.validate()?;
+        }
+        if lens == self.lens {
+            return Ok(());
+        }
+        let rebuild = lens.is_some() != self.lens.is_some();
+        self.lens = lens;
+        if rebuild && let Some(targets) = self.targets.take() {
+            for id in targets.physical.iter().chain(&targets.history).chain(std::iter::once(&targets.display)) {
+                let _ = resources.destroy_texture(*id);
+            }
+            self.targets = Some(self.build_targets(resources)?);
+        }
+        self.state.accumulated = 0;
+        self.state.prev_view_proj = None;
+        Ok(())
     }
 
     /// The physical texture behind a transient resource of the last frame: `"diffuse"` (the
     /// diffuse lighting the composite uses, after the skin diffusion), `"specular"`, `"surface"`,
-    /// `"depth"`, `"hdr"`, and `"irradiance"` (the geometry pass's diffuse before the skin
+    /// `"depth"`, `"hdr"`, with occlusion on `"ambient"` (r8) and `"contact"` (rgba8, one channel
+    /// per shadow layer), and `"irradiance"` (the geometry pass's diffuse before the skin
     /// diffusion; it outlives the frame only in a debug view, whose pass reads it, otherwise a
     /// later target may reuse its texture).
     pub fn target_texture(&self, name: &str) -> Option<TextureId> {
@@ -1318,6 +1595,8 @@ impl Renderer {
             "surface" => t.res.surface,
             "depth" => t.res.depth,
             "hdr" => t.res.hdr,
+            "ambient" => t.res.occlusion?[1],
+            "contact" => t.res.occlusion?[2],
             _ => return None,
         };
         t.graph.physical(r).and_then(|s| t.physical.get(s)).copied()
@@ -1352,12 +1631,8 @@ impl Renderer {
         self.readback.drain_ready(|r| {
             let user = r.user();
             let pixel = [(user >> 32) as u32, user as u32];
-            if let Some(row) = r.row(0)
-                && let (Some(id), Some(depth)) = (row.get(0..4), row.get(4..8))
-            {
-                let id = u32::from_le_bytes([id[0], id[1], id[2], id[3]]);
-                let depth = f32::from_le_bytes([depth[0], depth[1], depth[2], depth[3]]);
-                hit = Some(PickHit { pixel, pick_id: id, depth });
+            if let Some(found) = r.row(0).and_then(|row| PickHit::decode(pixel, row)) {
+                hit = Some(found);
             }
         });
         Ok(hit)
@@ -1413,6 +1688,17 @@ impl Renderer {
         };
         let exposure = camera.exposure.scale();
         let bounds = scene.bounds();
+        // The shadow maps cover what the camera sees of the casters (the whole image of a still,
+        // not its tile, so every tile has the same maps) [QUAL-04].
+        let full_aspect = match tile {
+            Some((fw, fh, _)) => fw as f32 / fh.max(1) as f32,
+            None => w as f32 / h.max(1) as f32,
+        };
+        let focus = if config.shadow_focus && scene.shadow_focusable() {
+            scene.caster_slabs().visible(camera, full_aspect).filter(|s| s.radius < bounds.radius).unwrap_or(bounds)
+        } else {
+            bounds
+        };
         // Frame constants (on the stack).
         let mut frame = FrameUniforms::ZERO;
         frame.view_proj = view.jittered.to_cols_array();
@@ -1423,7 +1709,7 @@ impl Renderer {
         let mut shadow_count = 0;
         for (slot, light) in rig.lights.iter().enumerate() {
             let layer = if light.shadow.enabled && shadow_count < MAX_SHADOWED {
-                let f = ShadowFrustum::fit(light, bounds.center, bounds.radius);
+                let f = ShadowFrustum::fit_focused(light, bounds, focus);
                 frame.shadow_view_proj[shadow_count] = f.view_projection.to_cols_array();
                 frame.shadow_params[shadow_count] = [f.near, f.far, f.half_extent, f.penumbra];
                 frame.shadow_kind[shadow_count] = if f.perspective { 1.0 } else { 0.0 };
@@ -1452,7 +1738,37 @@ impl Renderer {
                 [v, v, v, 0.0]
             }
             Background::Environment => [0.0, 0.0, 0.0, 1.0],
+            Background::Backdrop(paper) => {
+                // The wall stands behind the casters as the camera sees them, upright, and meets
+                // the floor under their lowest point in a cove.
+                let back = Vec3::new(bounds.center.x - view.eye.x, 0.0, bounds.center.z - view.eye.z);
+                let back = back.try_normalize().unwrap_or(-Vec3::Z);
+                let spot = bounds.center + back * paper.distance;
+                let floor = scene
+                    .caster_slabs()
+                    .boxes()
+                    .iter()
+                    .filter(|b| !b.is_empty())
+                    .fold(f32::INFINITY, |low, b| low.min(b.min.y));
+                let floor = if floor.is_finite() { floor } else { bounds.center.y - bounds.radius };
+                frame.backdrop_wall = [-back.x, 0.0, -back.z, (-back).dot(spot)];
+                let cove = (0.3 * paper.distance).min(1.0);
+                frame.backdrop_floor = [floor, cove, paper.falloff, paper.falloff_radius];
+                frame.backdrop_spot = [spot.x, spot.y, spot.z, 0.0];
+                [paper.color[0], paper.color[1], paper.color[2], 2.0]
+            }
         };
+        // The full image's height: a still's tile blurs and dithers like the whole image.
+        let full_height = tile.map_or(h, |(_, fh, _)| fh) as f32;
+        if let Some(lens) = &self.lens {
+            let reach = (lens.max_blur * full_height).clamp(1.0, SCREEN_SPACE_REACH as f32);
+            frame.lens =
+                [lens.focus_distance / camera.near, lens.confusion_at_infinity(camera, full_height), reach, 1.0];
+        }
+        if config.occlusion {
+            let scale = config.quality.occlusion_scale() as f32;
+            frame.occlusion = [OCCLUSION_RADIUS, CONTACT_SHADOW_LENGTH, (0.5 * camera.fov_y()).tan(), scale];
+        }
         frame.taa = [
             if config.quality == Quality::Interactive { 0.2 } else { 0.1 },
             if accumulate { 1.0 } else { 0.0 },
@@ -1493,7 +1809,21 @@ impl Renderer {
             _ => None,
         };
         self.ring.finish_frame(resources)?;
-        resources.write_buffer(self.tonemap_buffer, 0, bytes_of(&TonemapUniforms { exposure, pad: [0.0; 3] }))?;
+        resources.write_buffer(
+            self.tonemap_buffer,
+            0,
+            bytes_of(&TonemapUniforms {
+                exposure,
+                // A smooth paper backdrop or an out-of-focus background bands in 8 bits without a
+                // dither.
+                dither: if matches!(rig.background, Background::Backdrop(_)) || self.lens.is_some() {
+                    1.0
+                } else {
+                    0.0
+                },
+                tile: [frame.tile[0], frame.tile[1]],
+            }),
+        )?;
         if !overlay.is_empty() {
             resources.write_buffer(self.overlay_buffer, 0, slice_as_bytes(overlay))?;
         }
@@ -1535,8 +1865,70 @@ impl Renderer {
         };
         let ring_bind = self.ring.bind_group();
         let draws = scene.draws();
+        let lighting_bind = targets.occlusion_binds.as_ref().map_or(&self.lighting_bind, |b| &b[0]);
         for pass in targets.graph.passes() {
             match pass.payload {
+                PassKind::Prepass => {
+                    let zv = res.occlusion.and_then(|o| view_of(o[0])).ok_or_else(missing)?;
+                    let mut rp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("prepass"),
+                        color_attachments: &[],
+                        depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                            view: zv,
+                            depth_ops: Some(wgpu::Operations {
+                                load: wgpu::LoadOp::Clear(0.0),
+                                store: wgpu::StoreOp::Store,
+                            }),
+                            stencil_ops: None,
+                        }),
+                        timestamp_writes: self.profiler.render_pass_writes("prepass"),
+                        ..Default::default()
+                    });
+                    rp.set_pipeline(pipeline(Key::Prepass)?);
+                    rp.set_bind_group(0, ring_bind, &[frame_offset]);
+                    rp.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint32);
+                    let mut bound = None;
+                    for d in draws.iter().filter(|d| d.index_count > 0) {
+                        bind_scene(&mut rp, binds, &mut bound, d.mesh);
+                        rp.draw_indexed(
+                            d.first_index..d.first_index + d.index_count,
+                            d.base_vertex,
+                            d.object..d.object + 1,
+                        );
+                    }
+                }
+                PassKind::Occlusion => {
+                    let (Some(av), Some(cv)) =
+                        (res.occlusion.and_then(|o| view_of(o[1])), res.occlusion.and_then(|o| view_of(o[2])))
+                    else {
+                        return Err(missing());
+                    };
+                    let bind = targets.occlusion_binds.as_ref().ok_or_else(missing)?;
+                    let mut rp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("occlusion"),
+                        color_attachments: &[Some(color_attachment(av, None)), Some(color_attachment(cv, None))],
+                        timestamp_writes: self.profiler.render_pass_writes("occlusion"),
+                        ..Default::default()
+                    });
+                    rp.set_pipeline(pipeline(Key::Occlusion)?);
+                    rp.set_bind_group(0, ring_bind, &[frame_offset]);
+                    rp.set_bind_group(1, &bind[1], &[]);
+                    rp.draw(0..3, 0..1);
+                }
+                PassKind::DepthOfField => {
+                    let out = res.focused.and_then(view_of).ok_or_else(missing)?;
+                    let bind = targets.dof_bind.as_ref().ok_or_else(missing)?;
+                    let mut rp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("dof"),
+                        color_attachments: &[Some(color_attachment(out, None))],
+                        timestamp_writes: self.profiler.render_pass_writes("dof"),
+                        ..Default::default()
+                    });
+                    rp.set_pipeline(pipeline(Key::Dof(config.quality.dof_taps()))?);
+                    rp.set_bind_group(0, ring_bind, &[frame_offset]);
+                    rp.set_bind_group(1, bind, &[]);
+                    rp.draw(0..3, 0..1);
+                }
                 PassKind::Shadows => {
                     let p = pipeline(Key::Shadow)?;
                     for (layer, view) in self.shadow_layers.iter().enumerate() {
@@ -1599,7 +1991,7 @@ impl Renderer {
                     });
                     rp.set_pipeline(pipeline(Key::Geometry(config.quality.shadow_taps(), config.quality.sss_mode()))?);
                     rp.set_bind_group(0, ring_bind, &[frame_offset]);
-                    rp.set_bind_group(2, &self.lighting_bind, &[]);
+                    rp.set_bind_group(2, lighting_bind, &[]);
                     rp.set_bind_group(3, self.surface.bind_group(), &[]);
                     rp.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint32);
                     let mut bound = None;
@@ -1639,7 +2031,7 @@ impl Renderer {
                     rp.set_pipeline(pipeline(Key::Composite)?);
                     rp.set_bind_group(0, ring_bind, &[frame_offset]);
                     rp.set_bind_group(1, &targets.composite_bind, &[]);
-                    rp.set_bind_group(2, &self.lighting_bind, &[]);
+                    rp.set_bind_group(2, lighting_bind, &[]);
                     rp.draw(0..3, 0..1);
                 }
                 PassKind::Hair => {
@@ -1686,7 +2078,7 @@ impl Renderer {
                     rp.set_pipeline(pipeline(Key::Debug)?);
                     rp.set_bind_group(0, ring_bind, &[frame_offset]);
                     rp.set_bind_group(1, &targets.debug_bind, &[]);
-                    rp.set_bind_group(2, &self.lighting_bind, &[]);
+                    rp.set_bind_group(2, lighting_bind, &[]);
                     rp.draw(0..3, 0..1);
                 }
                 PassKind::Overlay => {
@@ -1750,15 +2142,13 @@ impl Renderer {
                         });
                         rp.set_pipeline(pipeline(Key::Pick)?);
                         rp.set_bind_group(0, ring_bind, &[offset]);
-                        rp.set_index_buffer(index_buffer.slice(..), wgpu::IndexFormat::Uint32);
                         let mut bound = None;
+                        // The shader pulls each corner through the index buffer (the object's first
+                        // index and base vertex are in its table row), so the vertex index is the
+                        // corner and gives the triangle and barycentrics `[VP-01]`.
                         for d in draws.iter().filter(|d| d.index_count > 0) {
                             bind_scene(&mut rp, binds, &mut bound, d.mesh);
-                            rp.draw_indexed(
-                                d.first_index..d.first_index + d.index_count,
-                                d.base_vertex,
-                                d.object..d.object + 1,
-                            );
+                            rp.draw(0..d.index_count, d.object..d.object + 1);
                         }
                     }
                     let texture = raw_texture(resources, self.pick_target)?;
@@ -1860,7 +2250,7 @@ impl Renderer {
                 let _ = resources.destroy_texture(*id);
             }
         }
-        for id in [self.shadow_atlas, self.pick_target, self.pick_depth, self.preintegrated] {
+        for id in [self.shadow_atlas, self.pick_target, self.pick_depth, self.preintegrated, self.white] {
             let _ = resources.destroy_texture(id);
         }
         for id in [self.overlay_buffer, self.tonemap_buffer, self.sss_kernel, self.features] {

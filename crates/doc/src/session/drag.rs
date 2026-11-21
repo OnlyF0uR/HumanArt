@@ -82,7 +82,11 @@ impl Session<'_> {
             None if self.project.is_none() => {}
             None => {
                 let open_id = self.history.open().map_or(Id128::NIL, |e| e.id);
-                let edits = changed.as_ref().map_or_else(Vec::new, |before| vec![set_edit(id, before, &after)]);
+                let mut edits = std::mem::take(&mut self.spare_edits);
+                match &changed {
+                    Some(before) => reuse_set(&mut edits, id, before, &after),
+                    None => edits.clear(),
+                }
                 self.pending = Some(Pending { id: open_id, edits, since_ms: now, last_ms: time_ms, elements: 0 });
             }
         }
@@ -138,6 +142,23 @@ fn set_edit(id: &str, before: &Value, after: &Value) -> Edit {
         before: Some(before.clone()),
         after: Some(after.clone()),
     }
+}
+
+/// Makes `edits` (the last batch's, already written) the single set of `params.id` from `before`
+/// to `after`, rewriting its values in place when it already is a set of that entry (the next
+/// batch of the same drag), so the strings it holds are not built again.
+fn reuse_set(edits: &mut Vec<Edit>, id: &str, before: &Value, after: &Value) {
+    if let [Edit::Set { section, key, before: b, after: a }] = edits.as_mut_slice()
+        && section.kind == PARAMS
+        && section.key.is_none()
+        && key == id
+    {
+        *b = Some(before.clone());
+        *a = Some(after.clone());
+        return;
+    }
+    edits.clear();
+    edits.push(set_edit(id, before, after));
 }
 
 /// [`compose`]s the frame's set into `edits`, in place when the list already sets the entry and

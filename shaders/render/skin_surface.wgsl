@@ -148,7 +148,8 @@ fn micro_detail(p_mm: vec2<f32>, dpx_mm: vec2<f32>, dpy_mm: vec2<f32>, line: vec
     var cavity = 0.0;
     for (var i = 0u; i < 3u; i++) {
         let d = u - antitile_vertex_position(vertices[i]);
-        let q = vec2<f32>(dot(d, ex), dot(d, ey)) + antitile_offset(vertices[i], seed);
+        let offset = antitile_offset(vertices[i], seed);
+        let q = vec2<f32>(dot(d, ex), dot(d, ey)) + offset;
         let s = textureSampleLevel(skin_detail, repeat_sampler, q, lod);
         let w = weights[i];
         slope += w * s.xy;
@@ -262,7 +263,6 @@ fn skin_surface(
         let flush = textureSampleLevel(skin_resolved, clamp_sampler, local, layer + 3, lod);
         let spec = textureSampleLevel(skin_specular, clamp_sampler, local, i32(info.y), lod);
         let zones0 = textureSampleLevel(skin_inputs, clamp_sampler, local, layer + 1, lod);
-        let zones1 = textureSampleLevel(skin_inputs, clamp_sampler, local, layer + 2, lod);
         s.albedo = skin_flushed_albedo(albedo.rgb, flush.rgb, surface.detail.w);
         s.cavity = clamp(albedo.a, 0.0, 1.0);
         s.thickness_mm = select(-1.0, scatter.a * BAKED_THICKNESS_RANGE_MM, scatter.a < 0.999);
@@ -277,11 +277,11 @@ fn skin_surface(
         s.roughness0 = spec.y;
         s.roughness1 = spec.z;
         s.lobe_mix = spec.w;
-        // Zone slots: 0 cheeks, 1 nose, 3 lips, 4 ears (humanart_model::skin_appearance::zones). The
-        // vellus zones are the cheeks, nose and ears; the forehead (slot 9, a third fetch) is left
-        // at the baseline to keep the pass in its budget.
+        // Zone slots: 0 cheeks, 1 nose, 3 lips (humanart_model::skin_appearance::zones). The vellus
+        // zones are the cheeks and nose; the ears and the forehead (slots 4 and 9, in other mask
+        // layers) stay at the baseline to keep the pass in its budget.
         s.lips = zones0.w;
-        fuzz_zone = saturate(zones0.x + zones0.y + zones1.x);
+        fuzz_zone = saturate(zones0.x + zones0.y);
     }
     let wrinkle = wrinkle_at(tile, local);
     slope += wrinkle.slope;

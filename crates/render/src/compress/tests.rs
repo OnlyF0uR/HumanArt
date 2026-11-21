@@ -11,7 +11,7 @@ use std::sync::{Mutex, MutexGuard, OnceLock};
 use humanart_core::rng::Rng;
 use humanart_gpu::profiler::GpuProfiler;
 use humanart_gpu::resources::{Budget, Resources};
-use humanart_gpu::{Capability, DeviceRequest, Gpu};
+use humanart_gpu::{Capability, Gpu};
 use humanart_io::bc::{self, BcFormat};
 use humanart_io::{ColorSpace, Format, Image, Limits, Samples, ktx2, mip};
 use humanart_math::{f16_bits_to_f32, f32_to_f16_bits};
@@ -20,12 +20,10 @@ use super::offline::{Request, halves_to_f32, read_buffer_blocking, to_ktx2};
 use super::{Bc7Options, Compressor, Quality};
 
 fn gpu() -> &'static Gpu {
-    static GPU: OnceLock<Gpu> = OnceLock::new();
-    GPU.get_or_init(|| {
-        let gpu = Gpu::headless_blocking(&DeviceRequest::default()).expect("this machine has a GPU");
-        assert!(gpu.has(Capability::TextureCompressionBc), "the test adapter must decode BC textures");
-        gpu
-    })
+    // The process's shared device (ADR-040).
+    let gpu = humanart_gpu::shared_headless().expect("this machine has a GPU");
+    assert!(gpu.has(Capability::TextureCompressionBc), "the test adapter must decode BC textures");
+    gpu
 }
 
 fn compressor() -> MutexGuard<'static, Compressor> {
@@ -755,7 +753,8 @@ fn bench_encode_4096() {
             record(&mut c, &mut encoder);
             let start = std::time::Instant::now();
             gpu.queue.submit([encoder.finish()]);
-            gpu.device.poll(wgpu::PollType::wait_indefinitely()).expect("poll");
+            humanart_gpu::device::wait_for(&gpu.device, None, humanart_gpu::device::GPU_WAIT_LIMIT, "the queued work")
+                .expect("poll");
             if i > 0 {
                 times.push(start.elapsed().as_secs_f64() * 1000.0);
             }
@@ -795,7 +794,8 @@ fn profiled_frame(
     // The test waits for the GPU; the profiler itself only maps its staging buffer and reports
     // from `collect` once the map has finished.
     for _ in 0..1000 {
-        gpu.device.poll(wgpu::PollType::wait_indefinitely()).expect("poll");
+        humanart_gpu::device::wait_for(&gpu.device, None, humanart_gpu::device::GPU_WAIT_LIMIT, "the queued work")
+            .expect("poll");
         if profiler.collect() {
             break;
         }

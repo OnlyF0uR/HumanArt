@@ -1096,7 +1096,6 @@ fn sec_01_http_caps_connections_and_binds_loopback_only() {
 #[test]
 fn ac_wp23_3_headless_render_matches_the_editor_viewport() {
     use humanart_gpu::resources::{Budget, Resources};
-    use humanart_gpu::{DeviceRequest, Gpu};
     let w = world();
     let mut e = engine(&w);
     let mut s = server("parity", AgentPolicy { direct_edits: true, commit_without_review: false }, &mut e);
@@ -1126,9 +1125,9 @@ fn ac_wp23_3_headless_render_matches_the_editor_viewport() {
     );
     let headless = humanart_io::png::decode(png, &humanart_io::Limits::default()).unwrap();
     // The editor's path: a viewport viewer framed on the head, default settings.
-    let gpu = Gpu::headless_blocking(&DeviceRequest::default()).unwrap();
-    let mut res = Resources::new(&gpu, Budget::UNLIMITED);
-    let mut viewer = crate::engine::Viewer::new(&gpu, &mut res, e.model(), size, size).unwrap();
+    let gpu = humanart_gpu::shared_headless().unwrap();
+    let mut res = Resources::new(gpu, Budget::UNLIMITED);
+    let mut viewer = crate::engine::Viewer::new(gpu, &mut res, e.model(), size, size).unwrap();
     viewer.frame_model(e.model(), crate::engine::Framing::Head);
     for _ in 0..frames {
         let mut enc = gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("editor") });

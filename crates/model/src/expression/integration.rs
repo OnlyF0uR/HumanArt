@@ -3,4 +3,4 @@
 //! controls export and the preview contact sheets (test-only, in `tests.rs`).
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

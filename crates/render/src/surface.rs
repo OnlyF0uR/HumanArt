@@ -67,7 +67,7 @@ pub struct SurfaceSettings {
     pub lip_coat_roughness: f32,
     /// Factor on both lobe roughnesses on the lips, 0..=1.
     pub lip_roughness_scale: f32,
-    /// Vellus sheen strength in a full fuzz zone (cheeks, ears, forehead), 0..=1; 35 % of it
+    /// Vellus sheen strength in a full fuzz zone (cheeks and nose), 0..=1; 35 % of it
     /// elsewhere, none on the lips (`humanart_model::skin_appearance::microdetail::vellus_lobe`).
     pub fuzz: f32,
     /// Sheen roughness of the vellus lobe, 0..=1.

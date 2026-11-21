@@ -865,7 +865,7 @@ fn orient(points: &[Vec2]) -> (Vec<Vec2>, f32, f32) {
 }
 
 /// Shelf packing of boxes `(w, h)` with padding `pad`, row width `limit`: offsets and total size.
-fn shelf(boxes: &[(f32, f32)], pad: f32, limit: f32) -> (Vec<Vec2>, f32, f32) {
+fn shelf(boxes: &[(f32, f32)], pad: f32, limit: f32) -> Shelves {
     let mut order: Vec<usize> = (0..boxes.len()).collect();
     order.sort_by(|&a, &b| boxes[b].1.total_cmp(&boxes[a].1).then(a.cmp(&b)));
     let mut out = vec![Vec2::ZERO; boxes.len()];
@@ -884,6 +884,12 @@ fn shelf(boxes: &[(f32, f32)], pad: f32, limit: f32) -> (Vec<Vec2>, f32, f32) {
     }
     (out, width, y + row_h)
 }
+
+/// A shelf packing: the boxes' offsets, the width and the height.
+type Shelves = (Vec<Vec2>, f32, f32);
+
+/// Shelf widths tried (plus one) when packing the face tile.
+const PACK_WIDTHS: usize = 28;
 
 /// Lays out UVs for the pieces (body first, then the parts).
 pub fn layout(pieces: &[&Cage]) -> Result<Layout> {
@@ -913,17 +919,32 @@ pub fn layout(pieces: &[&Cage]) -> Result<Layout> {
         let boxes: Vec<(f32, f32)> = oriented.iter().map(|o| (o.1, o.2)).collect();
         let area: f32 = boxes.iter().map(|b| b.0 * b.1).sum();
         let widest = boxes.iter().map(|b| b.0).fold(0.0, f32::max);
-        // Two passes: the padding depends on the final scale.
-        let mut scale = 0.8 / area.sqrt();
-        let mut placed = (Vec::new(), 0.0, 0.0);
+        // Face tile: shelf widths from 0.6 to 2.0 times the side of the islands' total area, the
+        // one that gives the largest scale wins (the single width left more than half of the tile
+        // empty and the nostrils under 1000 texels at 1024², `ac_wp15_2`). The other tiles keep
+        // the single width 1.08 for now: repacked, the navel's one-texel faces land far from the
+        // tile origin, where `Mesh::face_uv_area` (shoelace on absolute f32 UVs) loses them to
+        // cancellation and the validator calls them collapsed. Three passes per width: the
+        // padding depends on the final scale.
         let margin = PADDING_TEXELS / resolution as f32;
-        for _ in 0..3 {
-            let pad = PADDING_TEXELS / (resolution as f32 * scale);
-            let limit = (area.sqrt() * 1.08).max(widest);
-            placed = shelf(&boxes, pad, limit);
-            let extent = placed.1.max(placed.2);
-            scale = (1.0 - 2.0 * margin) / extent;
+        let mut best: Option<(f32, Shelves)> = None;
+        let widths = if tile == T::Face { PACK_WIDTHS } else { 0 };
+        for step in 0..=widths {
+            let factor = if widths == 0 { 1.08 } else { 0.6 + 1.4 * step as f32 / widths as f32 };
+            let limit = (area.sqrt() * factor).max(widest);
+            let mut scale = 0.8 / area.sqrt();
+            let mut placed = (Vec::new(), 0.0, 0.0);
+            for _ in 0..3 {
+                let pad = PADDING_TEXELS / (resolution as f32 * scale);
+                placed = shelf(&boxes, pad, limit);
+                let extent = placed.1.max(placed.2);
+                scale = (1.0 - 2.0 * margin) / extent;
+            }
+            if best.as_ref().is_none_or(|b| scale > b.0) {
+                best = Some((scale, placed));
+            }
         }
+        let Some((scale, placed)) = best else { continue };
         for (k, &fi) in members.iter().enumerate() {
             let flat = &flats[fi];
             let base = copies.len() as u32;

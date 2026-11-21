@@ -490,7 +490,7 @@ impl ReadbackRing {
             if let Some(result) = self.take(ticket, |readback| readback.copy_to(out))? {
                 return result;
             }
-            device.poll(wgpu::PollType::wait_indefinitely())?;
+            crate::device::wait_for(device, None, crate::device::GPU_WAIT_LIMIT, "a readback")?;
         }
         match self.take(ticket, |readback| readback.copy_to(out))? {
             Some(result) => result,
@@ -578,7 +578,7 @@ mod tests {
         let during_frames = received.len();
         assert!(during_frames > 0, "readbacks arrive in later frames without any wait");
         while pending > 0 {
-            gpu.device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+            crate::device::wait_for(&gpu.device, None, crate::device::GPU_WAIT_LIMIT, "the queued work").unwrap();
             pending -= ring.drain_ready(|readback| {
                 received.push((readback.user(), u32::from_le_bytes(readback.row(0).unwrap().try_into().unwrap())));
             });
@@ -619,7 +619,7 @@ mod tests {
             if ring.is_ready(second) {
                 break;
             }
-            gpu.device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+            crate::device::wait_for(&gpu.device, None, crate::device::GPU_WAIT_LIMIT, "the queued work").unwrap();
             std::thread::yield_now();
         }
         let value = ring.take(second, |readback| (readback.user(), readback.packed_len())).unwrap();

@@ -164,7 +164,7 @@ fn header_errors() {
     // An empty file is fine.
     let empty = header("ply\nformat binary_big_endian 1.0\nend_header\n").unwrap();
     assert!(empty.elements.is_empty());
-    assert!(matches!(empty.to_mesh(), Err(Error::Invalid { .. })));
+    assert!(matches!(empty.to_mesh(), Err(Error::Content { item: None, .. })));
 }
 
 #[test]
@@ -190,17 +190,32 @@ fn data_errors_and_limits() {
     assert!(mesh("3 0 1 2", ("", "")).is_ok());
     assert!(matches!(
         data("1 2\n3 4\n2 0 1\n").unwrap().to_mesh(),
-        Err(Error::Invalid { what: "no vertex positions", .. })
+        Err(Error::Content { what: "no vertex positions", item: None, .. })
     ));
-    assert!(matches!(mesh("2 0 1", ("", "")), Err(Error::Invalid { what: "a face has fewer than 3 vertices", .. })));
-    assert!(matches!(mesh("3 0 1 3", ("", "")), Err(Error::Invalid { what: "face vertex index out of range", .. })));
+    assert!(matches!(
+        mesh("2 0 1", ("", "")),
+        Err(Error::Content { what: "a face has fewer than 3 vertices", item: Some(("face", 0)), .. })
+    ));
+    assert!(matches!(
+        mesh("3 0 1 3", ("", "")),
+        Err(Error::Content { what: "face vertex index out of range", item: Some(("face", 0)), .. })
+    ));
+    // The error names the face, not a byte offset.
+    let two_faces = format!("{mesh_text}3 0 1 2\n3 2 1 7\n").replace("element face 1", "element face 2");
+    let error = parse(two_faces.as_bytes()).unwrap().to_mesh().unwrap_err();
+    assert_eq!(
+        error,
+        Error::Content { format: FORMAT, item: Some(("face", 1)), what: "face vertex index out of range" }
+    );
+    assert_eq!(error.offset(), None);
+    assert_eq!(error.to_string(), "PLY: face 1: face vertex index out of range");
     assert!(matches!(
         mesh("3 0 1 2", ("uchar uint", "uchar float")),
-        Err(Error::Invalid { what: "face vertex indices are not integers", .. })
+        Err(Error::Content { what: "face vertex indices are not integers", item: None, .. })
     ));
-    assert!(matches!(mesh("1", ("list uchar uint vertex_indices", "uint vertex_indices")), Err(Error::Invalid { .. })));
-    assert!(matches!(mesh("3 0 1 2", ("vertex_indices", "corners")), Err(Error::Invalid { .. })));
-    assert!(matches!(mesh("3 0 1 2", ("float z", "list uchar float z")), Err(Error::Invalid { .. })));
+    assert!(matches!(mesh("1", ("list uchar uint vertex_indices", "uint vertex_indices")), Err(Error::Content { .. })));
+    assert!(matches!(mesh("3 0 1 2", ("vertex_indices", "corners")), Err(Error::Content { .. })));
+    assert!(matches!(mesh("3 0 1 2", ("float z", "list uchar float z")), Err(Error::Content { .. })));
 
     // Counts that the input cannot hold are refused before allocation.
     let huge = "ply\nformat binary_little_endian 1.0\nelement vertex 4000000000\nproperty float x\nend_header\n";

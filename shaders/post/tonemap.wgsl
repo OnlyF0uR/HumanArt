@@ -13,9 +13,18 @@ override ENCODE_SRGB: bool = true;
 struct TonemapParams {
     // The exposure scale (exposure_from_ev100 of the camera).
     exposure: f32,
-    _pad0: f32,
-    _pad1: f32,
-    _pad2: f32,
+    // The dither added before the 8-bit rounding, in steps of 1/255 (0: none). A smooth backdrop
+    // or an out-of-focus background bands in 8 bits without it.
+    dither: f32,
+    // The origin of a still's tile in the full image, pixels: the dither's seed [QUAL-04].
+    tile: vec2<f32>,
+}
+
+// Triangular noise in (-1, 1) from two hashes of the pixel.
+fn triangular_noise(pixel: vec2<f32>) -> f32 {
+    let a = fract(52.9829189 * fract(dot(pixel, vec2<f32>(0.06711056, 0.00583715))));
+    let b = fract(52.9829189 * fract(dot(pixel + vec2<f32>(47.0, 17.0), vec2<f32>(0.06711056, 0.00583715))));
+    return a - b;
 }
 
 @group(0) @binding(0) var hdr: texture_2d<f32>;
@@ -36,6 +45,9 @@ fn fs_tonemap(@builtin(position) position: vec4<f32>) -> @location(0) vec4<f32> 
     var mapped = tone_map(TONE_MAPPER, hdr_color, tonemap.exposure);
     if (ENCODE_SRGB) {
         mapped = linear_to_srgb_rgb(mapped);
+    }
+    if (tonemap.dither > 0.0) {
+        mapped += vec3<f32>(triangular_noise(floor(position.xy) + tonemap.tile) * tonemap.dither / 255.0);
     }
     return vec4<f32>(mapped, 1.0);
 }

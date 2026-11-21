@@ -296,6 +296,8 @@ impl RenderService {
             camera.turntable(request.turn_degrees.to_radians());
         }
         viewer.set_camera(camera);
+        // The document's skin.* values (todo 1.4).
+        viewer.sync_skin(gpu, model)?;
         for _ in 0..request.frames.max(1) {
             let mut encoder =
                 gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("agent render") });

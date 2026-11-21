@@ -8,6 +8,7 @@ pub mod compress;
 pub mod deform;
 pub mod error;
 pub mod eye;
+pub mod focus;
 pub mod graph;
 pub mod groom;
 pub mod hair;

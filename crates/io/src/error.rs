@@ -98,6 +98,18 @@ pub enum Error {
         /// The value found.
         got: u64,
     },
+    /// The input parsed, but its content is not what was asked of it (a PLY face index past the last
+    /// vertex). There is no byte offset: the problem shows only once the parsed data is read, so the
+    /// error names the item instead, when there is one.
+    Content {
+        /// The format being read.
+        format: Format,
+        /// The offending item: the element or record kind and its zero-based index (`("face", 12)`),
+        /// or `None` when the problem concerns the data as a whole ("no vertex element").
+        item: Option<(&'static str, usize)>,
+        /// What is wrong, as a short phrase.
+        what: &'static str,
+    },
     /// The data handed to an encoder cannot be written in this format.
     Encode {
         /// The format being written.
@@ -116,6 +128,7 @@ impl Error {
             | Self::Invalid { format, .. }
             | Self::Unsupported { format, .. }
             | Self::Limit { format, .. }
+            | Self::Content { format, .. }
             | Self::Encode { format, .. } => *format,
         }
     }
@@ -139,6 +152,10 @@ impl fmt::Display for Error {
             Self::Limit { format, what, limit, got } => {
                 write!(f, "{}: {what} is {got}, over the limit of {limit}", format.name())
             }
+            Self::Content { format, item: Some((kind, index)), what } => {
+                write!(f, "{}: {kind} {index}: {what}", format.name())
+            }
+            Self::Content { format, item: None, what } => write!(f, "{}: {what}", format.name()),
             Self::Encode { format, what } => write!(f, "{}: cannot encode: {what}", format.name()),
         }
     }

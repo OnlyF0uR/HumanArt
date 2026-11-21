@@ -11,7 +11,7 @@ use crate::error::RenderError;
 
 /// How long a blocking read waits for the GPU before it gives up with
 /// [`RenderError::GpuTimeout`]: a slow, shared or lost GPU returns an error instead of hanging.
-pub const GPU_WAIT_LIMIT: Duration = Duration::from_secs(60);
+pub const GPU_WAIT_LIMIT: Duration = humanart_gpu::device::GPU_WAIT_LIMIT;
 
 /// Waits until `submission` finished on the GPU, at most `limit` `[ERR-05]`. `what` names the
 /// wait in the error.
@@ -21,12 +21,10 @@ pub fn wait_for_submission(
     limit: Duration,
     what: &'static str,
 ) -> Result<(), RenderError> {
-    match device.poll(wgpu::PollType::Wait { submission_index: Some(submission), timeout: Some(limit) }) {
-        Ok(_) => Ok(()),
-        Err(wgpu::PollError::Timeout) => {
-            Err(RenderError::GpuTimeout { what, limit_ms: u64::try_from(limit.as_millis()).unwrap_or(u64::MAX) })
-        }
-        Err(e) => Err(humanart_gpu::GpuError::from(e).into()),
+    match humanart_gpu::device::wait_for(device, Some(submission), limit, what) {
+        Ok(()) => Ok(()),
+        Err(humanart_gpu::GpuError::Timeout { what, limit_ms }) => Err(RenderError::GpuTimeout { what, limit_ms }),
+        Err(e) => Err(e.into()),
     }
 }
 

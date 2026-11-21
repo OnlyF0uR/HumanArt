@@ -46,11 +46,15 @@ pub enum Zone {
     Temples = 8,
     /// Forehead (sheen).
     Forehead = 9,
+    /// Chin (with forehead and nose the sebum-rich T-zone).
+    Chin = 10,
+    /// Upper eyelids.
+    Eyelids = 11,
 }
 
 impl Zone {
     /// Every zone, in mask-slot order.
-    pub const ALL: [Self; 10] = [
+    pub const ALL: [Self; 12] = [
         Self::Cheeks,
         Self::Nose,
         Self::UnderEye,
@@ -61,6 +65,8 @@ impl Zone {
         Self::Knees,
         Self::Temples,
         Self::Forehead,
+        Self::Chin,
+        Self::Eyelids,
     ];
 
     /// The mask slot.
@@ -81,6 +87,8 @@ impl Zone {
             Self::Knees => "knees",
             Self::Temples => "temples",
             Self::Forehead => "forehead",
+            Self::Chin => "chin",
+            Self::Eyelids => "eyelids",
         }
     }
 
@@ -132,6 +140,11 @@ pub struct ZoneTable {
     pub wet_roughness: f32,
     /// Specular scale gain at wetness 1.
     pub wet_specular_gain: f32,
+    /// Melanin added at full low-frequency tone variation (`super::variation`: the baked
+    /// variation `v` adds `2 (v − 0.5)` times this); 0 turns it off.
+    pub variation_melanin: f32,
+    /// Haemoglobin added at full low-frequency tone variation.
+    pub variation_haemoglobin: f32,
 }
 
 impl Default for ZoneTable {
@@ -157,7 +170,15 @@ impl Default for ZoneTable {
         zones[Zone::Temples.slot()] = ZoneModulation::NONE.with(Attribute::Oxygenation, -0.15);
         zones[Zone::Forehead.slot()] =
             ZoneModulation::NONE.with(Attribute::Oiliness, 0.25).with(Attribute::RoughnessPrimary, -0.05);
-        Self { zones, flush_body: 0.25, flush_gain: 2.0, wet_roughness: 0.12, wet_specular_gain: 0.5 }
+        Self {
+            zones,
+            flush_body: 0.25,
+            flush_gain: 2.0,
+            wet_roughness: 0.12,
+            wet_specular_gain: 0.5,
+            variation_melanin: 0.0,
+            variation_haemoglobin: 0.0,
+        }
     }
 }
 
@@ -211,7 +232,7 @@ mod tests {
             assert_eq!(Zone::from_slot(i), Some(z));
         }
         assert!(Zone::ALL.len() <= ZONE_SLOTS);
-        assert_eq!(Zone::from_slot(11), None);
+        assert_eq!(Zone::from_slot(ZONE_SLOTS), None);
     }
 
     #[test]

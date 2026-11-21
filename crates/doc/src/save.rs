@@ -198,6 +198,57 @@ pub struct Replayed {
     pub last_seq: u64,
 }
 
+/// Writes the compact JSON of `Record::Extend { id, edits, last_ms, elements }` (the same bytes as
+/// [`Record::to_json`] written compactly) into `out`, without building a [`Value`] tree: the
+/// batched frames of a slider drag are journaled every few frames `[PERF-R1]`. Values that are
+/// arrays or objects go through the general writer. Returns `false`, having written part of the
+/// record, when an edit is not a [`Edit::Set`] (the caller takes the general route).
+pub(crate) fn write_extend(out: &mut Vec<u8>, id: Id128, edits: &[Edit], last_ms: u64, elements: u64) -> Result<bool> {
+    use humanart_io::json::{Style, write, write_number, write_string};
+    let value = |out: &mut Vec<u8>, v: &Value| -> Result<()> {
+        match v {
+            Value::Null => out.extend_from_slice(b"null"),
+            Value::Bool(b) => out.extend_from_slice(if *b { b"true" } else { b"false" }),
+            Value::Number(n) => write_number(out, *n)?,
+            Value::String(s) => write_string(out, s),
+            Value::Array(_) | Value::Object(_) => write(v, Style::COMPACT, out)?,
+        }
+        Ok(())
+    };
+    out.extend_from_slice(b"{\"op\":\"extend\",\"id\":");
+    write_string(out, id.to_hex().as_str());
+    out.extend_from_slice(b",\"edits\":[");
+    for (i, edit) in edits.iter().enumerate() {
+        let Edit::Set { section, key, before, after } = edit else { return Ok(false) };
+        if i > 0 {
+            out.push(b',');
+        }
+        out.extend_from_slice(b"{\"op\":\"set\",\"section\":");
+        write_string(out, &section.kind);
+        if let Some(section_key) = &section.key {
+            out.extend_from_slice(b",\"section_key\":");
+            write_string(out, section_key);
+        }
+        out.extend_from_slice(b",\"key\":");
+        write_string(out, key);
+        if let Some(b) = before {
+            out.extend_from_slice(b",\"before\":");
+            value(out, b)?;
+        }
+        if let Some(a) = after {
+            out.extend_from_slice(b",\"after\":");
+            value(out, a)?;
+        }
+        out.push(b'}');
+    }
+    out.extend_from_slice(b"],\"last\":");
+    write_number(out, Number::from(last_ms))?;
+    out.extend_from_slice(b",\"elements\":");
+    write_number(out, Number::from(elements))?;
+    out.push(b'}');
+    Ok(true)
+}
+
 /// Applies the journal `records` to `doc` and rebuilds `history` `[SAVE-01]`. All or nothing: on
 /// error (a record that does not read or does not apply, which means the journal does not belong
 /// to this text) `doc` and `history` are unchanged and the error names the record's line.
@@ -462,5 +513,69 @@ mod tests {
         assert_eq!(Document::parse(&fs.read(&latest).unwrap(), &reg, &crate::text::TextLimits::DEFAULT).unwrap(), doc);
         fs.write("p/autosave/autosave-1.anthropos", b"x").unwrap();
         assert_eq!(autosaves.list().unwrap().len(), 3);
+    }
+
+    /// `[PERF-R1]` `[SAVE-01]` the allocation-free `extend` line of a drag batch is byte for byte
+    /// the line the general writer makes, for random set edits (section keys, strings that need
+    /// escapes, nested values, integers and floats, missing before or after); other edits are left
+    /// to the general writer.
+    #[test]
+    fn perf_r1_direct_extend_lines_equal_the_general_encoding() {
+        use crate::journal::{JournalHeader, JournalLimits, encode_header, encode_record, encode_record_into, read};
+        use humanart_core::rng::Rng;
+        const WORDS: [&str; 7] = ["params", "face.nose.length", "a\"b", "tab\there", "\u{1}ctl", "é ü", ""];
+        fn pick(rng: &mut Rng) -> String {
+            WORDS[rng.next_u32() as usize % WORDS.len()].to_owned()
+        }
+        fn random_value(rng: &mut Rng) -> Option<Value> {
+            match rng.next_u32() % 7 {
+                0 => None,
+                1 => Some(Value::from(Number::Float(rng.range_f64(-1e6, 1e6)))),
+                2 => Some(Value::from(Number::from(rng.next_u64()))),
+                3 => Some(Value::from(pick(rng).as_str())),
+                4 => Some(Value::from(rng.next_u32().is_multiple_of(2))),
+                5 => Some(Value::Null),
+                _ => {
+                    let mut o = Object::new();
+                    o.insert(pick(rng), Value::Array(vec![Value::from(Number::Float(0.25)), Value::from("x")]));
+                    Some(Value::Object(o))
+                }
+            }
+        }
+        let mut rng = Rng::new(0xe47e);
+        let mut line = Vec::new();
+        for case in 0..500u64 {
+            let edits: Vec<Edit> = (0..rng.next_u32() % 4)
+                .map(|_| {
+                    let kind = pick(&mut rng);
+                    let key = (rng.next_u32().is_multiple_of(2)).then(|| pick(&mut rng));
+                    Edit::Set {
+                        section: SectionRef::new(&kind, key.as_deref()),
+                        key: pick(&mut rng),
+                        before: random_value(&mut rng),
+                        after: random_value(&mut rng),
+                    }
+                })
+                .collect();
+            let id = Id128::from_u128(u128::from(rng.next_u64()) << 7);
+            let (last, elements, seq) = (rng.next_u64() >> (case % 64), case, case * 977 + 1);
+            let record = Record::Extend { id, edits: edits.clone(), last_ms: last, elements };
+            let general = encode_record(&JournalRecord { seq, payload: record.to_json() }).unwrap();
+            let written =
+                encode_record_into(&mut line, seq, |out| write_extend(out, id, &edits, last, elements)).unwrap();
+            assert!(written);
+            assert_eq!(String::from_utf8(line.clone()).unwrap(), general, "case {case}");
+            // The line reads back as the record.
+            let header = encode_header(&JournalHeader { document: id, base: humanart_core::hash::Hash128::default() });
+            let back = read(format!("{header}{general}").as_bytes(), &JournalLimits::DEFAULT).unwrap();
+            assert_eq!(back.records.len(), 1);
+            assert_eq!(back.records[0].seq, seq);
+        }
+        // An insert is not written directly; a NaN is an error, as in the general writer.
+        let insert = Edit::Insert { index: 0, section: crate::text::Section::new("sculpt_layer", None).unwrap() };
+        assert!(!encode_record_into(&mut line, 1, |out| write_extend(out, Id128::NIL, &[insert], 0, 0)).unwrap());
+        assert!(line.is_empty());
+        let nan = set("x", None, Some(f64::NAN));
+        assert!(encode_record_into(&mut line, 1, |out| write_extend(out, Id128::NIL, &[nan], 0, 0)).is_err());
     }
 }

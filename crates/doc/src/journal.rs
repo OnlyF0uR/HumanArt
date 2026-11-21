@@ -94,6 +94,49 @@ fn record_crc(seq: &str, json: &str) -> u32 {
     crc32_update(crc, json.as_bytes())
 }
 
+/// Writes the record line of sequence number `seq` into `out` (cleared first) without allocating
+/// beyond `out`'s capacity: the same bytes as [`encode_record`] when `payload` writes the compact
+/// JSON of the record's payload. `payload` returns `false` when it cannot write this payload (the
+/// caller then takes the general route); so does this function, and `out` is left cleared.
+pub(crate) fn encode_record_into(
+    out: &mut Vec<u8>,
+    seq: u64,
+    payload: impl FnOnce(&mut Vec<u8>) -> Result<bool>,
+) -> Result<bool> {
+    out.clear();
+    let mut digits = [0u8; 20];
+    let mut at = digits.len();
+    let mut rest = seq;
+    loop {
+        at -= 1;
+        // `rest % 10` is a single digit, so the cast cannot truncate.
+        #[allow(clippy::cast_possible_truncation)]
+        let digit = (rest % 10) as u8;
+        digits[at] = b'0' + digit;
+        rest /= 10;
+        if rest == 0 {
+            break;
+        }
+    }
+    let seq_text = &digits[at..];
+    out.extend_from_slice(seq_text);
+    out.extend_from_slice(b" 00000000 ");
+    let start = out.len();
+    if !payload(out)? {
+        out.clear();
+        return Ok(false);
+    }
+    let crc = crc32_update(crc32_update(crc32_update(0, seq_text), b" "), out.get(start..).unwrap_or_default());
+    let hex = b"0123456789abcdef";
+    for i in 0..8 {
+        if let Some(slot) = out.get_mut(seq_text.len() + 1 + i) {
+            *slot = hex[((crc >> (28 - 4 * i)) & 0xf) as usize];
+        }
+    }
+    out.push(b'\n');
+    Ok(true)
+}
+
 /// A record line, with its line end. Fails when the payload holds NaN or an infinity.
 pub fn encode_record(record: &JournalRecord) -> Result<String> {
     let mut payload = String::new();

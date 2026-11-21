@@ -397,11 +397,13 @@ pub struct TexelInputs {
     pub thickness: f32,
     /// Baked cavity 0..1 (1 open).
     pub cavity: f32,
+    /// Baked low-frequency tone variation 0..1 (0.5 neutral, `super::variation`).
+    pub variation: f32,
 }
 
 impl Default for TexelInputs {
     fn default() -> Self {
-        Self { zones: [0.0; ZONE_SLOTS], thickness: 0.5, cavity: 1.0 }
+        Self { zones: [0.0; ZONE_SLOTS], thickness: 0.5, cavity: 1.0, variation: 0.5 }
     }
 }
 
@@ -419,6 +421,9 @@ pub fn composite_texel(
 ) -> [f32; ATTRIBUTE_COUNT] {
     let mut v = base.0;
     zones.apply(&inputs.zones, &mut v);
+    let tone = 2.0 * (inputs.variation - 0.5);
+    v[Attribute::Melanin.index()] += tone * zones.variation_melanin;
+    v[Attribute::Haemoglobin.index()] += tone * zones.variation_haemoglobin;
     for layer in stack.layers().iter().filter(|l| l.enabled && l.opacity > 0.0) {
         let zone_weight = layer.zone.map_or(1.0, |z| inputs.zones[z.slot()]);
         let w = layer.opacity * zone_weight;

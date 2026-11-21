@@ -2,12 +2,11 @@
 //! with the CPU reference `humanart_model::hair::generate` and the groom edit latency for 100 000
 //! strands `[AC-WP17-2]`, attach to a moved skin, and a debug picture of the GPU groom.
 
-use std::sync::OnceLock;
 use std::time::Instant;
 
 use humanart_core::rng::Rng;
+use humanart_gpu::Gpu;
 use humanart_gpu::resources::{Budget, Resources};
-use humanart_gpu::{DeviceRequest, Gpu};
 use humanart_math::{F16, Quat, Vec2, Vec3, Vec4};
 use humanart_model::hair::generate::{GenerateInput, attach, generate, root_frames};
 use humanart_model::hair::{
@@ -17,8 +16,8 @@ use humanart_model::hair::{
 use super::{GpuGroom, GroomCapacity};
 
 fn gpu() -> &'static Gpu {
-    static GPU: OnceLock<Gpu> = OnceLock::new();
-    GPU.get_or_init(|| Gpu::headless_blocking(&DeviceRequest::default()).expect("this machine has a GPU"))
+    // The process's shared device (ADR-040).
+    humanart_gpu::shared_headless().expect("this machine has a GPU")
 }
 
 fn read_words(buffer: &wgpu::Buffer) -> Vec<u32> {
@@ -33,7 +32,8 @@ fn read_words(buffer: &wgpu::Buffer) -> Vec<u32> {
     encoder.copy_buffer_to_buffer(buffer, 0, &staging, 0, buffer.size());
     gpu.queue.submit([encoder.finish()]);
     staging.slice(..).map_async(wgpu::MapMode::Read, |r| r.expect("the readback maps"));
-    gpu.device.poll(wgpu::PollType::wait_indefinitely()).expect("the device answers");
+    humanart_gpu::device::wait_for(&gpu.device, None, humanart_gpu::device::GPU_WAIT_LIMIT, "the queued work")
+        .expect("the device answers");
     let words = {
         let bytes = staging.slice(..).get_mapped_range().expect("mapped").to_vec();
         bytes.as_chunks::<4>().0.iter().map(|c| u32::from_le_bytes(*c)).collect()
@@ -120,10 +120,19 @@ fn scene(strands: u32, guides: usize, rings: u32) -> Scene {
 }
 
 fn build(s: &Scene, res: &mut Resources) -> GpuGroom {
+    build_with(s, res, false)
+}
+
+/// The groom of `s`, its guides uploaded as world offsets when `world`.
+fn build_with(s: &Scene, res: &mut Resources, world: bool) -> GpuGroom {
     let capacity = GroomCapacity { strands: s.layout.len() as u32, guides: s.guides.len() as u32, points: 16 };
     let mut groom = GpuGroom::new(gpu(), res, &s.head.surface, Some(&s.sdf), capacity).unwrap();
     groom.set_params(res, &s.params).unwrap();
-    groom.set_guides(res, &s.guides.resampled(16)).unwrap();
+    if world {
+        groom.set_world_guides(res, &s.guides.resampled_world(16, &s.head.surface).unwrap()).unwrap();
+    } else {
+        groom.set_guides(res, &s.guides.resampled(16)).unwrap();
+    }
     groom.set_layout(res, &s.head.surface, &s.layout).unwrap();
     groom
 }
@@ -145,17 +154,30 @@ fn f16_tolerance(v: f32) -> f32 {
     v.abs() * (2.0 / 1024.0) + 6.2e-5
 }
 
-// [AC-WP17-2]: every stage of the GPU generation against the CPU reference, all modifiers on.
+// [AC-WP17-2]: every stage of the GPU generation against the CPU reference, all modifiers on,
+// with the guides blended in the root frame and in world directions.
 #[test]
 fn ac_wp17_2_gpu_modifiers_match_the_cpu_reference() {
     let s = scene(20_000, 300, 48);
+    parity(&s, false);
+    parity(&s, true);
+}
+
+fn parity(s: &Scene, world_blend: bool) {
     let mut res = Resources::new(gpu(), Budget::UNLIMITED);
-    let mut groom = build(&s, &mut res);
+    let mut groom = build_with(s, &mut res, world_blend);
     submit(|e| groom.encode_generate(e));
-    let curves = s.guides.resampled(16);
+    let curves =
+        if world_blend { s.guides.resampled_world(16, &s.head.surface).unwrap() } else { s.guides.resampled(16) };
     let frames = root_frames(&s.layout, &s.head.surface).unwrap();
-    let input =
-        GenerateInput { layout: &s.layout, curves: &curves, params: &s.params, frames: &frames, sdf: Some(&s.sdf) };
+    let input = GenerateInput {
+        layout: &s.layout,
+        curves: &curves,
+        params: &s.params,
+        frames: &frames,
+        sdf: Some(&s.sdf),
+        world_curves: world_blend,
+    };
     let cpu = generate(&input).unwrap();
     let n = s.layout.len() * 16;
     assert_eq!(cpu.strands.len(), 20_000);
@@ -209,7 +231,7 @@ fn ac_wp17_2_gpu_modifiers_match_the_cpu_reference() {
         world.iter().zip(&cpu_world).map(|(g, c)| (g.truncate() - c.truncate()).length()).fold(0.0_f32, f32::max);
     let width_err = world.iter().zip(&cpu_world).map(|(g, c)| (g.w - c.w).abs()).fold(0.0_f32, f32::max);
     println!(
-        "[AC-WP17-2] parity, {} strands x 16 points on {}: shape max {shape_err:.3e} m, stored max {stored_err:.3e} \
+        "[AC-WP17-2] parity (world blend {world_blend}), {} strands x 16 points on {}: shape max {shape_err:.3e} m, stored max {stored_err:.3e} \
          ({stored_bad} components beyond 2 f16 ulp), length rel {attr_err:.3e}, attach max {attach_err:.3e} m",
         s.layout.len(),
         gpu().adapter_info().name
@@ -231,8 +253,14 @@ fn attach_follows_a_deformed_skin() {
     submit(|e| groom.encode_generate(e));
     let curves = s.guides.resampled(16);
     let frames = root_frames(&s.layout, &s.head.surface).unwrap();
-    let input =
-        GenerateInput { layout: &s.layout, curves: &curves, params: &s.params, frames: &frames, sdf: Some(&s.sdf) };
+    let input = GenerateInput {
+        layout: &s.layout,
+        curves: &curves,
+        params: &s.params,
+        frames: &frames,
+        sdf: Some(&s.sdf),
+        world_curves: false,
+    };
     let cpu = generate(&input).unwrap();
     // Rotate the head 30 degrees about Y, nod it and stretch the top: a deformation.
     let q = Quat::from_axis_angle(Vec3::Y, 0.5) * Quat::from_axis_angle(Vec3::X, 0.2);

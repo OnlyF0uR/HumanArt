@@ -49,7 +49,7 @@ pub use facial::{BodyHairSpec, FaceAnchors, body_hair, facial_groom};
 pub use features::{Eyeball, FeatureGroom, brow_groom, lash_groom, lift_lashes};
 pub use generate::{GenerateInput, Generated, attach, generate, generate_groom, root_frames};
 pub use params::{Cowlick, GroomMap, GroomMaps, GroomParams, Parting};
-pub use placement::{GroomLayout, ScalpMask, place};
+pub use placement::{GroomLayout, PartLine, ScalpMask, place, place_parted};
 pub use presets::{PresetGroom, preset_groom};
 pub use strands::{Guides, Strands};
 pub use surface::{HairSurface, ProxyHead, RootFrame, root_frame};

@@ -20,7 +20,7 @@
 // compensation, and the diffuse weighted by 1 - the lobes' directional albedo so a white skin in a
 // uniform environment reflects exactly what arrives (the furnace test). Light through thin parts
 // (ears, nostrils) [SHD-03] comes from each shadowed light's map (render/subsurface.wgsl) and, where
-// the compositor's inputs carry it, the baked thickness map [BAKE-01] (the thinner of the two).
+// the compositor's inputs carry it, the baked thickness map [BAKE-01] as a lower bound.
 //
 // Surfaced skin (GpuObject ids.y bit OBJECT_SKIN_SURFACE, render/skin_surface.wgsl, group 3): the
 // albedo, specular, roughness, cavity, scattering radius and zone masks come from the compositor's
@@ -28,7 +28,8 @@
 // with the slope variance the filtering removed added to alpha^2; per light the pore-scale
 // micro-shadowing [SHD-09], an oil / sweat coat (stronger and smoother on the lips) [SHD-06] and the
 // vellus sheen lobe [SHD-07]; the environment light is occluded by the cavity (diffuse) and by
-// the specular occlusion of Lagarde & de Rousiers 2014 [SHD-08].
+// the specular occlusion of Lagarde & de Rousiers 2014 [SHD-08], which also occludes every light's
+// specular lobes and coat (todo 1.4: no glints in crevices the shadow map cannot resolve).
 //
 // Eyes and mouth (objects with an entry in the feature table, group 2 binding 7): shaded by
 // eye/eye.wgsl (traced cornea, refracted iris, sclera, lid occlusion, tear line) [EYE-01]..[EYE-05]
@@ -62,6 +63,10 @@
 @group(2) @binding(5) var shadow_sampler: sampler_comparison;
 @group(2) @binding(6) var preintegrated_lut: texture_2d<f32>;
 @group(2) @binding(7) var<storage, read> features: FeatureTable;
+// Screen-space ambient occlusion (r) and contact shadows per shadow layer (render/occlusion.wgsl,
+// todo 1.9); a white texel when that pass is off.
+@group(2) @binding(8) var ambient_tex: texture_2d<f32>;
+@group(2) @binding(9) var contact_tex: texture_2d<f32>;
 @group(3) @binding(0) var skin_resolved: texture_2d_array<f32>;
 @group(3) @binding(1) var skin_specular: texture_2d_array<f32>;
 @group(3) @binding(2) var skin_inputs: texture_2d_array<f32>;
@@ -99,6 +104,16 @@ fn vs_geometry(@builtin(vertex_index) vertex: u32, @builtin(instance_index) obje
     out.previous = frame.prev_view_proj * vec4<f32>(prev_world_position(object, vertex), 1.0);
     out.object = object_index;
     return out;
+}
+
+// The contact shadow of `light` at this pixel: its shadow layer's channel of the occlusion pass.
+// A light without a shadow map (a fill, a large soft source) has nothing that closes the creases
+// for it: the screen-space ambient occlusion stands in (1 without the occlusion pass).
+fn contact_shadow(light: Light, contact: vec4<f32>, ambient: f32) -> f32 {
+    if (light.shadow.x < 0.0) {
+        return ambient;
+    }
+    return contact[min(u32(light.shadow.x), MAX_SHADOWED - 1u)];
 }
 
 struct GeometryOut {
@@ -143,6 +158,11 @@ fn fs_geometry(in: VertexOut, @builtin(front_facing) front: bool) -> GeometryOut
         return out;
     }
 
+    // The occlusion targets may have half the resolution (below the Still tier).
+    let occlusion_size = textureDimensions(ambient_tex);
+    let screen = min(vec2<i32>(in.clip.xy * vec2<f32>(occlusion_size) * frame.viewport.zw), vec2<i32>(occlusion_size) - 1);
+    let ambient_open = textureLoad(ambient_tex, screen, 0).r;
+    let contact_open = textureLoad(contact_tex, screen, 0);
     let is_skin = u32(object.material.w + 0.5) == SKIN_CLASS;
     let material_rough = vec3<f32>(object.base_color_roughness.w, object.skin.x, object.skin.y);
     var surf = plain_surface(ng, max(object.base_color_roughness.rgb, vec3<f32>(0.0)), material_rough);
@@ -186,9 +206,17 @@ fn fs_geometry(in: VertexOut, @builtin(front_facing) front: bool) -> GeometryOut
         let coat_rough = coat_roughness(surf);
         let coat_alpha = alpha_from_roughness(coat_rough);
         let coat_through = 1.0 - coat * f_schlick_scalar(COAT_F0, 1.0, n_dot_v);
+        // Specular occlusion [SHD-08] (Lagarde & de Rousiers 2014) from the cavity: the baked ambient
+        // occlusion times the pore cavity. It occludes the environment's specular and, as the
+        // lobe's micro-occlusion, every light's: a crevice the shadow map is too coarse to resolve
+        // (eye corners, nostrils, lip corners, pores) does not glint.
+        // The baked occlusion and the screen-space one measure the same thing at different sizes:
+        // the darker of the two, not their product (todo 1.9).
+        let ao = min(surf.cavity, ambient_open) * surf.micro_cavity;
+        let spec_occlusion = saturate(pow(n_dot_v + ao, exp2(-16.0 * alpha - 1.0)) - 1.0 + ao);
         for (var i = 0u; i < count; i++) {
             let light = frame.lights[i];
-            var visibility = shadow_visibility(light, in.world, ng, pixel, SHADOW_TAPS);
+            var visibility = shadow_visibility(light, in.world, ng, pixel, SHADOW_TAPS) * contact_shadow(light, contact_open, ambient_open);
             let is_rect = u32(light.color_kind.w) == LIGHT_RECT;
             let incident = incident_light(light, in.world);
             let n_dot_l = dot(n, incident.l);
@@ -198,21 +226,37 @@ fn fs_geometry(in: VertexOut, @builtin(front_facing) front: bool) -> GeometryOut
             }
             let s0 = shade_light(light, in.world, n, v, alpha, f0, visibility);
             let s1 = shade_light(light, in.world, n, v, alpha1, f0, visibility);
-            specular += mix(s0.specular * compensation, s1.specular * compensation1, blend) * coat_through;
+            specular += mix(s0.specular * compensation, s1.specular * compensation1, blend) * (coat_through * spec_occlusion);
             var d = s0.diffuse;
             if (!is_rect) {
                 if (SSS_MODE == 1u) {
                     d = incident.irradiance * visibility * preintegrated_falloff(n_dot_l, inv_radius) * INV_PI;
                 }
                 if (translucency > 0.0 && scale > 0.0) {
-                    let shadow_mm = shadow_thickness(light, in.world, ng) * 1000.0;
+                    let slab = shadow_slab(light, in.world, ng);
+                    let shadow_mm = slab.x * 1000.0;
                     var thickness_mm = shadow_mm;
-                    if (surf.thickness_mm >= 0.0) {
-                        thickness_mm = select(surf.thickness_mm, min(shadow_mm, surf.thickness_mm), shadow_mm >= 0.0);
+                    if (surf.thickness_mm >= 0.0 && shadow_mm >= 0.0) {
+                        // The shadow map measures the tissue along this light's path; the baked
+                        // thickness (along the inward normal, every part of the character) only
+                        // bounds it from below where the map's resolution and bias underestimate
+                        // it. Alone (the thinner of the two, or for lights without a shadow map) it
+                        // let the far ear, the shadowed eyelids and the skin in front of the teeth
+                        // glow red.
+                        thickness_mm = max(shadow_mm, surf.thickness_mm);
                     }
-                    if (thickness_mm >= 0.0) {
+                    // A point the light reaches directly is its own occluder in the shadow map: its
+                    // "thickness" is only the THICKNESS_SHRINK offset (0.5 mm), whose transmittance
+                    // is nearly the full light, so every lit surface near the terminator (the wrap
+                    // region, n.l below 0.3) glowed orange: the ear rims and lid folds under the
+                    // side light (todo 1.4). Light that crossed tissue comes from an occluder
+                    // clearly behind the shrunk point; the transmission fades in from 1.5 to 3
+                    // shrink distances.
+                    let through = smoothstep(1.5 * THICKNESS_SHRINK_MM, 3.0 * THICKNESS_SHRINK_MM, shadow_mm);
+                    if (thickness_mm >= 0.0 && through > 0.0) {
                         let wrap = saturate(TRANSLUCENCY_WRAP - dot(ng, incident.l));
-                        d += incident.irradiance * skin_transmittance(thickness_mm, scale) * (wrap * translucency * INV_PI);
+                        // slab.y: the cosine at which the light entered the far side (todo 1.9).
+                        d += incident.irradiance * skin_transmittance(thickness_mm, scale) * (wrap * translucency * through * slab.y * INV_PI);
                     }
                 }
                 if (n_dot_l > 0.0) {
@@ -221,7 +265,7 @@ fn fs_geometry(in: VertexOut, @builtin(front_facing) front: bool) -> GeometryOut
                     if (coat > 0.0) {
                         let fc = f_schlick_scalar(COAT_F0, 1.0, max(dot(v, h), 0.0));
                         let dv = coat_lobe(max(dot(n, h), 0.0), n_dot_v, n_dot_l, coat_alpha);
-                        specular += lit * (coat * fc * dv);
+                        specular += lit * (coat * fc * dv * spec_occlusion);
                     }
                     if (surf.fuzz > 0.0) {
                         // Vellus sheen [SHD-07] [SKN-22]: strongest at grazing angles.
@@ -234,8 +278,6 @@ fn fs_geometry(in: VertexOut, @builtin(front_facing) front: bool) -> GeometryOut
         }
         // Image-based light: both lobes, and the diffuse weighted by what the lobes do not reflect;
         // occluded by the cavity [SHD-08].
-        let ao = surf.cavity * surf.micro_cavity;
-        let spec_occlusion = saturate(pow(n_dot_v + ao, exp2(-16.0 * alpha - 1.0)) - 1.0 + ao);
         let albedo0 = (f0 * dfg.x + dfg.y) * compensation;
         let albedo1 = (f0 * dfg1.x + dfg1.y) * compensation1;
         let spec_albedo = mix(albedo0, albedo1, blend);
@@ -252,14 +294,14 @@ fn fs_geometry(in: VertexOut, @builtin(front_facing) front: bool) -> GeometryOut
     } else {
         for (var i = 0u; i < count; i++) {
             let light = frame.lights[i];
-            let visibility = shadow_visibility(light, in.world, n, pixel, SHADOW_TAPS);
+            let visibility = shadow_visibility(light, in.world, n, pixel, SHADOW_TAPS) * contact_shadow(light, contact_open, ambient_open);
             let s = shade_light(light, in.world, n, v, alpha, f0, visibility);
             diffuse += s.diffuse;
             specular += s.specular;
         }
-        diffuse += sh_irradiance(n) * (env * INV_PI);
+        diffuse += sh_irradiance(n) * (env * INV_PI * ambient_open);
         specular = specular * compensation
-            + env_prefiltered(reflected, roughness) * env * (f0 * dfg.x + dfg.y) * compensation;
+            + env_prefiltered(reflected, roughness) * (env * ambient_open) * (f0 * dfg.x + dfg.y) * compensation;
     }
 
     // Motion of this point from the previous frame to this one, in pixels (+x right, +y down).

@@ -125,6 +125,10 @@ pub const CHEEKS: Reach<'static> = Reach {
     except: &[],
     margin: 0.003,
 };
+/// The cheekbones: the cheeks' regions, ramping in over 8 mm. The scanned face (`generate::scan_face`)
+/// sets the eyes 4 mm higher than the procedural head while the cheekbone stays, so the full
+/// cheekbone lies a few millimetres from the lower lid: a 3 mm ramp there folds the lid border.
+pub const CHEEKBONES: Reach<'static> = Reach { margin: 0.008, ..CHEEKS };
 /// The ears, ramping in over 1 cm from where they join the head.
 pub const EARS: Reach<'static> = Reach { regions: &["ear-L", "ear-R"], except: &[], margin: 0.01 };
 /// The ears, ramping in over 1.5 cm (turning the ear bends its root).
@@ -538,9 +542,11 @@ fn chin_projection(kit: &Kit<'_, '_>) -> IdResult<Raw> {
     let s = kit.space;
     let w = s.around(&["chin.mid", "chin.menton"], 0.006, 0.025)?;
     let lip = s.series_nodes("lip.lower.outer")?;
-    let d_lip = s.geodesic(&lip, 0.016);
+    let d_lip = s.geodesic(&lip, 0.02);
     let disp = s.eval(|pt| {
-        let free = smoothstep(0.006, 0.014, d_lip.get(pt.node).copied().unwrap_or(f32::INFINITY));
+        // Free of the lower lip: on the scanned face the skin below the vermilion (region
+        // `lower-lip`) reaches 12 mm down, so the chin starts fading 18 mm from the border.
+        let free = smoothstep(0.008, 0.018, d_lip.get(pt.node).copied().unwrap_or(f32::INFINITY));
         Vec3::Z * (0.002 * at(&w, pt) * free)
     });
     Raw::confined(s, CHIN, Symmetry::Mirror, disp, Vec::new())
@@ -581,7 +587,7 @@ fn cheekbones(kit: &Kit<'_, '_>, both: bool) -> IdResult<Raw> {
     let s = kit.space;
     let f = cheekbone_field(s, 0.0015)?;
     let disp = if both { s.eval(|pt| s.sym(pt, &f)) } else { s.eval(|pt| f(pt)) };
-    Raw::confined(s, CHEEKS, if both { Symmetry::Mirror } else { Symmetry::Free }, disp, Vec::new())
+    Raw::confined(s, CHEEKBONES, if both { Symmetry::Mirror } else { Symmetry::Free }, disp, Vec::new())
 }
 
 /// The left cheekbone alone, `a` metres (asymmetry).
@@ -589,7 +595,7 @@ fn cheekbones_left(kit: &Kit<'_, '_>, a: f32) -> IdResult<Raw> {
     let s = kit.space;
     let f = cheekbone_field(s, a)?;
     let disp = s.eval(|pt| f(pt));
-    Raw::confined(s, CHEEKS, Symmetry::Free, disp, Vec::new())
+    Raw::confined(s, CHEEKBONES, Symmetry::Free, disp, Vec::new())
 }
 
 /// `semantic.cheek-fullness`: the soft cheek below the cheekbone outward.

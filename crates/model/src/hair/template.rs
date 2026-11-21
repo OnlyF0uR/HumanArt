@@ -30,7 +30,7 @@ use super::error::{HairError, HairResult};
 use super::facial::{BodyHairSpec, FaceAnchors, body_hair, body_region};
 use super::features::{BROW_SHAPES, BrowSpec, Eyeball, FeatureGroom, LashSpec, brow_groom, lash_groom};
 use super::params::{GroomMaps, GroomParams};
-use super::placement::{GroomLayout, ScalpMask, place};
+use super::placement::{GroomLayout, ScalpMask, place, place_parted};
 use super::presets::preset_groom;
 use super::strands::Guides;
 use super::surface::{HairSurface, normalize_or};
@@ -534,13 +534,16 @@ pub fn character_grooms(hair: &TemplateHair, spec: &GroomSetSpec) -> HairResult<
         let p = preset_groom(preset, surface, hair.scalp(), spec.scalp_guides.max(1), Some(hair.sdf()), spec.seed)?;
         let params = GroomParams {
             strand_count: spec.scalp_strands as f32,
-            // A hairline that thins over 1.5 cm rather than ending at the region border.
-            hairline_softness: p.params.hairline_softness.max(0.015),
+            // A hairline that thins over 2 cm rather than ending at the region border (with
+            // finer strands and baby hairs in the fade, `placement::HAIRLINE_WIDTH`; a wider fade
+            // of long fine strands read as a veil at the temples in profile).
+            hairline_softness: p.params.hairline_softness.max(0.02),
             eumelanin: eu,
             pheomelanin: pheo,
             ..p.params
         };
-        let layout = place(surface, hair.scalp(), &p.guides, &params, &maps, spec.seed ^ 0x5CA1)?;
+        let layout =
+            place_parted(surface, hair.scalp(), &p.guides, &params, &maps, spec.seed ^ 0x5CA1, p.part.as_ref())?;
         out.push(groom(GroomKind::Scalp, p.guides, params, layout));
     }
     let lines = hair.lines();
@@ -839,12 +842,15 @@ mod tests {
         assert!(character_grooms(hair, &GroomSetSpec { scalp_strands: MAX_SCALP_STRANDS + 1, ..spec }).is_err());
     }
 
-    /// `[HAIR-02]` Strands blend only guides whose root frames turn the same way as their own: the
-    /// template's scalp has frame flips (UV seams, where the tangent turns round), and a strand
-    /// blending a guide across one was bent away from the hair around it (strays standing out
-    /// behind the occiput in the medium straight and long wavy stills).
+    /// `[HAIR-02]` Strands blend their guides in world directions: the template's scalp has
+    /// frame flips (UV seams, where the root frame's tangent turns round), and a strand blending
+    /// guides in its own root frame across one was bent away from the hair around it (strays
+    /// standing out behind the occiput in the medium straight and long wavy stills). Measured: the
+    /// strands whose first quarter leaves more than 60 degrees away from their main guide's, with
+    /// the root-frame blend and with the world blend.
     #[test]
-    fn hair_02_strands_do_not_blend_guides_across_frame_flips() {
+    fn hair_02_strands_blend_guides_in_world_directions() {
+        use crate::hair::generate::{GenerateInput, generate, root_frames};
         let (_, hair) = fixture();
         let s = hair.surface();
         let spec = GroomSetSpec {
@@ -857,15 +863,8 @@ mod tests {
         };
         let set = character_grooms(hair, &spec).unwrap();
         let scalp = set.iter().find(|g| g.kind == GroomKind::Scalp).unwrap();
-        let tangent = |t: u32, b: [f32; 2]| s.frame(t, b).unwrap().t;
-        let guide_t: Vec<Vec3> = (0..scalp.guides.len())
-            .map(|g| {
-                let (t, b) = scalp.guides.root(g).unwrap();
-                tangent(t, b)
-            })
-            .collect();
-        // Flipped neighbours: guide pairs closer than 2 cm whose tangents point apart.
         let roots: Vec<Vec3> = (0..scalp.guides.len()).map(|g| scalp.guides.frame(g, s).unwrap().origin).collect();
+        let guide_t: Vec<Vec3> = (0..scalp.guides.len()).map(|g| scalp.guides.frame(g, s).unwrap().t).collect();
         let mut flipped = 0;
         for a in 0..roots.len() {
             for b in a + 1..roots.len() {
@@ -874,23 +873,50 @@ mod tests {
                 }
             }
         }
+        let n = scalp.params.point_count() as usize;
+        let quarter = n / 4;
+        // The main guide's direction over its first quarter, in the world.
+        let guide_dir: Vec<Vec3> = (0..scalp.guides.len())
+            .map(|g| {
+                let w = scalp.guides.world_points(g, &scalp.guides.frame(g, s).unwrap());
+                let q = (w.len() - 1) / 4;
+                (w[q] - w[0]).normalize_or_zero()
+            })
+            .collect();
+        let frames = root_frames(&scalp.layout, s).unwrap();
         let l = &scalp.layout;
-        let mut across = 0;
-        for i in 0..l.len() {
-            let own = tangent(l.triangle[i], l.bary[i]);
-            let blended = (0..4).filter(|&j| l.weights[i][j] > 0.0).map(|j| l.guides[i][j] as usize);
-            let bad = blended.filter(|&g| guide_t[g].dot(own) <= crate::hair::placement::GUIDE_FRAME_AGREEMENT).count();
-            // A strand whose every candidate disagrees keeps its nearest guide alone.
-            if bad > 0 && (1..4).any(|j| l.weights[i][j] > 0.0) {
-                across += 1;
-            }
-        }
+        let strays = |world: bool| {
+            let curves = if world {
+                scalp.guides.resampled_world(n as u32, s).unwrap()
+            } else {
+                scalp.guides.resampled(n as u32)
+            };
+            let input = GenerateInput {
+                layout: l,
+                curves: &curves,
+                params: &scalp.params,
+                frames: &frames,
+                sdf: Some(hair.sdf()),
+                world_curves: world,
+            };
+            let g = generate(&input).unwrap();
+            (0..l.len())
+                .filter(|&i| {
+                    let main = (0..4).max_by(|&a, &b| l.weights[i][a].total_cmp(&l.weights[i][b])).unwrap_or(0);
+                    let dir = (g.shape[i * n + quarter] - g.shape[i * n]).normalize_or_zero();
+                    dir.dot(guide_dir[l.guides[i][main] as usize]) < 0.5
+                })
+                .count()
+        };
+        let (local, world) = (strays(false), strays(true));
         println!(
-            "[HAIR-02] {} guides: {flipped} guide pairs under 2 cm apart with opposite frames; {} strands, {across}              blending a disagreeing guide",
+            "[HAIR-02] {} guides: {flipped} guide pairs under 2 cm apart with opposite root frames; {} strands; \
+             strays (first quarter over 60 degrees from the main guide's): root-frame blend {local}, world blend {world}",
             scalp.guides.len(),
             l.len()
         );
-        assert_eq!(across, 0);
+        assert!(world <= local, "{world} > {local}");
+        assert!(world * 1000 < l.len(), "{world} strays");
     }
 
     /// `[HAIR-04]` Every lash point stays outside both eyeballs (the template's `eyeball-L` /
@@ -913,8 +939,19 @@ mod tests {
         let (mut inside_eye, mut inside_skin, mut points) = (0, 0, 0);
         let mut nearest = f32::INFINITY;
         let mut worst: Option<(f32, Vec3, f32)> = None;
+        // Crumpled lashes (the canthi used to show zigzags): the largest turn between two
+        // segments of a lash.
+        let (mut crumpled, mut sharpest) = (0, 0.0_f32);
         for i in 0..lashes.guides.len() {
             let w = lashes.guides.world_points(i, &lashes.guides.frame(i, s).unwrap());
+            let turn = w
+                .windows(3)
+                .map(|q| {
+                    (q[1] - q[0]).normalize_or_zero().dot((q[2] - q[1]).normalize_or_zero()).clamp(-1.0, 1.0).acos()
+                })
+                .fold(0.0_f32, f32::max);
+            sharpest = sharpest.max(turn);
+            crumpled += usize::from(turn > 0.5);
             for (k, &p) in w.iter().enumerate() {
                 points += 1;
                 let eye =
@@ -943,6 +980,10 @@ mod tests {
             lashes.guides.len(),
             nearest * 1e3
         );
+        println!(
+            "[HAIR-04] lashes with a turn above 0.5 rad between two segments: {crumpled}; sharpest {sharpest:.3} rad"
+        );
+        assert_eq!(crumpled, 0, "crumpled lashes");
         assert_eq!(inside_eye, 0, "lash points touch or pierce an eyeball");
         assert_eq!(inside_skin, 0, "lash points run inside the lid skin");
     }

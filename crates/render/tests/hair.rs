@@ -382,6 +382,7 @@ mod template_head {
             factors: perm.iter().map(|&o| layout.factors[o]).collect(),
             direction: perm.iter().map(|&o| layout.direction[o]).collect(),
             color: perm.iter().map(|&o| layout.color[o]).collect(),
+            hairline: perm.iter().map(|&o| layout.hairline[o]).collect(),
         }
     }
 
@@ -415,7 +416,7 @@ mod template_head {
             let sdf = (g.kind == GroomKind::Scalp).then(|| hair.sdf());
             let mut gg = GpuGroom::new(h.gpu, &mut h.resources, hair.surface(), sdf, capacity).unwrap();
             gg.set_params(&mut h.resources, &g.params).unwrap();
-            gg.set_guides(&mut h.resources, &g.guides.resampled(points)).unwrap();
+            gg.set_world_guides(&mut h.resources, &g.guides.resampled_world(points, hair.surface()).unwrap()).unwrap();
             gg.set_layout(&mut h.resources, hair.surface(), &g.layout).unwrap();
             gg.bind_rest_skin(&h.gpu.device).unwrap();
             assert!(gg.encode_generate(&mut encoder) && gg.encode_attach(&mut encoder));
@@ -518,8 +519,12 @@ mod template_head {
         (median(&mut hair), list, median(&mut total))
     }
 
-    /// Saves `h`'s display as target/review/hair/`name` (and in the shots folder).
+    /// The prefix of this round's stills (earlier rounds' stills stay for comparison).
+    pub const ROUND: &str = "r4-";
+
+    /// Saves `h`'s display as target/review/hair/[`ROUND`]`name` (and in the shots folder).
     pub fn save(h: &mut common::Harness, name: &str) -> Vec<u8> {
+        let name = &format!("{ROUND}{name}");
         let (w, ht, rgba) = h.display();
         let png = humanart_render::capture::encode_png_rgba8(w, ht, &rgba).unwrap();
         std::fs::write(review().join(name), &png).unwrap();
@@ -636,6 +641,15 @@ fn hr_05_template_head_scenes_stability_order_ribbon_and_timings() {
     );
     assert!(mean < 0.001 * base, "splitting the walks changes the image: {mean} of {base}");
     drop(keep_split);
+
+    // Skipping the segments hidden behind the scene draws the same fragments in front of it.
+    let keep_cull = install(&mut hy, &set, HairSettings { cull_hidden: false, ..full });
+    hy.frames(&cam, &r, 2);
+    let unculled = hy.resolved();
+    let (mean, worst, base) = compare(&reference, &unculled, &mask);
+    println!("[HR-04] hidden segments culled vs walked: mean |dL| {mean:.2e} (mean L {base:.4}), worst {worst:.4}");
+    assert!(mean < 0.001 * base, "culling hidden segments changes the image: {mean} of {base}");
+    drop(keep_cull);
 
     let keep3 = install(&mut hy, &set, HairSettings { path: HairPath::Ribbon, ..full });
     hy.frames(&cam, &r, 2);
@@ -829,6 +843,15 @@ fn hr_07_timings_at_1440p_close_up_and_far_field() {
             save(&mut hz, "far_field_1440p.png");
         }
     }
+    // The close-up again without the hidden-segment test (before/after of the scene depth tiles).
+    if let Some(hr) = hz.renderer.hair_mut() {
+        hr.set_settings(&mut hz.resources, HairSettings { cull_hidden: false, ..HairSettings::default() }).unwrap();
+    }
+    let (ms, scopes, frame_ms) = hair_ms(&mut hz, &close, &r, 24);
+    println!(
+        "[HR-04] 1440p close-up, hidden segments not culled: hair passes {ms:.3} ms GPU median ({scopes}), whole frame \
+         {frame_ms:.3} ms"
+    );
     // The close-up again with one raster thread per segment (the walks not split).
     if let Some(hr) = hz.renderer.hair_mut() {
         hr.set_settings(&mut hz.resources, HairSettings { split_walks: false, ..HairSettings::default() }).unwrap();
@@ -888,6 +911,19 @@ fn hr_08_preset_stills_front_profile_back() {
             let covered = hair_mask(&hx).iter().filter(|m| **m).count();
             println!("[HAIR-03] preset {} {view}: {covered} hair pixels", style.name());
             assert!(covered > 2000, "{} {view}: {covered}", style.name());
+        }
+        if style == ScalpStyle::MediumStraight {
+            // The front hairline and the part, close: a soft hairline, not a wig's edge.
+            let (_, hair) = template_head::fixture();
+            let brows: Vec<humanart_math::Vec3> = hair.lines().brows.iter().flatten().copied().collect();
+            let mid = brows.iter().fold(humanart_math::Vec3::ZERO, |a, &b| a + b) * (1.0 / brows.len().max(1) as f32);
+            let mut cam = camera(ReviewCamera::Front, 0.45, aspect, &r);
+            let target = mid + hair.anchors().up * 0.05;
+            let offset = cam.position - cam.target;
+            cam.target = target;
+            cam.position = target + offset;
+            hx.frames(&cam, &r, 24);
+            save(&mut hx, "hairline_medium-straight_front.png");
         }
         drop(keep);
     }

@@ -40,8 +40,9 @@ use super::HairError;
 use super::bsdf::FibreParams;
 use super::luts::HairLuts;
 use super::view::{
-    COVERAGE_ONE, COVERAGE_SATURATION, DOM_LAYERS, DomFrame, DrawBlock, FLAG_DUAL, FLAG_OCCLUSION, FLAG_SKIN_SHADOW,
-    Grid, GroomLod, LOD_MIN_KEEP, LodInput, MAX_DOMS, MAX_GROOMS, VOXEL_TAU_FACTOR, ViewBlock, dom_lights,
+    COVERAGE_ONE, COVERAGE_SATURATION, DOM_LAYERS, DomFrame, DrawBlock, FLAG_CULL, FLAG_DUAL, FLAG_OCCLUSION,
+    FLAG_SKIN_SHADOW, Grid, GroomLod, LOD_MIN_KEEP, LodInput, MAX_DOMS, MAX_GROOMS, TILE, VOXEL_TAU_FACTOR, ViewBlock,
+    dom_lights,
 };
 use crate::camera::ViewMatrices;
 use crate::groom::GpuGroom;
@@ -94,6 +95,10 @@ pub struct HairSettings {
     /// off draws one thread per segment (the reference for the close-range timings, `[HR-04]`).
     /// The image is the same either way.
     pub split_walks: bool,
+    /// Skip, in the compute raster, segments hidden behind the opaque scene (hair behind the
+    /// head): a pass keeps the farthest scene depth of every 16-pixel tile, and a segment behind
+    /// it in every tile it touches is not walked. The image is the same either way.
+    pub cull_hidden: bool,
 }
 
 impl Default for HairSettings {
@@ -107,6 +112,7 @@ impl Default for HairSettings {
             voxels: 64,
             full_detail: false,
             split_walks: true,
+            cull_hidden: true,
         }
     }
 }
@@ -255,6 +261,7 @@ enum Key {
     RasterDepth,
     RasterRecords,
     Voxelize,
+    DepthTiles,
     DomDepth,
     DomOpacity,
     ResolvePipeline,
@@ -322,6 +329,8 @@ struct Screen {
     depth: Owned,
     coverage: Owned,
     records: Owned,
+    /// The farthest scene depth per tile (`depth_tiles`).
+    tiles: Owned,
     ribbon: TextureId,
     ribbon_view: wgpu::TextureView,
 }
@@ -537,6 +546,7 @@ impl HairRenderer {
                 storage(2, COMPUTE, false),
                 storage(3, COMPUTE, false),
                 storage(4, COMPUTE, false),
+                storage(5, COMPUTE, false),
             ],
         )?;
         cache.bind_group_layout(
@@ -598,9 +608,12 @@ impl HairRenderer {
             depth: Option<wgpu::DepthStencilState>,
             topology: wgpu::PrimitiveTopology,
         }
-        for (key, entry_point) in
-            [(Key::RasterDepth, "raster_depth"), (Key::RasterRecords, "raster_records"), (Key::Voxelize, "voxelize")]
-        {
+        for (key, entry_point) in [
+            (Key::RasterDepth, "raster_depth"),
+            (Key::RasterRecords, "raster_records"),
+            (Key::Voxelize, "voxelize"),
+            (Key::DepthTiles, "depth_tiles"),
+        ] {
             cache.compute_pipeline(key, |parts| {
                 Ok(parts.device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
                     label: Some(entry_point),
@@ -978,18 +991,29 @@ impl HairRenderer {
                 return Err(error.unwrap_or(HairError::Invalid { what: "the hair visibility buffer" }));
             }
         };
+        let tile_count = u64::from(width.div_ceil(TILE)) * u64::from(height.div_ceil(TILE));
+        let tiles = match make_buffer(resources, tile_count * 4, storage, "hair scene depth tiles") {
+            Ok(t) => t,
+            Err(e) => {
+                for id in [depth.id, coverage.id, records.id] {
+                    let _ = resources.destroy_buffer(id);
+                }
+                let _ = resources.destroy_texture(ribbon);
+                return Err(e);
+            }
+        };
         let ribbon_view = resources
             .texture(ribbon)
             .map(|t| t.raw().create_view(&wgpu::TextureViewDescriptor::default()))
             .ok_or(GpuError::Stale { what: "hair ribbon target" })?;
-        self.screen = Some(Screen { width, height, depth, coverage, records, ribbon, ribbon_view });
+        self.screen = Some(Screen { width, height, depth, coverage, records, tiles, ribbon, ribbon_view });
         self.binds = None;
         Ok(())
     }
 
     fn drop_screen(&mut self, resources: &mut Resources) {
         if let Some(s) = self.screen.take() {
-            for id in [s.depth.id, s.coverage.id, s.records.id] {
+            for id in [s.depth.id, s.coverage.id, s.records.id, s.tiles.id] {
                 let _ = resources.destroy_buffer(id);
             }
             let _ = resources.destroy_texture(s.ribbon);
@@ -1025,6 +1049,7 @@ impl HairRenderer {
                 entry(2, screen.coverage.raw.as_entire_binding()),
                 entry(3, screen.records.raw.as_entire_binding()),
                 entry(4, self.voxels.raw.as_entire_binding()),
+                entry(5, screen.tiles.raw.as_entire_binding()),
             ],
         });
         let ribbon = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1136,6 +1161,9 @@ impl HairRenderer {
         }
         if self.settings.skin_shadow {
             flags |= FLAG_SKIN_SHADOW;
+        }
+        if self.settings.cull_hidden {
+            flags |= FLAG_CULL;
         }
         view.counts = [n, dom_count as u32, self.slots.len() as u32, flags];
         let full = self.settings.full_detail;
@@ -1280,7 +1308,24 @@ impl HairRenderer {
             }
         }
 
-        // 2. Visibility: one timed compute pass per kernel.
+        // 2. Visibility. The farthest scene depth per tile first (the hidden-segment test of the
+        //    compute raster).
+        if self.settings.path == HairPath::Compute
+            && self.settings.cull_hidden
+            && let Some(first) = self.slots.iter().find(|s| s.grid.x > 0)
+        {
+            let mut cp = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("hair depth tiles"),
+                timestamp_writes: profiler.as_deref_mut().and_then(|p| p.compute_pass_writes("hair depth tiles")),
+            });
+            cp.set_bind_group(0, &binds.view, &offsets);
+            // The draw group is unused by the kernel but part of the pipeline layout.
+            cp.set_bind_group(1, &first.bind, &[]);
+            cp.set_bind_group(2, &binds.raster, &[]);
+            cp.set_pipeline(compute(Key::DepthTiles)?);
+            cp.dispatch_workgroups(screen.width.div_ceil(TILE), screen.height.div_ceil(TILE), 1);
+        }
+        // One timed compute pass per kernel.
         let passes: &[(Key, &'static str)] = match self.settings.path {
             HairPath::Compute => &[
                 (Key::Voxelize, "hair voxelize"),

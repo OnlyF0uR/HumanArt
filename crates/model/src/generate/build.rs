@@ -9,12 +9,13 @@ use super::assemble::{Assembled, assemble};
 use super::genitals::Variant;
 use super::landmarks::{self, Described};
 use super::regions::TILES;
-use super::{Surface, body_surface_with, parts, rig, uv};
+use super::{Surface, parts, rig, uv};
 use crate::delta::DeltaBases;
 use crate::error::{ModelError, Result};
 use crate::expression::ExpressionSet;
 use crate::expression::build::{CorrectiveSpecs, with_expressions};
 use crate::expression::error::ExprError;
+use crate::identity::scan::ScanField;
 use crate::landmark::Landmark;
 use crate::simplify::{LodErrorReport, LodInput, LodSettings, ProtectedLoop, generate_lods};
 use crate::template::{ProvenanceEntry, Template, TemplateInfo, TemplateParts, UvTile};
@@ -22,7 +23,15 @@ use crate::template::{ProvenanceEntry, Template, TemplateInfo, TemplateParts, Uv
 /// Stable name of the generated template.
 pub const TEMPLATE_NAME: &str = "humanart-neutral";
 /// Content version of the generated template; raised whenever the generator's output changes.
-pub const TEMPLATE_VERSION: u32 = 1;
+pub const TEMPLATE_VERSION: u32 = 2;
+/// Version of the fitting base: the geometry built with [`Options::scan_face`] off, which scans are
+/// fitted to (`fit-scan`) and the face model's offsets are measured from (`face-model`). Raised only
+/// when that geometry changes; then every fit and the face model must be rebuilt. Fits and face
+/// models record this number, not [`TEMPLATE_VERSION`] (which also rises for changes the scan face
+/// and the finishing steps make on top of the base).
+pub const BASE_VERSION: u32 = 1;
+/// The template's licence when the scanned face is applied ([`Options::scan_face`]).
+pub const SCAN_FACE_LICENCE: &str = "procedural (LIC-02 c) except the face shape: the mean of HSRD-100 scans,      CC BY 4.0 (attribution in the provenance entry 'face shape')";
 /// The generator string stored in the template.
 pub const GENERATOR: &str = "humanart-model generate (procedural in-house template, ADR-006)";
 
@@ -35,11 +44,15 @@ pub struct Options {
     pub lod_settings: LodSettings,
     /// The external genitalia (ADR-039).
     pub genitals: Variant,
+    /// Whether the head is finished: the scanned mean face ([`super::scan_face`]) and the steps
+    /// after it (the cranium). Off only for the fitting base ([`BASE_VERSION`]) that `fit-scan` and
+    /// `face-model` work on: the face model's offsets are measured from the head without them.
+    pub scan_face: bool,
 }
 
 impl Default for Options {
     fn default() -> Self {
-        Self { lods: true, lod_settings: LodSettings::default(), genitals: Variant::default() }
+        Self { lods: true, lod_settings: LodSettings::default(), genitals: Variant::default(), scan_face: true }
     }
 }
 
@@ -106,7 +119,8 @@ fn first_copies(asm: &Assembled) -> Vec<u32> {
     first
 }
 
-/// The template's info: name, version, generator, licence and provenance `[LIC-02]`.
+/// The template's info: name, version, generator, licence and provenance `[LIC-02]` of the procedural
+/// template; [`template`] adds the scanned face's licence and entry when it applies the face.
 pub fn info() -> TemplateInfo {
     let procedural = |item: &str, source: &str| ProvenanceEntry {
         item: item.to_owned(),
@@ -154,14 +168,30 @@ fn expression_error(e: ExprError) -> ModelError {
 
 /// Builds the whole template.
 pub fn template(options: &Options) -> Result<Generated> {
-    let surface = body_surface_with(options.genitals)?;
+    let auricle = if options.scan_face { super::anatomy::Auricle::Finished } else { super::anatomy::Auricle::Base };
+    let surface = super::body_surface_for(options.genitals, auricle)?;
     let parts = parts::build(&surface.anatomy, &surface.body, &surface.targets)?;
     let pieces: Vec<&super::cage::Cage> =
         std::iter::once(surface.mesh()).chain(parts.iter().map(|p| &p.mesh)).collect();
     let layout = uv::layout(&pieces)?;
-    let asm = assemble(&surface, &parts, &layout)?;
+    let mut asm = assemble(&surface, &parts, &layout)?;
     let described = landmarks::build(&surface, &asm)?;
-    let anatomy: &Anatomy = &surface.anatomy;
+    // The scanned face moves the eyes; the eye joints and lid helpers move with them.
+    let mut anatomy: Anatomy = surface.anatomy.clone();
+    let mut scan_components = Vec::new();
+    if options.scan_face {
+        let (report, components) = super::scan_face::apply(&mut asm, &described, &surface.anatomy)?;
+        anatomy.eye_center += report.eyes[0];
+        scan_components = components;
+        super::finish::cranium(&mut asm, &surface.anatomy)?;
+        super::finish::fair_nose_root(&mut asm, &surface.anatomy)?;
+    }
+    let mut info = info();
+    if options.scan_face {
+        SCAN_FACE_LICENCE.clone_into(&mut info.licence);
+        info.provenance.push(super::scan_face::provenance()?);
+    }
+    let anatomy = &anatomy;
     let rig = rig::skeleton(anatomy, 0)?;
     let skin = rig::skin(&rig, anatomy, &asm.mesh, &asm.regions)?;
     let tiles = TILES
@@ -173,7 +203,7 @@ pub fn template(options: &Options) -> Result<Generated> {
         })
         .collect();
     let template = Template::new(TemplateParts {
-        info: info(),
+        info,
         mesh: asm.mesh.clone(),
         tiles,
         regions: asm.regions.clone(),
@@ -187,6 +217,10 @@ pub fn template(options: &Options) -> Result<Generated> {
     // The identity components (shape axes and joint-regressor rows) and the expression targets
     // and correctives are authored on the finished LOD0 template.
     let (template, _) = crate::identity::with_identity(&template)?;
+    // The face-shape components of the scans (todo 1.2), bound as `face.scan.shape_NN`.
+    let fields: Vec<ScanField<'_>> =
+        scan_components.iter().map(|c| ScanField { offsets: &c.offsets, eye: c.eye }).collect();
+    let template = crate::identity::add_components(&template, &crate::identity::scan::components(&template, &fields)?)?;
     let specs = CorrectiveSpecs::builtin().map_err(expression_error)?;
     let (template, _) = with_expressions(&template, &specs).map_err(expression_error)?;
     let loops = protected_loops(&surface, &asm)?;

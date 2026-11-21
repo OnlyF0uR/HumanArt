@@ -1,5 +1,7 @@
-//! `[AC-WP11-1]` the generated template (`humanart_model::generate::body_surface`) renders with
-//! correct IBL and shadows: in the white furnace every visible point of the head has diffuse
+//! `[AC-WP11-1]` the generated template renders with correct IBL and shadows. The mesh is the
+//! skin that ships: the `body` part of LOD0 of `generate::build::template` with the default
+//! options (the scanned face, the finished cranium, ears and lips; todo 1.1 and 1.3), not the
+//! scan-fitting base `generate::body_surface`. The checks: in the white furnace every visible point of the head has diffuse
 //! lighting 1, and under a directional key light the points a CPU ray cast finds occluded are
 //! dark while the others match the unshadowed render (points within about 6 mm of a shadow
 //! boundary, where the shadow map's resolution and filter decide, are left out). Review shots of the head and the body are
@@ -15,7 +17,8 @@
 mod common;
 
 use humanart_math::{Vec2, Vec3, ndc_to_screen};
-use humanart_model::generate::{anatomy::HEAD_HEIGHT, body_surface};
+use humanart_model::generate::anatomy::HEAD_HEIGHT;
+use humanart_model::generate::build::{Options, template as build_template};
 use humanart_render::camera::{Camera, Exposure, ViewMatrices};
 use humanart_render::capture;
 use humanart_render::ibl::EnvironmentSource;
@@ -23,16 +26,28 @@ use humanart_render::light::{Background, BuiltinRig, Light, LightRig, Procedural
 use humanart_render::renderer::RenderConfig;
 use humanart_render::scene::{Material, Mesh, Scene};
 
-/// The template surface as a render mesh, its head centre and its head top.
+/// The shipped template's skin as a render mesh (the `body` part of LOD0 of
+/// `generate::build::template(&Options::default())`; the LODs are not built, they do not change
+/// LOD0), only the vertices its triangles use, with its head centre and its head top.
 fn template() -> (Mesh, Vec3, f32) {
     let start = std::time::Instant::now();
-    let surface = body_surface().unwrap();
-    let cage = surface.mesh();
-    let polygons =
-        (0..cage.offsets.len() - 1).map(|f| &cage.corners[cage.offsets[f] as usize..cage.offsets[f + 1] as usize]);
-    let mesh = Mesh::from_polygons(&cage.pos, polygons).unwrap();
-    let top = cage.pos.iter().map(|p| p.y).fold(f32::MIN, f32::max);
-    let head: Vec<Vec3> = cage.pos.iter().copied().filter(|p| p.y > top - HEAD_HEIGHT).collect();
+    let generated = build_template(&Options { lods: false, ..Options::default() }).unwrap();
+    let skin = Mesh::from_template(generated.template.mesh(), Some("body")).unwrap();
+    // The template mesh keeps every vertex of every part: drop those the skin does not use.
+    let mut map = vec![u32::MAX; skin.positions.len()];
+    let mut mesh = Mesh::default();
+    for &i in &skin.indices {
+        let i = i as usize;
+        if map[i] == u32::MAX {
+            map[i] = mesh.positions.len() as u32;
+            mesh.positions.push(skin.positions[i]);
+            mesh.normals.push(skin.normals[i]);
+            mesh.uvs.push(skin.uvs[i]);
+        }
+        mesh.indices.push(map[i]);
+    }
+    let top = mesh.positions.iter().map(|p| p.y).fold(f32::MIN, f32::max);
+    let head: Vec<Vec3> = mesh.positions.iter().copied().filter(|p| p.y > top - HEAD_HEIGHT).collect();
     let (lo, hi) =
         head.iter().fold((Vec3::splat(f32::MAX), Vec3::splat(f32::MIN)), |(lo, hi), &p| (lo.min(p), hi.max(p)));
     println!(

@@ -233,13 +233,17 @@ fn shd_05_terminator_softens_through_the_profile() {
     assert!(results[2][0] < 1e-3, "a plain material ends at the terminator: {:?}", results[2]);
 }
 
-/// The template's surface as a render mesh (`humanart_model::generate::body_surface`).
+/// The shipped template's skin as a render mesh: the `body` part of LOD0 of
+/// `humanart_model::generate::build::template` with the default options (the scanned face and the
+/// finished head; the LODs are not built, they do not change LOD0), not the scan-fitting base
+/// `generate::body_surface`.
 fn template_mesh() -> Mesh {
-    let surface = humanart_model::generate::body_surface().unwrap();
-    let cage = surface.mesh();
-    let polygons =
-        (0..cage.offsets.len() - 1).map(|f| &cage.corners[cage.offsets[f] as usize..cage.offsets[f + 1] as usize]);
-    Mesh::from_polygons(&cage.pos, polygons).unwrap()
+    let generated = humanart_model::generate::build::template(&humanart_model::generate::build::Options {
+        lods: false,
+        ..Default::default()
+    })
+    .unwrap();
+    Mesh::from_template(generated.template.mesh(), Some("body")).unwrap()
 }
 
 /// `[AC-WP14-3]` the subsurface passes at 1440p with the template's face filling the frame

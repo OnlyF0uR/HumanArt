@@ -579,6 +579,46 @@ impl StreamingPool {
         max_loads: u32,
         mut fill: impl FnMut(TileRequest, &mut [u8]) -> Result<(), GpuError>,
     ) -> Result<UpdateReport, GpuError> {
+        self.load_queued(resources, max_loads, |pool, resources, request, slot| {
+            fill(request, &mut pool.tile_bytes)?;
+            let location = pool.slot_location(slot);
+            let tile = pool.desc.tile_size;
+            resources.write_texture_region(
+                pool.pool,
+                0,
+                [location.x, location.y, location.layer],
+                tile,
+                tile,
+                &pool.tile_bytes,
+            )
+        })
+    }
+
+    /// [`StreamingPool::update`] for tiles whose texels the caller writes on the GPU itself (a copy
+    /// from a texture the GPU made, recorded into a command encoder): each queued tile gets a slot,
+    /// `assign` is told the tile and where its slot is, and the pool uploads nothing for it, so a
+    /// GPU-made tile costs no CPU upload of its size. The caller must write every slot it is
+    /// given before the pool texture is sampled (submit the copies in the same frame); a slot it
+    /// does not write shows what it held before (an evicted tile's texels, or zeros). An error
+    /// from `assign` stops the update and that tile stays missing. Then the changed page-table
+    /// rows are uploaded.
+    pub fn update_external(
+        &mut self,
+        resources: &mut Resources,
+        max_loads: u32,
+        mut assign: impl FnMut(TileRequest, SlotLocation) -> Result<(), GpuError>,
+    ) -> Result<UpdateReport, GpuError> {
+        self.load_queued(resources, max_loads, |pool, _, request, slot| assign(request, pool.slot_location(slot)))
+    }
+
+    /// The loop of [`StreamingPool::update`] and [`StreamingPool::update_external`]: `write` puts
+    /// the texels of `request` into `slot`.
+    fn load_queued(
+        &mut self,
+        resources: &mut Resources,
+        max_loads: u32,
+        mut write: impl FnMut(&mut Self, &mut Resources, TileRequest, u32) -> Result<(), GpuError>,
+    ) -> Result<UpdateReport, GpuError> {
         let mut report = UpdateReport::default();
         while report.loaded < max_loads {
             let Some(page) = self.dequeue() else { break };
@@ -593,20 +633,7 @@ impl StreamingPool {
                 break;
             };
             let request = TileRequest::unpack(self.page_address[index]);
-            if let Err(error) = fill(request, &mut self.tile_bytes) {
-                self.free_slots.push(slot);
-                return Err(error);
-            }
-            let location = self.slot_location(slot);
-            let tile = self.desc.tile_size;
-            if let Err(error) = resources.write_texture_region(
-                self.pool,
-                0,
-                [location.x, location.y, location.layer],
-                tile,
-                tile,
-                &self.tile_bytes,
-            ) {
+            if let Err(error) = write(self, resources, request, slot) {
                 self.free_slots.push(slot);
                 return Err(error);
             }
@@ -814,6 +841,84 @@ mod tests {
         readback.read_blocking(&gpu.device, ticket, &mut texels).unwrap();
         assert!(texels.as_chunks::<4>().0.iter().all(|texel| *texel == [square, 0, 5, 5]), "{texels:?}");
         assert_eq!(gpu.events().pending(), 0);
+    }
+
+    /// `[SKN-03]` (todo 6): tiles the caller writes on the GPU get their slots and page-table
+    /// entries like uploaded ones, and the pool uploads none of their texels (before, a GPU-copied
+    /// page cost one upload of zeros of its size).
+    #[test]
+    fn skn_03_external_tiles_get_slots_without_a_texel_upload() {
+        let gpu = testing::gpu();
+        let mut resources = Resources::new(gpu, Budget::UNLIMITED);
+        let mut pool = StreamingPool::new(&mut resources, desc(4, 32)).unwrap();
+        let square = pool.add_texture(32, 32).unwrap();
+        let fine = TileRequest { texture: square, mip: 0, x: 5, y: 5 };
+        pool.begin_frame();
+        pool.request(fine).unwrap();
+        let texture = resources.texture(pool.pool_texture()).unwrap().raw().clone();
+        let before = resources.stats().bytes_uploaded;
+        let mut assigned = Vec::new();
+        let report = pool
+            .update_external(&mut resources, 8, |request, at| {
+                // The caller's GPU write: here the test's own write of the tile's texels.
+                let mut texels = [0_u8; 64];
+                fill(request, &mut texels)?;
+                gpu.queue.write_texture(
+                    wgpu::TexelCopyTextureInfo {
+                        texture: &texture,
+                        mip_level: 0,
+                        origin: wgpu::Origin3d { x: at.x, y: at.y, z: at.layer },
+                        aspect: wgpu::TextureAspect::All,
+                    },
+                    &texels,
+                    wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(16), rows_per_image: Some(4) },
+                    wgpu::Extent3d { width: 4, height: 4, depth_or_array_layers: 1 },
+                );
+                assigned.push((request, at));
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(report.loaded, 4, "the pinned top, the tile and its two missing ancestors");
+        assert_eq!(assigned.len(), 4);
+        assert_eq!(
+            resources.stats().bytes_uploaded - before,
+            report.table_bytes,
+            "only page-table rows went to the queue, no tile texels"
+        );
+        assert_eq!(pool.lookup(fine).unwrap().mip, 0);
+        let (_, at) = assigned.iter().find(|(r, _)| *r == fine).unwrap();
+        assert_eq!(pool.slot_location(pool.lookup(fine).unwrap().slot), *at);
+        check_invariants(&pool);
+        // The same loads through `update` upload every tile's texels.
+        let mut uploaded = StreamingPool::new(&mut resources, desc(4, 32)).unwrap();
+        uploaded.add_texture(32, 32).unwrap();
+        uploaded.begin_frame();
+        uploaded.request(fine).unwrap();
+        let before = resources.stats().bytes_uploaded;
+        let report = uploaded.update(&mut resources, 8, fill).unwrap();
+        assert_eq!(report.loaded, 4);
+        assert!(resources.stats().bytes_uploaded - before >= report.table_bytes + 4 * 64);
+        // An error from `assign` leaves the tile missing and its slot free.
+        pool.begin_frame();
+        let other = TileRequest { texture: square, mip: 0, x: 0, y: 0 };
+        pool.request(other).unwrap();
+        let failed = pool.update_external(&mut resources, 8, |_, _| Err(GpuError::Invalid { what: "test" }));
+        assert!(failed.is_err());
+        assert!(!pool.is_resident(other));
+        check_invariants(&pool);
+        // The GPU slot holds what the caller wrote.
+        let slot = pool.lookup(fine).unwrap().slot;
+        let location = pool.slot_location(slot);
+        let mut readback = ReadbackRing::new(&mut resources, 1, 4096, "check").unwrap();
+        let mut encoder = gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
+        let ticket = readback
+            .copy_texture(&mut encoder, &texture, 0, [location.x, location.y, location.layer], [4, 4, 1], 0)
+            .unwrap();
+        gpu.queue.submit([encoder.finish()]);
+        readback.after_submit();
+        let mut texels = [0_u8; 64];
+        readback.read_blocking(&gpu.device, ticket, &mut texels).unwrap();
+        assert!(texels.as_chunks::<4>().0.iter().all(|texel| *texel == [square, 0, 5, 5]), "{texels:?}");
     }
 
     #[test]
