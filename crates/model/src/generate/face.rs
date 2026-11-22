@@ -19,7 +19,7 @@ use std::f32::consts::{FRAC_PI_2, PI, TAU};
 
 use humanart_math::Vec3;
 
-use super::anatomy::{Anatomy, Auricle, sided};
+use super::anatomy::{Anatomy, Auricle, EAR_BREADTH, EAR_LENGTH, sided};
 use super::body::head_point;
 use super::cage::{Cage, Tag};
 use super::regions::{C, R};
@@ -67,7 +67,8 @@ pub struct NoseLoops {
 #[derive(Clone, Debug, Default)]
 pub struct EarLoops {
     /// Rings from the block boundary outward: 0 block, 1 root, 2 helix back, 3 helix rim,
-    /// 4 scapha, 5 antihelix.
+    /// 4 scapha, 5 antihelix (and 6 the concha wall in the finished auricle, whose rings 2 to 6
+    /// have twice the block's slots).
     pub rings: Vec<Vec<u32>>,
     /// Slot angles (0 = back, 90 degrees = up).
     pub params: Vec<f32>,
@@ -161,6 +162,9 @@ pub(crate) fn on_sphere(x: f32, y: f32, r: f32) -> f32 {
 
 /// How far (mm) the subdivided lid margin rolls into the opening past its cage rings.
 const MARGIN_ROLL: f32 = 1.4;
+/// How far (mm) the fornix ring turns back at the lateral canthus of the finished head (its
+/// forward depth there goes from 4 mm to 4 mm less this).
+const LATERAL_FORNIX_TUCK: f32 = 4.0;
 
 /// Fills an eye block (8-vertex ring, counter-clockwise from outside).
 pub fn eye(cage: &mut Cage, a: &Anatomy, hole: &[u32], side: f32) -> Result<EyeLoops> {
@@ -229,7 +233,17 @@ pub fn eye(cage: &mut Cage, a: &Anatomy, hole: &[u32], side: f32) -> Result<EyeL
     let ring1: Vec<Vec3> = params.iter().map(|&t| crease(t)).collect();
     let ring2: Vec<Vec3> = params.iter().map(|&t| margin(t, 0.0, r + 1.7)).collect();
     let ring3: Vec<Vec3> = params.iter().map(|&t| margin(t, 0.04, r + 0.35)).collect();
-    let ring4: Vec<Vec3> = params.iter().map(|&t| fornix(t, 4.0, r + 0.7)).collect();
+    // Finished head (round 4): at the lateral canthus the fornix turns back, so the strip of
+    // socket lining between the eyeball's outline and the meeting lids lies in the corner's shadow
+    // instead of facing the viewer as a pale column ([`LATERAL_FORNIX_TUCK`]).
+    let lateral_tuck = |t: f32| -> f32 {
+        if a.auricle != Auricle::Finished || t.cos() <= 0.0 {
+            return 0.0;
+        }
+        let w = (PI * (t.rem_euclid(TAU) / PI).fract()).sin().max(0.0);
+        LATERAL_FORNIX_TUCK * (1.0 - w).powi(3)
+    };
+    let ring4: Vec<Vec3> = params.iter().map(|&t| fornix(t, 4.0 - lateral_tuck(t), r + 0.7)).collect();
     let ring5: Vec<Vec3> = params.iter().map(|&t| fornix(t, -6.0, r + 1.2)).collect();
     // The parameter in the middle of slot `i` (between ring vertices `i` and `i + 1`).
     let n = params.len();
@@ -692,18 +706,16 @@ fn auricle(t: f32) -> (f32, f32, f32) {
 /// Fills an ear block (8-vertex ring, counter-clockwise from outside).
 /// `design` picks the auricle ([`Auricle`]).
 pub fn ear(cage: &mut Cage, hole: &[u32], side: f32, design: Auricle) -> Result<EarLoops> {
-    let finished = design == Auricle::Finished;
     if hole.len() != 8 {
         return Err(ModelError::invalid("ear block", hole.len(), "ear block ring must have 8 vertices"));
     }
+    if design == Auricle::Finished {
+        return ear_finished(cage, hole, side);
+    }
     let centre = hole.iter().fold(Vec3::ZERO, |s, &v| s + cage.pos[v as usize]) / 8.0;
     let tilt = 0.30_f32;
-    // Finished: the auricle's plane faces out and a little forward (6 degrees); with the helix
-    // standing off the head toward the back (`auricle`'s protrusion) the auricle makes about 30
-    // degrees with the side of the head, so it shows its rim and concha from the front instead of a
-    // thin edge (the base design faces 16 degrees back and reads as a blade from the front).
-    let out =
-        if finished { Vec3::new(side * 0.9945, 0.0, 0.105) } else { Vec3::new(side * 0.96, 0.0, -0.28) }.normalize();
+    // The base design faces 16 degrees back (it reads as a blade from the front).
+    let out = Vec3::new(side * 0.96, 0.0, -0.28).normalize();
     let up = Vec3::new(0.0, tilt.cos(), -tilt.sin());
     let back = up.cross(out) * side;
     let local = |b: f32, u: f32, o: f32| -> Vec3 { centre + (back * b + up * u + out * o) * 0.001 };
@@ -736,22 +748,14 @@ pub fn ear(cage: &mut Cage, hole: &[u32], side: f32, design: Auricle) -> Result<
         .iter()
         .map(|&t| {
             let (b, u, _) = auricle(t);
-            // Finished: a broad attachment (60 % of the auricle's height): seen from behind the
-            // auricle grows out of the head instead of standing on a stalk.
-            if finished {
-                local(b * 0.6, u * 0.6, 3.5 + 2.0 * t.cos().max(0.0))
-            } else {
-                local(b * 0.55, u * 0.32, 4.0 + 2.5 * t.cos().max(0.0))
-            }
+            local(b * 0.55, u * 0.32, 4.0 + 2.5 * t.cos().max(0.0))
         })
         .collect();
     let rings_pts = [
         root,
-        // Finished: the helix rim rolls over 30 % of the protrusion (4 to 5 mm) and 8 % of the
-        // outline, the scapha sinks behind it.
-        ring_pts(1.0, 0.0, if finished { 0.80 } else { 0.88 }),
-        ring_pts(if finished { 0.92 } else { 0.97 }, 0.0, if finished { 1.10 } else { 1.06 }),
-        ring_pts(0.74, -0.5, if finished { 0.86 } else { 0.92 }),
+        ring_pts(1.0, 0.0, 0.88),
+        ring_pts(0.97, 0.0, 1.06),
+        ring_pts(0.74, -0.5, 0.92),
         ring_pts(0.52, -1.0, 0.97),
     ];
     let tags: [&dyn Fn(f32) -> R; 5] = [
@@ -781,6 +785,252 @@ pub fn ear(cage: &mut Cage, hole: &[u32], side: f32, design: Auricle) -> Result<
     let concha_pt = local(-1.0, -3.0, 1.5);
     let interior = cage.cap(&last, 2, 2, 1, Tag::new(concha.id(), chart), &|_, _, _| concha_pt)?;
     let concha_v = interior.first().copied().unwrap_or(0);
+    Ok(EarLoops { rings, params, concha: concha_v })
+}
+
+/// How far the back of the finished auricle's rolled rim lies outside its outline on the helix, mm.
+const EAR_RIM_OUT: f32 = 1.2;
+/// How much shorter and narrower the finished auricle's outline is than the ANSUR length and
+/// breadth, mm: on the surface the rolled rim and the round lobe add this much (measured by the
+/// test `wp25_finished_ear_is_fold_free_and_ansur_sized`).
+const EAR_OUTLINE_LESS: (f32, f32) = (5.5, 1.2);
+/// Auriculocephalic angle of the finished auricle, degrees: the helix stands off the side of the
+/// head by this angle, hinged at the front edge of the auricle (normal ears 15 to 30 degrees); it
+/// sets the protrusion (ANSUR II `earprotrusion`, checked by a test).
+const EAR_ANGLE_DEG: f32 = 26.0;
+/// The concha's middle in the finished auricle's frame (back, up), mm: in front of and below the
+/// auricle's centre, where the ear canal opens.
+const CONCHA_CENTRE: (f32, f32) = (1.0, -4.0);
+/// The concha wall's rim around [`CONCHA_CENTRE`]: radii back, front, up, down, mm.
+const CONCHA_RADII: [f32; 4] = [8.0, 5.0, 12.0, 8.2];
+/// How high the concha wall's rim stands, as a share of the antihelix's height off the plane.
+const CONCHA_RIM: f32 = 0.8;
+/// Depth of the concha floor below the lowest point of the concha wall's rim, mm.
+const CONCHA_DEPTH: f32 = 5.0;
+/// Height of the finished auricle's root off the auricle's plane behind, at the front edge and at
+/// the lobe, mm.
+const ROOT_LIFT: (f32, f32, f32) = (7.0, 3.9, 3.1);
+/// The finished auricle's root behind, as a share of the back of the rim's distance from the ear
+/// block's centre.
+const ROOT_SHARE: f32 = 0.7;
+/// How far the finished auricle's root lies in front of the back of the rim at the front edge, mm.
+const ROOT_FRONT: f32 = 0.85;
+/// The finished auricle's root stays this far outside the concha's wall, mm.
+const ROOT_MARGIN: f32 = 1.8;
+/// The finished auricle's root stays within this share of the ear block's outline where a groove
+/// runs around it, and where it lies in front of the rim (the skin rises from the face into the
+/// helix root and the tragus).
+const ROOT_REACH: (f32, f32) = (0.91, 0.9);
+
+/// The finished auricle at slot angle `t` (0 = back, 90 degrees = up), in mm in the ear's frame:
+/// the outline point (back, up), the helix rim's protrusion off the auricle's plane, and how
+/// much of the lobe is there (0 above, 1 at the bottom).
+fn auricle_finished(t: f32) -> (f32, f32, f32, f32) {
+    let (s, c) = t.sin_cos();
+    let length = EAR_LENGTH * 1000.0 - EAR_OUTLINE_LESS.0;
+    let breadth = EAR_BREADTH * 1000.0 - EAR_OUTLINE_LESS.1;
+    let half_up = length * 0.52;
+    let half_down = length * 0.48;
+    // Broad, rounded top (a superellipse), a straighter back edge, the lobe narrower and round.
+    let back = if c >= 0.0 { 0.55 * breadth * c.powf(0.8) } else { -0.45 * breadth * (-c).powf(0.9) };
+    let up = if s >= 0.0 { half_up * s.powf(0.85) } else { -half_down * (-s) };
+    let lobe = (-s).max(0.0).powi(2);
+    let back = back * (1.0 - 0.3 * lobe) + 3.0;
+    // Hinged at the front edge: the farther back, the farther out; the top of the helix flares,
+    // the lobe lies closer to the head.
+    let hinge = EAR_ANGLE_DEG.to_radians().tan();
+    let front = -0.45 * breadth + 3.0;
+    let protrude = (3.5 + hinge * (back - front) + 2.5 * s.max(0.0) + 3.0 * (-c).max(0.0)) * (1.0 - 0.15 * lobe);
+    (back, up, protrude, lobe)
+}
+
+/// The finished auricle ([`Auricle::Finished`]): 16 slots from the root on (twice the block's 8),
+/// a helix rim rolled into a tube about 5 mm thick, the scapha groove inside it, the antihelix
+/// ridge, the concha's wall around [`CONCHA_CENTRE`] and its floor, a thick round lobe, hinged off
+/// the head at [`EAR_ANGLE_DEG`]; ANSUR II length and breadth ([`EAR_LENGTH`], [`EAR_BREADTH`]).
+fn ear_finished(cage: &mut Cage, hole: &[u32], side: f32) -> Result<EarLoops> {
+    let centre = hole.iter().fold(Vec3::ZERO, |s, &v| s + cage.pos[v as usize]) / 8.0;
+    let tilt = 0.30_f32;
+    // The auricle's plane faces out and a little forward (6 degrees); the hinge in
+    // `auricle_finished` turns the helix off the head.
+    let out = Vec3::new(side * 0.9945, 0.0, 0.105).normalize();
+    let up = Vec3::new(0.0, tilt.cos(), -tilt.sin());
+    let back = up.cross(out) * side;
+    let local = |b: f32, u: f32, o: f32| -> Vec3 { centre + (back * b + up * u + out * o) * 0.001 };
+    let mut params: Vec<f32> = hole
+        .iter()
+        .map(|&v| {
+            let d = cage.pos[v as usize] - centre;
+            d.dot(up).atan2(d.dot(back))
+        })
+        .collect();
+    unwrap(&mut params);
+    let fine = double(&params);
+    let helix = R::sided(R::EarLHelix, R::EarRHelix, side);
+    let antihelix = R::sided(R::EarLAntihelix, R::EarRAntihelix, side);
+    let concha = R::sided(R::EarLConcha, R::EarRConcha, side);
+    let lobe = R::sided(R::EarLLobe, R::EarRLobe, side);
+    let back_r = R::sided(R::EarLBack, R::EarRBack, side);
+    let chart = C::sided(C::EarL, C::EarR, side).id();
+    let back_chart = C::sided(C::EarLBack, C::EarRBack, side).id();
+    let is_lobe = |t: f32| t.sin() < -0.55;
+    let (cb, cu) = CONCHA_CENTRE;
+    let bump = |t: f32, at_deg: f32, width_deg: f32| {
+        let d = (t - at_deg.to_radians()).sin().atan2((t - at_deg.to_radians()).cos());
+        (-(d / width_deg.to_radians()).powi(2)).exp()
+    };
+    // How far toward the front edge a slot is (0 on the helix, 1 at the front).
+    let frontness = |t: f32| {
+        let f = ((-t.cos() - 0.3) / 0.5).clamp(0.0, 1.0);
+        f * f * (3.0 - 2.0 * f)
+    };
+    // A ring `inset` mm inside the outline (negative: outside), shrunk toward the concha, and
+    // `drop` mm below the rim's protrusion, as (inset, drop) on the helix, at the lobe (no rim, no
+    // groove there) and at the front edge (where the helix root and the tragus close the concha:
+    // a plain slope); `raise` lifts the ring at the tragus (front, below the middle) and the
+    // antitragus (behind and below the concha, above the lobe). Returns (back, up, out) per slot.
+    let ring = |helix_at: (f32, f32), lobe_at: (f32, f32), front_at: (f32, f32), raise: (f32, f32)| -> Vec<[f32; 3]> {
+        fine.iter()
+            .map(|&t| {
+                let (b, u, o, l) = auricle_finished(t);
+                let f = frontness(t);
+                let inset = mix(mix(helix_at.0, front_at.0, f), lobe_at.0, l);
+                let drop = mix(mix(helix_at.1, front_at.1, f), lobe_at.1, l)
+                    - raise.0 * bump(t, 200.0, 22.0)
+                    - raise.1 * bump(t, 310.0, 20.0);
+                let (db, du) = (b - cb, u - cu);
+                let k = (1.0 - inset / db.hypot(du).max(1.0)).max(0.2);
+                [cb + db * k, cu + du * k, o - drop]
+            })
+            .collect()
+    };
+    let to_cage = |pts: &[[f32; 3]]| -> Vec<Vec3> { pts.iter().map(|p| local(p[0], p[1], p[2])).collect() };
+    // From the back of the rim over its crest into the scapha, up the antihelix (rings 2..5; ring 3
+    // is the helix rim, whose slots name the helix landmarks).
+    let rim_back = ring((-EAR_RIM_OUT, 5.0), (-0.8, 2.5), (0.5, 0.6), (0.0, 0.0));
+    let antihelix_ring = ring((8.5, 1.2), (7.5, 1.6), (6.5, 1.5), (2.5, 2.0));
+    // The concha wall's rim (ring 6): an ellipse around the concha, in the direction of each
+    // slot's antihelix point (so the rings cannot cross), part way down from the antihelix.
+    let wall: Vec<[f32; 3]> = antihelix_ring
+        .iter()
+        .map(|p| {
+            let (db, du) = (p[0] - cb, p[1] - cu);
+            let len = db.hypot(du).max(1.0e-3);
+            let (ub, uu) = (db / len, du / len);
+            let [back_r, front_r, up_r, down_r] = CONCHA_RADII;
+            let rb = if ub >= 0.0 { back_r } else { front_r };
+            let ru = if uu >= 0.0 { up_r } else { down_r };
+            let r = (1.0 / ((ub / rb).powi(2) + (uu / ru).powi(2)).sqrt()).min(len - 1.5);
+            [cb + ub * r, cu + uu * r, p[2] * CONCHA_RIM]
+        })
+        .collect();
+    let floor = wall.iter().map(|p| p[2]).fold(f32::MAX, f32::min) - CONCHA_DEPTH;
+    // The root, 16 slots like the rings outside it, each out from the block's centre toward its
+    // slot of the back of the rim (ring 2): behind, [`ROOT_SHARE`] of the way out to it (the free
+    // auricle stands on the root, the groove behind the ear runs around it); at the front,
+    // [`ROOT_FRONT`] in front of it, where the helix root and the tragus grow out of the face.
+    // Never closer to the concha's wall than [`ROOT_MARGIN`] (the auricle's back would pass under
+    // the concha) and never farther out than [`ROOT_REACH`] of the block's outline in that
+    // direction (the outline is irregular: a shallow cone to it would fold). Lifted off the head
+    // by [`ROOT_LIFT`].
+    let flat_hole: Vec<[f32; 3]> = hole
+        .iter()
+        .map(|&v| {
+            let d = (cage.pos[v as usize] - centre) * 1000.0;
+            [d.dot(back), d.dot(up), d.dot(out)]
+        })
+        .collect();
+    // Where the ray from the centre in the unit direction (db, du) leaves the block's outline:
+    // the distance and the outline's height off the auricle's plane there.
+    let leave = |db: f32, du: f32| -> (f32, f32) {
+        let n = flat_hole.len();
+        let mut best = (f32::MAX, 0.0);
+        for e in 0..n {
+            let (p, q) = (flat_hole[e], flat_hole[(e + 1) % n]);
+            let (ex, ey) = (q[0] - p[0], q[1] - p[1]);
+            let den = db * ey - du * ex;
+            if den.abs() < 1.0e-6 {
+                continue;
+            }
+            // p + s e = r d  =>  r = (p x e) / (d x e), s = (p x d) / (d x e).
+            let r = (p[0] * ey - p[1] * ex) / den;
+            let s = (p[0] * du - p[1] * db) / den;
+            if r > 0.0 && (0.0..=1.0).contains(&s) && r < best.0 {
+                best = (r, mix(p[2], q[2], s));
+            }
+        }
+        best
+    };
+    let radius = |p: &[f32; 3]| p[0].hypot(p[1]);
+    let n_fine = fine.len();
+    let root: Vec<Vec3> = fine
+        .iter()
+        .enumerate()
+        .map(|(k, &t)| {
+            let f = frontness(t);
+            let (_, _, _, l) = auricle_finished(t);
+            let r_wall = [k + n_fine - 1, k, k + 1].iter().map(|&j| radius(&wall[j % n_fine])).fold(0.0, f32::max);
+            let rim = rim_back[k];
+            let r_rim = radius(&rim).max(1.0e-3);
+            let (db, du) = (rim[0] / r_rim, rim[1] / r_rim);
+            let (r_hole, o_hole) = leave(db, du);
+            // In front of the rim where the block's outline leaves room for it; elsewhere (behind,
+            // and where the outline dents in at the top front) a groove around the root.
+            let wanted = mix(ROOT_SHARE * r_rim, r_rim + ROOT_FRONT, f);
+            let r = if f > 0.5 && wanted >= r_rim + 0.5 * ROOT_FRONT && wanted <= ROOT_REACH.1 * r_hole {
+                wanted
+            } else {
+                wanted.min(ROOT_REACH.0 * r_hole).max(r_wall + ROOT_MARGIN)
+            };
+            // Lower toward the front over a wider arc than the rim's front edge: the block's
+            // outline comes close at the top front, and a tall root there twists the skin to it.
+            let wide = ((-t.cos() + 0.3) / 0.8).clamp(0.0, 1.0);
+            let lift = mix(mix(ROOT_LIFT.0, ROOT_LIFT.1, wide), ROOT_LIFT.2, l);
+            local(db * r, du * r, o_hole * (r / r_hole).min(1.0) + lift)
+        })
+        .collect();
+    let rings_pts = [
+        root,
+        to_cage(&rim_back),
+        to_cage(&ring((1.0, -0.3), (1.5, 0.0), (1.0, 0.0), (3.0, 0.0))),
+        to_cage(&ring((4.5, 3.2), (4.0, 0.8), (3.5, 0.6), (3.5, 0.5))),
+        to_cage(&antihelix_ring),
+        to_cage(&wall),
+    ];
+    let tags: [&dyn Fn(f32) -> R; 6] = [
+        &|_| back_r,
+        &|t| if is_lobe(t) { lobe } else { back_r },
+        &|t| if is_lobe(t) { lobe } else { helix },
+        &|t| if is_lobe(t) { lobe } else { helix },
+        &|t| if is_lobe(t) { lobe } else { antihelix },
+        &|t| if is_lobe(t) { lobe } else { concha },
+    ];
+    let mut rings = vec![hole.to_vec()];
+    for (k, pts) in rings_pts.iter().enumerate() {
+        let ring = cage.add_all(pts);
+        let prev = rings.last().cloned().unwrap_or_default();
+        let tagf = tags[k];
+        // The medial side of the auricle (up to the back of the helix rim) is its own chart.
+        let ring_chart = if k <= 1 { back_chart } else { chart };
+        // Tagged by the face's middle slot angle (mirror-consistent on both ears). Between rings
+        // of 8 slots `i` indexes `params`; a doubling bridge and the rings of 16 index `fine`.
+        let slots = if prev.len() == ring.len() && ring.len() == params.len() { &params } else { &fine };
+        let n = slots.len();
+        bridge_tagged(cage, &prev, &ring, &|i| {
+            let (a0, a1) = (slots[i % n], slots[(i + 1) % n]);
+            let mid = (a0.sin() + a1.sin()).atan2(a0.cos() + a1.cos());
+            Tag::new(tagf(mid).id(), ring_chart)
+        });
+        rings.push(ring);
+    }
+    // The concha floor: a 4 x 4 grid, its middle pressed down to `floor` off the auricle's plane.
+    let last = rings.last().cloned().unwrap_or_default();
+    let interior = cage.cap(&last, 4, 4, 2, Tag::new(concha.id(), chart), &|s, t, p| {
+        let o = (p - centre).dot(out) * 1e3;
+        let w = ((s * PI).sin() * (t * PI).sin()).sqrt();
+        p + out * ((mix(o, floor, w) - o) * 1e-3)
+    })?;
+    let concha_v = interior.get(4).copied().unwrap_or(0);
     Ok(EarLoops { rings, params, concha: concha_v })
 }
 
@@ -923,5 +1173,163 @@ mod tests {
             }
         }
         println!("finished template: {upper} upper lip, {lower} lower lip, {other} other folded faces near the mouth");
+    }
+
+    /// What the finished left auricle measures on the body surface (last subdivision level).
+    struct EarMeasures {
+        /// Ear faces whose normal points against one of their corners' mean normals.
+        folds: Vec<(Vec3, f32)>,
+        /// Number of ear faces measured.
+        faces: usize,
+        /// The smallest cosine between an ear face's normal and its corners' mean normals.
+        worst: f32,
+        /// Length along the long axis, breadth across it (side view), protrusion off the head, mm.
+        length: f32,
+        breadth: f32,
+        protrusion: f32,
+        /// Auriculocephalic angle (the helix rim's plane against the side of the head), degrees.
+        angle: f32,
+        /// The rolled rim at the top of the helix, seen from the front (lateral extent), mm.
+        rim: f32,
+    }
+
+    fn measure_left_ear(s: &super::super::Surface) -> EarMeasures {
+        use super::super::regions::R;
+        let cage = s.mesh();
+        let ear_ids = [R::EarLHelix, R::EarLAntihelix, R::EarLConcha, R::EarLLobe, R::EarLBack].map(R::id);
+        let is_ear = |f: usize| ear_ids.contains(&cage.tags[f].region);
+        let face_normal = |f: usize| {
+            let c = cage.corners_of(f);
+            let o = cage.pos[c[0] as usize];
+            (1..c.len() - 1)
+                .map(|k| (cage.pos[c[k] as usize] - o).cross(cage.pos[c[k + 1] as usize] - o))
+                .fold(Vec3::ZERO, |a, b| a + b)
+        };
+        let mut normals = vec![Vec3::ZERO; cage.pos.len()];
+        for f in 0..cage.face_count() {
+            let n = face_normal(f);
+            for &v in cage.corners_of(f) {
+                normals[v as usize] += n;
+            }
+        }
+        let loops = &s.body.loops.ears[0];
+        let hole = &loops.rings[0];
+        let centre = hole.iter().fold(Vec3::ZERO, |a, &v| a + cage.pos[v as usize]) / hole.len() as f32;
+        let tilt = 0.30_f32;
+        let up = Vec3::new(0.0, tilt.cos(), -tilt.sin());
+        let across = Vec3::new(0.0, tilt.sin(), tilt.cos());
+        let (mut folds, mut faces, mut least) = (Vec::new(), 0, 1.0_f32);
+        let mut ear_v = std::collections::HashSet::new();
+        for f in 0..cage.face_count() {
+            if is_ear(f) {
+                faces += 1;
+                let n = face_normal(f).normalize_or_zero();
+                let worst = cage
+                    .corners_of(f)
+                    .iter()
+                    .map(|&v| n.dot(normals[v as usize].normalize_or_zero()))
+                    .fold(1.0_f32, f32::min);
+                least = least.min(worst);
+                if worst < 0.0 {
+                    folds.push(((cage.centroid(f) - centre) * 1e3, worst));
+                }
+                // The free auricle (not the band from the head to its root) is what is measured.
+                if cage.tags[f].region != R::EarLBack.id() {
+                    ear_v.extend(cage.corners_of(f).iter().copied());
+                }
+            }
+        }
+        let ear_p: Vec<Vec3> = ear_v.iter().map(|&v| cage.pos[v as usize]).collect();
+        let extent = |axis: Vec3| {
+            let (lo, hi) =
+                ear_p.iter().fold((f32::MAX, f32::MIN), |(lo, hi), p| (lo.min(p.dot(axis)), hi.max(p.dot(axis))));
+            (hi - lo) * 1e3
+        };
+        // The side of the head under the ear: the plane of the ear block (Newell normal).
+        // The plane of a closed ring (Newell normal), facing out of the head (+x on the left).
+        let plane = |ring: &[u32]| {
+            let n = ring
+                .iter()
+                .enumerate()
+                .map(|(i, &v)| {
+                    let (a, b) =
+                        (cage.pos[v as usize] - centre, cage.pos[ring[(i + 1) % ring.len()] as usize] - centre);
+                    a.cross(b)
+                })
+                .fold(Vec3::ZERO, |a, b| a + b)
+                .normalize_or_zero();
+            if n.x < 0.0 { -n } else { n }
+        };
+        // Protrusion: the farthest point of the auricle off the side of the head under it (the
+        // ear block's plane); the angle: between that plane and the helix rim's.
+        let side = plane(hole);
+        let protrusion = ear_p.iter().map(|&p| (p - centre).dot(side)).fold(0.0_f32, f32::max);
+        let angle = plane(&loops.rings[3]).dot(side).clamp(-1.0, 1.0).acos().to_degrees();
+        // The rim's lateral extent at the top slot of rings 2 (back of the rim) to 4 (scapha).
+        let top = (0..loops.rings[3].len())
+            .max_by(|&a, &b| cage.pos[loops.rings[3][a] as usize].y.total_cmp(&cage.pos[loops.rings[3][b] as usize].y))
+            .unwrap_or(0);
+        let xs: Vec<f32> = (2..=4).map(|r| cage.pos[loops.rings[r][top] as usize].x).collect();
+        let rim = (xs.iter().copied().fold(f32::MIN, f32::max) - xs.iter().copied().fold(f32::MAX, f32::min)) * 1e3;
+        EarMeasures {
+            folds,
+            faces,
+            worst: least,
+            length: extent(up),
+            breadth: extent(across),
+            protrusion: protrusion * 1e3,
+            angle,
+            rim,
+        }
+    }
+
+    /// `[WP-25]` todo 1.1 round 4: the finished auricle has no folded face on the body surface,
+    /// meets ANSUR II ear length, breadth and protrusion (sex midpoints 61.8, 34.7, 21.8 mm; within
+    /// half a standard deviation: 2.1, 1.4, 1.4 mm), stands off the head by 15 to 30 degrees and has
+    /// a rolled rim at least 4 mm thick seen from the front.
+    #[test]
+    fn wp25_finished_ear_is_fold_free_and_ansur_sized() {
+        use super::super::anatomy::{Auricle, EAR_BREADTH, EAR_LENGTH, EAR_PROTRUSION};
+        let s = super::super::body_surface_for(super::super::genitals::Variant::default(), Auricle::Finished).unwrap();
+        let m = measure_left_ear(&s);
+        println!(
+            "[WP-25] finished ear: {} faces, {} folded, least cosine {:.2}; length {:.1} mm, breadth {:.1} mm, protrusion {:.1} mm, angle {:.1} deg, rim {:.1} mm",
+            m.faces,
+            m.folds.len(),
+            m.worst,
+            m.length,
+            m.breadth,
+            m.protrusion,
+            m.angle,
+            m.rim
+        );
+        let loops = &s.body.loops.ears[0];
+        let hole = &loops.rings[0];
+        let centre = hole.iter().fold(Vec3::ZERO, |a, &v| a + s.mesh().pos[v as usize]) / hole.len() as f32;
+        for (at, worst) in m.folds.iter().take(40) {
+            let p = centre + *at * 1e-3;
+            let mut near: Vec<(f32, usize, usize)> = loops
+                .rings
+                .iter()
+                .enumerate()
+                .flat_map(|(k, r)| r.iter().enumerate().map(move |(i, &v)| (k, i, v)))
+                .map(|(k, i, v)| (s.mesh().pos[v as usize].distance(p) * 1e3, k, i))
+                .collect();
+            near.sort_by(|a, b| a.0.total_cmp(&b.0));
+            println!(
+                "  fold at ({:.1}, {:.1}, {:.1}) mm from the ear block's centre, dot {worst:.2}; near {:?}",
+                at.x,
+                at.y,
+                at.z,
+                &near[..3]
+            );
+        }
+        assert!(m.faces > 500, "{} ear faces", m.faces);
+        assert!(m.folds.is_empty(), "{} folded ear faces", m.folds.len());
+        assert!((m.length - EAR_LENGTH * 1e3).abs() < 2.1, "length {}", m.length);
+        assert!((m.breadth - EAR_BREADTH * 1e3).abs() < 1.4, "breadth {}", m.breadth);
+        assert!((m.protrusion - EAR_PROTRUSION * 1e3).abs() < 1.4, "protrusion {}", m.protrusion);
+        assert!((15.0..=30.0).contains(&m.angle), "angle {}", m.angle);
+        assert!(m.rim >= 4.0, "rim {}", m.rim);
     }
 }

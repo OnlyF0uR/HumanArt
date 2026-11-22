@@ -272,7 +272,7 @@ pub fn nose_length(kit: &Kit<'_, '_>) -> IdResult<Raw> {
 }
 
 /// A translation `d` of the nose tip area around `seeds`.
-fn nose_tip(kit: &Kit<'_, '_>, d: Vec3, seeds: &[&str]) -> IdResult<Raw> {
+pub(crate) fn nose_tip(kit: &Kit<'_, '_>, d: Vec3, seeds: &[&str]) -> IdResult<Raw> {
     let s = kit.space;
     let w = s.around_solid(seeds, 0.003, 0.013, "nose")?;
     let disp = s.eval(|pt| d * at(&w, pt));
@@ -280,7 +280,7 @@ fn nose_tip(kit: &Kit<'_, '_>, d: Vec3, seeds: &[&str]) -> IdResult<Raw> {
 }
 
 /// `semantic.nostril-width`: the alae across.
-fn nostrils(kit: &Kit<'_, '_>) -> IdResult<Raw> {
+pub(crate) fn nostrils(kit: &Kit<'_, '_>) -> IdResult<Raw> {
     let s = kit.space;
     // Euclidean: the alar crease folds, and the cheek beside the ala moves with it.
     let mut points = Vec::new();
@@ -538,7 +538,7 @@ fn jaw_angle(kit: &Kit<'_, '_>) -> IdResult<Raw> {
 const CHIN_SEEDS: [&str; 3] = ["chin.mid", "chin.supramentale", "chin.menton"];
 
 /// `semantic.chin-projection`: the chin forward, the lower lip fixed.
-fn chin_projection(kit: &Kit<'_, '_>) -> IdResult<Raw> {
+pub(crate) fn chin_projection(kit: &Kit<'_, '_>) -> IdResult<Raw> {
     let s = kit.space;
     let w = s.around(&["chin.mid", "chin.menton"], 0.006, 0.025)?;
     let lip = s.series_nodes("lip.lower.outer")?;
@@ -583,7 +583,7 @@ fn cheekbone_field(s: &Space<'_>, a: f32) -> IdResult<impl Fn(&Point) -> Vec3 + 
 }
 
 /// `semantic.cheekbone-prominence` (both sides).
-fn cheekbones(kit: &Kit<'_, '_>, both: bool) -> IdResult<Raw> {
+pub(crate) fn cheekbones(kit: &Kit<'_, '_>, both: bool) -> IdResult<Raw> {
     let s = kit.space;
     let f = cheekbone_field(s, 0.0015)?;
     let disp = if both { s.eval(|pt| s.sym(pt, &f)) } else { s.eval(|pt| f(pt)) };
@@ -599,7 +599,7 @@ fn cheekbones_left(kit: &Kit<'_, '_>, a: f32) -> IdResult<Raw> {
 }
 
 /// `semantic.cheek-fullness`: the soft cheek below the cheekbone outward.
-fn cheek_fullness(kit: &Kit<'_, '_>) -> IdResult<Raw> {
+pub(crate) fn cheek_fullness(kit: &Kit<'_, '_>) -> IdResult<Raw> {
     let s = kit.space;
     let c = s.landmark("L.cheek.malar")?.lerp(s.landmark("jaw.L.02")?, 0.5);
     let f = move |pt: &Point| pt.n * (0.002 * falloff(pt.p.distance(c), 0.008, 0.028));

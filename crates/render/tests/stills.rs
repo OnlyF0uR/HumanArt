@@ -99,17 +99,20 @@ fn ac_wp11_3_tiled_8k_still_equals_the_untiled_render() {
     let (cx, cy, cw, ch) = (2048 - 256, 1900, 512, 400);
     common::save_png("still_8k_seam_tiled.png", cw, ch, &crop(&tiled, W, cx, cy, cw, ch));
     common::save_png("still_8k_seam_untiled.png", cw, ch, &crop(&untiled, W, cx, cy, cw, ch));
-    // Where do the larger differences lie? Rasterisation through the tile's sub-frustum rounds
-    // vertex positions differently in the last bit, so a sample whose centre lies on a triangle
-    // edge may change sides. That moves the pixel towards the colour of the surface on the other
-    // side of the edge, which its neighbours show: a tiled value outside the range of the
-    // untiled 5x5 neighbourhood (plus one code of rounding) is a real shading difference, not an
-    // edge sample. (5x5 rather than 3x3: the tapering tip of a thin specular highlight along a
-    // silhouette is sub-pixel, and one sample flipping onto it lands outside the 3x3 range;
-    // still_8k_outlier_*.png show such a case.) A handful of single pixels on silhouettes still
-    // leave the 5x5 range by a few codes (3 of 132 M samples on the RTX 4060, at most 10 codes,
-    // each next to a silhouette); the bound allows one per ten million samples, which a shading
-    // difference (shadow or noise not matching across tiles) would exceed by orders of magnitude. Count those, and the larger differences next to a tile seam.
+    // Where do the larger differences lie? A tile projects through a cropped matrix whose
+    // rounding differs in the last bits from the untiled image's; the geometry pass snaps every
+    // vertex to the sub-pixel grid of the whole image (`image_clip` in render/frame.wgsl), so the
+    // rasteriser puts the vertices of a tile where the untiled render has them. Before that
+    // (todo 1.9) about one vertex in twenty landed on a neighbouring grid point, samples on
+    // triangle edges changed sides, and the sharper shadows of 1.9 made those flips cost 1926
+    // samples above one code (max 94). A sample that still changes sides moves the pixel towards
+    // the colour of the surface on the other side of the edge, which its neighbours show: a tiled
+    // value outside the range of the untiled 5x5 neighbourhood (plus one code of rounding) is a
+    // real shading difference, not an edge sample (5x5 rather than 3x3: the tapering tip of a
+    // thin specular highlight along a silhouette is sub-pixel; still_8k_outlier_*.png show such a
+    // case). The bound allows one per ten million samples, which a shading difference (shadow or
+    // noise not matching across tiles) would exceed by orders of magnitude. Count those, and the
+    // larger differences next to a tile seam.
     let outside_neighbourhood = |x: u32, y: u32, k: usize, value: u8| {
         let (mut lo, mut hi) = (u8::MAX, u8::MIN);
         for ny in y.saturating_sub(2)..=(y + 2).min(H - 1) {
@@ -148,6 +151,33 @@ fn ac_wp11_3_tiled_8k_still_equals_the_untiled_render() {
     println!(
         "differences above 2 codes: {off_edge} outside the untiled neighbourhood, {at_seam} within 2 px of a tile seam"
     );
+    // Where the samples that differ by more than one code lie: by distance to the nearest tile
+    // seam, and as a map (1/8 size, white where a block holds one).
+    let mut by_seam = [0_usize; 5];
+    let (mw, mh) = (W / 8, H / 8);
+    let mut map = vec![0_u8; (mw * mh * 4) as usize];
+    for (i, (a, b)) in untiled.iter().zip(&tiled).enumerate() {
+        let d = a.abs_diff(*b);
+        if d <= 1 || i % 4 == 3 {
+            continue;
+        }
+        let pixel = (i / 4) as u32;
+        let (x, y) = (pixel % W, pixel / W);
+        let m = (((y / 8).min(mh - 1) * mw + (x / 8).min(mw - 1)) * 4) as usize;
+        map[m..m + 3].fill(255);
+        let seam = (x % 2048).min(2048 - x % 2048).min((y % 2048).min(2048 - y % 2048));
+        let bucket = match seam {
+            0..2 => 0,
+            2..8 => 1,
+            8..32 => 2,
+            32..128 => 3,
+            _ => 4,
+        };
+        by_seam[bucket] += 1;
+    }
+    map.chunks_exact_mut(4).for_each(|p| p[3] = 255);
+    common::save_png("still_8k_difference_map.png", mw, mh, &map);
+    println!("samples differing by more than 1, by distance to a seam (0-2, 2-8, 8-32, 32-128, 128+ px): {by_seam:?}");
     assert!(mean < 0.002, "mean difference {mean}");
     assert!(differing < untiled.len() / 100_000, "{differing} samples differ by more than one code value");
     assert!(off_edge <= untiled.len() / 10_000_000, "{off_edge} tiled values outside the untiled neighbourhood");

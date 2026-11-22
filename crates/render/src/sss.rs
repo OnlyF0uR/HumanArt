@@ -19,6 +19,20 @@
 //! square of the tap index cover ±[`KERNEL_RANGE_MM`]; each tap weighs the integral of `k` over its
 //! cell (the outer cells reach infinity), so every channel's weights sum to 1.
 //!
+//! **Off the plane.** A tap of the screen-space blur lies on the surface at some distance `h` from
+//! the centre's tangent plane (a pit, a fold, the far side of a curve). Each Gaussian of the profile
+//! in 3D is `G(v, √(x² + y² + h²)) ∝ G(v, √(x² + y²)) · exp(-h² / 2v)`, so a tap keeps, per channel,
+//! `Σ_i W_i exp(-h² / 2 v_i)` of its weight (`W_i` its share from Gaussian `i`,
+//! [`separable_kernel_lobes`], [`off_plane_weight`]) and the rest stays with the centre: the narrow
+//! green and blue lobes stop at a step of a fraction of a millimetre, red's wide lobes carry over a
+//! few. Six exponentials per tap cost the passes more than twice their budget (2.6 ms against the
+//! 1.2 ms of `[AC-WP14-3]`), so the blur weighs a tap with one Gaussian per channel,
+//! `exp(-h² k)`, whose rate `k` ([`off_plane_rates`]) gives the same distance of half weight as the
+//! sum (far from the centre one Gaussian holds nearly the whole tap, so the two agree there; the
+//! difference is bounded by a test). Weighing taps by their screen offset alone bled red from the
+//! lit rim into every narrow shadowed pit at full strength (the eye socket under a side light, todo
+//! 1.4 / 1.9).
+//!
 //! **Transmittance.** Light entering the back of a slab `d` mm thick and leaving at the point
 //! opposite is the profile integrated over the back plane:
 //! `T(d) = ∫∫ R(√(r² + d²)) dA = Σ w_i exp(-d² / 2v_i)` (Jimenez et al. 2010, "Real-Time
@@ -44,6 +58,9 @@ pub const PROFILE_WEIGHTS: [[f32; 3]; 6] = [
     [0.358, 0.004, 0.0],
     [0.078, 0.0, 0.0],
 ];
+
+/// Gaussians of the profile ([`PROFILE_VARIANCES_MM2`]).
+pub const PROFILE_LOBES: usize = 6;
 
 /// Taps of the separable kernel (odd: one centre tap).
 pub const KERNEL_TAPS: usize = 25;
@@ -185,16 +202,10 @@ fn erf(x: f64) -> f64 {
     if x < 0.0 { -y } else { y }
 }
 
-/// The integral of the 1D kernel at scale 1 from -∞ to `x_mm`, per channel.
-fn kernel_cdf(x_mm: f64) -> [f64; 3] {
-    let mut out = [0.0; 3];
-    for (&v, w) in PROFILE_VARIANCES_MM2.iter().zip(&PROFILE_WEIGHTS) {
-        let c = f64::midpoint(1.0, erf(x_mm / (2.0 * f64::from(v)).sqrt()));
-        for k in 0..3 {
-            out[k] += f64::from(w[k]) * c;
-        }
-    }
-    out
+/// The integral of one Gaussian of the 1D kernel (variance `v` mm², unit weight) from -∞ to
+/// `x_mm`.
+fn lobe_cdf(x_mm: f64, v: f32) -> f64 {
+    f64::midpoint(1.0, erf(x_mm / (2.0 * f64::from(v)).sqrt()))
 }
 
 /// The tap offsets of the separable kernel at scale 1, mm, ascending: `±range (i / half)²`.
@@ -208,43 +219,146 @@ pub fn kernel_offsets() -> [f32; KERNEL_TAPS] {
 
 /// The separable kernel at scale 1: per tap the offset in mm and the red, green and blue weights.
 /// Each channel's weights sum to 1 (the outer cells extend to infinity, then the sums are
-/// normalised against rounding).
+/// normalised against rounding). The weights are the sums over the Gaussians of
+/// [`separable_kernel_lobes`].
 pub fn separable_kernel() -> [[f32; 4]; KERNEL_TAPS] {
     let offsets = kernel_offsets();
-    let mut out = [[0.0_f32; 4]; KERNEL_TAPS];
+    let lobes = separable_kernel_lobes();
+    std::array::from_fn(|t| {
+        let mut tap = [offsets[t], 0.0, 0.0, 0.0];
+        for lobe in &lobes[t] {
+            for c in 0..3 {
+                tap[c + 1] += lobe[c];
+            }
+        }
+        tap
+    })
+}
+
+/// The separable kernel split by Gaussian: per tap and Gaussian `i` the red, green and blue share
+/// of the tap's weight that Gaussian gives (the integral of `w_i G(v_i, x)` over the tap's cell,
+/// normalised like [`separable_kernel`]), and `1 / (2 v_i)` (1/mm² at scale 1): what the blur needs
+/// to weigh a tap off the centre's tangent plane (module docs, "Off the plane").
+pub fn separable_kernel_lobes() -> [[[f32; 4]; PROFILE_LOBES]; KERNEL_TAPS] {
+    let offsets = kernel_offsets();
+    let mut cells = [[[0.0_f64; 3]; PROFILE_LOBES]; KERNEL_TAPS];
     let mut sums = [0.0_f64; 3];
-    for (i, tap) in out.iter_mut().enumerate() {
-        let lo = if i == 0 { f64::NEG_INFINITY } else { 0.5 * f64::from(offsets[i - 1] + offsets[i]) };
-        let hi = if i + 1 == KERNEL_TAPS { f64::INFINITY } else { 0.5 * f64::from(offsets[i] + offsets[i + 1]) };
-        let a = if lo.is_finite() { kernel_cdf(lo) } else { [0.0; 3] };
-        let b = if hi.is_finite() { kernel_cdf(hi) } else { [1.0; 3] };
-        tap[0] = offsets[i];
-        for c in 0..3 {
-            let w = (b[c] - a[c]).max(0.0);
-            sums[c] += w;
-            tap[c + 1] = w as f32;
+    for (t, cell) in cells.iter_mut().enumerate() {
+        let lo = if t == 0 { f64::NEG_INFINITY } else { 0.5 * f64::from(offsets[t - 1] + offsets[t]) };
+        let hi = if t + 1 == KERNEL_TAPS { f64::INFINITY } else { 0.5 * f64::from(offsets[t] + offsets[t + 1]) };
+        for ((lobe, &v), w) in cell.iter_mut().zip(&PROFILE_VARIANCES_MM2).zip(&PROFILE_WEIGHTS) {
+            let a = if lo.is_finite() { lobe_cdf(lo, v) } else { 0.0 };
+            let b = if hi.is_finite() { lobe_cdf(hi, v) } else { 1.0 };
+            for c in 0..3 {
+                lobe[c] = f64::from(w[c]) * (b - a).max(0.0);
+                sums[c] += lobe[c];
+            }
         }
     }
-    for tap in &mut out {
-        for c in 0..3 {
-            if sums[c] > 0.0 {
-                tap[c + 1] = (f64::from(tap[c + 1]) / sums[c]) as f32;
+    std::array::from_fn(|t| {
+        std::array::from_fn(|i| {
+            let mut out = [0.0_f32; 4];
+            for c in 0..3 {
+                out[c] = if sums[c] > 0.0 { (cells[t][i][c] / sums[c]) as f32 } else { 0.0 };
             }
+            out[3] = 0.5 / PROFILE_VARIANCES_MM2[i];
+            out
+        })
+    })
+}
+
+/// The part of a tap's weight, per channel, that stays with the tap when its surface lies `h_mm`
+/// off the centre's tangent plane, for a profile `scale` (> 0): `Σ_i W_i exp(-h² / 2 v_i s²)` over
+/// the Gaussians `lobes` of the tap ([`separable_kernel_lobes`]); the tap's whole weight at `h = 0`.
+/// The exact sum; the blur uses [`off_plane_keep`] with the fitted [`off_plane_rates`].
+pub fn off_plane_weight(lobes: &[[f32; 4]; PROFILE_LOBES], h_mm: f32, scale: f32) -> [f32; 3] {
+    let h = h_mm / scale.max(1e-6);
+    let h2 = h * h;
+    let mut out = [0.0_f32; 3];
+    for lobe in lobes {
+        let keep = (-h2 * lobe[3]).exp();
+        for c in 0..3 {
+            out[c] += lobe[c] * keep;
         }
     }
     out
 }
 
-/// The kernel as the bytes of the shader's `array<vec4<f32>, KERNEL_TAPS>` (little-endian).
-pub fn kernel_bytes() -> Vec<u8> {
-    separable_kernel().iter().flatten().flat_map(|v| v.to_le_bytes()).collect()
+/// A channel's share of a tap below which [`off_plane_rates`] fits nothing (the rate is 0: the tap
+/// keeps a weight that moves no visible light).
+const RATE_FIT_MIN_WEIGHT: f64 = 1e-6;
+
+/// Per tap and channel the rate `k` (1/mm² at scale 1) of the one Gaussian `exp(-h² k)` the blur
+/// weighs a tap `h` mm off the centre's tangent plane with (module docs, "Off the plane"): the
+/// Gaussian that falls to half at the distance where the tap's exact share
+/// `Σ_i W_i exp(-h² / 2 v_i) / Σ_i W_i` does ([`off_plane_weight`]), found by bisection. 0 for a
+/// channel that has no weight in the tap.
+pub fn off_plane_rates() -> [[f32; 3]; KERNEL_TAPS] {
+    let lobes = separable_kernel_lobes();
+    let (mut narrowest, mut widest) = (f64::from(PROFILE_VARIANCES_MM2[0]), f64::from(PROFILE_VARIANCES_MM2[0]));
+    for &v in &PROFILE_VARIANCES_MM2 {
+        narrowest = narrowest.min(f64::from(v));
+        widest = widest.max(f64::from(v));
+    }
+    let ln2 = std::f64::consts::LN_2;
+    std::array::from_fn(|t| {
+        std::array::from_fn(|c| {
+            let weight: f64 = lobes[t].iter().map(|l| f64::from(l[c])).sum();
+            if weight < RATE_FIT_MIN_WEIGHT {
+                return 0.0;
+            }
+            let share = |h: f64| {
+                lobes[t].iter().map(|l| f64::from(l[c]) * (-h * h * f64::from(l[3])).exp()).sum::<f64>() / weight
+            };
+            // Every Gaussian is above half at the narrowest one's half distance and below it at the
+            // widest one's, so the sum crosses half between them.
+            let (mut lo, mut hi) = ((2.0 * narrowest * ln2).sqrt(), (2.0 * widest * ln2).sqrt());
+            for _ in 0..48 {
+                let mid = f64::midpoint(lo, hi);
+                if share(mid) > 0.5 {
+                    lo = mid;
+                } else {
+                    hi = mid;
+                }
+            }
+            let half = f64::midpoint(lo, hi);
+            (ln2 / (half * half)) as f32
+        })
+    })
 }
 
+/// The share of its weight, per channel, a tap keeps `h_mm` off the centre's tangent plane for a
+/// profile `scale` (> 0) and the tap's `rates` ([`off_plane_rates`]): `exp(-(h / s)² k)`, what
+/// `render/sss.wgsl` computes; 1 on the plane.
+pub fn off_plane_keep(rates: &[f32; 3], h_mm: f32, scale: f32) -> [f32; 3] {
+    let h = h_mm / scale.max(1e-6);
+    rates.map(|k| (-h * h * k).exp())
+}
+
+/// The kernel as the bytes of the shader's `array<vec4<f32>, 50>` (little-endian): first
+/// [`separable_kernel`] (offset, red, green, blue per tap), then [`off_plane_rates`] (red, green,
+/// blue, 0 per tap): `2 * KERNEL_TAPS` vectors.
+pub fn kernel_bytes() -> Vec<u8> {
+    let taps = separable_kernel();
+    let rates = off_plane_rates().map(|r| [r[0], r[1], r[2], 0.0]);
+    taps.iter().chain(&rates).flatten().flat_map(|v| v.to_le_bytes()).collect()
+}
+
+/// Distance from the centre's tangent plane (mm per unit of profile scale) up to which a tap of
+/// the blur counts as the same surface; it fades to another surface over as much again (mirrors
+/// `DEPTH_TOLERANCE_MM` of `render/sss.wgsl`).
+pub const DEPTH_TOLERANCE_MM: f32 = 3.0;
+
 /// One separable pass of the CPU reference over an RGBA image (`w` x `h`, rows top to bottom):
-/// what `render/sss.wgsl` computes for a skin surface facing the camera at constant depth
-/// (`px_per_mm` pixels per millimetre, profile `scale`), every pixel skin. Samples between pixel
-/// centres are linearly interpolated, outside the image the edge pixel repeats (a clamped
-/// sampler).
+/// what `render/sss.wgsl` computes, for a camera whose pixels cover `1 / px_per_mm` mm across the
+/// view everywhere (the shader takes that from the depth; tests keep the depth range small) and a
+/// profile `scale`. Alpha is the view depth in metres on skin and 0 elsewhere; pixels that are not
+/// skin pass through. Samples between pixel centres are linearly interpolated (alpha too, as the
+/// shader's filtered fetch does), outside the image the edge pixel repeats (a clamped sampler).
+/// Per tap as the shader: the depth slope along the axis from the flatter neighbour, the tap's
+/// distance from the centre's tangent plane, the share of its weight it keeps there
+/// ([`off_plane_keep`] with [`off_plane_rates`]) and the fade to another surface beyond
+/// [`DEPTH_TOLERANCE_MM`]; what a tap does not keep stays with the centre.
 pub fn blur_pass_reference(
     src: &[[f32; 4]],
     w: usize,
@@ -253,32 +367,75 @@ pub fn blur_pass_reference(
     px_per_mm: f32,
     scale: f32,
 ) -> Vec<[f32; 4]> {
+    blur_pass_with_rates(src, w, h, horizontal, px_per_mm, scale, &off_plane_rates())
+}
+
+/// [`blur_pass_reference`] with the off-plane `rates` given (1/mm² per tap and channel). All
+/// zero, a tap keeps its whole weight at any distance from the tangent plane up to
+/// [`DEPTH_TOLERANCE_MM`]: the blur that weighs taps by their screen offset alone, which the
+/// tests measure the off-plane weighting against.
+pub fn blur_pass_with_rates(
+    src: &[[f32; 4]],
+    w: usize,
+    h: usize,
+    horizontal: bool,
+    px_per_mm: f32,
+    scale: f32,
+    rates: &[[f32; 3]; KERNEL_TAPS],
+) -> Vec<[f32; 4]> {
     let kernel = separable_kernel();
     let fetch = |x: i64, y: i64| -> [f32; 4] {
         let xc = x.clamp(0, w as i64 - 1) as usize;
         let yc = y.clamp(0, h as i64 - 1) as usize;
         src.get(yc * w + xc).copied().unwrap_or([0.0; 4])
     };
+    let across = 0.001 / px_per_mm.max(1e-9);
+    let tolerance = DEPTH_TOLERANCE_MM * scale;
     let mut out = vec![[0.0_f32; 4]; src.len()];
     for y in 0..h {
         for x in 0..w {
+            let (xi, yi) = (x as i64, y as i64);
+            let centre = fetch(xi, yi);
+            let z = centre[3];
+            let Some(o) = out.get_mut(y * w + x) else { continue };
+            if z <= 0.0 || scale <= 0.0 {
+                *o = centre;
+                continue;
+            }
+            let (minus, plus) = if horizontal {
+                (fetch(xi - 1, yi), fetch(xi + 1, yi))
+            } else {
+                (fetch(xi, yi - 1), fetch(xi, yi + 1))
+            };
+            let mut slope = 0.0;
+            if minus[3] > 0.0 && plus[3] > 0.0 {
+                let (before, after) = (z - minus[3], plus[3] - z);
+                slope = if before.abs() < after.abs() { before } else { after };
+            }
+            let px_per_unit = scale * 0.001 / (across * across + slope * slope).sqrt().max(1e-9);
+            if KERNEL_RANGE_MM * px_per_unit < 0.5 {
+                *o = centre;
+                continue;
+            }
             let mut sum = [0.0_f32; 3];
-            for tap in &kernel {
-                let o = tap[0] * scale * px_per_mm;
-                let (fx, fy) = if horizontal { (x as f32 + o, y as f32) } else { (x as f32, y as f32 + o) };
+            for (tap, tap_rates) in kernel.iter().zip(rates) {
+                let offset = tap[0] * px_per_unit;
+                let (fx, fy) = if horizontal { (x as f32 + offset, y as f32) } else { (x as f32, y as f32 + offset) };
                 let (x0, y0) = (fx.floor(), fy.floor());
-                let (tx, ty) = (fx - x0, fy - y0);
+                let t = if horizontal { fx - x0 } else { fy - y0 };
                 let (x0, y0) = (x0 as i64, y0 as i64);
                 let a = fetch(x0, y0);
                 let b = if horizontal { fetch(x0 + 1, y0) } else { fetch(x0, y0 + 1) };
-                let t = if horizontal { tx } else { ty };
+                let colour: [f32; 4] = std::array::from_fn(|c| a[c] + (b[c] - a[c]) * t);
+                let off_plane = (colour[3] - (z + slope * offset)).abs() * 1000.0;
+                let foreign = ((off_plane - tolerance) / tolerance).clamp(0.0, 1.0);
+                let keep = off_plane_keep(tap_rates, off_plane, scale);
                 for c in 0..3 {
-                    sum[c] += tap[c + 1] * (a[c] + (b[c] - a[c]) * t);
+                    let kept = tap[c + 1] * keep[c] * (1.0 - foreign);
+                    sum[c] += colour[c] * kept + centre[c] * (tap[c + 1] - kept);
                 }
             }
-            if let Some(o) = out.get_mut(y * w + x) {
-                *o = [sum[0], sum[1], sum[2], src.get(y * w + x).map_or(0.0, |p| p[3])];
-            }
+            *o = [sum[0], sum[1], sum[2], z];
         }
     }
     out
@@ -417,7 +574,7 @@ mod tests {
         // Red scatters farthest: its centre weight is the smallest.
         let centre = kernel[KERNEL_TAPS / 2];
         assert!(centre[1] < centre[2] && centre[2] < centre[3], "{centre:?}");
-        assert_eq!(kernel_bytes().len(), KERNEL_TAPS * 16);
+        assert_eq!(kernel_bytes().len(), 2 * KERNEL_TAPS * 16);
     }
 
     // [SHD-03]: transmittance is 1 through nothing, falls with thickness, red reaches farthest, and
@@ -459,7 +616,8 @@ mod tests {
         let uniform = vec![[0.7, 0.4, 0.2, 1.0]; w * h];
         let out = blur_pass_reference(&uniform, w, h, true, 4.0, 1.0);
         assert!(out.iter().all(|p| (p[0] - 0.7).abs() < 1e-5 && (p[1] - 0.4).abs() < 1e-5));
-        let mut impulse = vec![[0.0; 4]; w * h];
+        // Black skin at 1 m with one white pixel.
+        let mut impulse = vec![[0.0, 0.0, 0.0, 1.0]; w * h];
         impulse[w + 64] = [1.0, 1.0, 1.0, 1.0];
         let out = blur_pass_reference(&impulse, w, h, true, 4.0, 1.0);
         let row = &out[w..2 * w];
@@ -506,5 +664,124 @@ mod tests {
         assert_eq!(SkinShading::scale_for_radius_mm([f32::NAN; 3]), 0.0);
         assert_eq!(SkinShading::scale_for_radius_mm([100.0; 3]), MAX_SCATTER_SCALE);
         assert!((erf(0.5) - 0.520_499_877_8).abs() < 2e-7 && erf(-3.0) < -0.9999);
+    }
+
+    // The Gaussians split every tap's weight: per channel they sum to the tap's weights, and
+    // `off_plane_weight` is the whole weight on the plane and falls with the distance from it,
+    // green and blue (narrower lobes) faster than red.
+    #[test]
+    fn todo_1_4_kernel_lobes_sum_to_the_taps_and_fall_off_the_plane() {
+        let kernel = separable_kernel();
+        let lobes = separable_kernel_lobes();
+        for (tap, tap_lobes) in kernel.iter().zip(&lobes) {
+            for c in 0..3 {
+                let sum: f32 = tap_lobes.iter().map(|l| l[c]).sum();
+                assert!((sum - tap[c + 1]).abs() < 1e-6, "channel {c}: {sum} vs {}", tap[c + 1]);
+            }
+            let on_plane = off_plane_weight(tap_lobes, 0.0, 1.0);
+            assert!((0..3).all(|c| (on_plane[c] - tap[c + 1]).abs() < 1e-6));
+        }
+        let outer = KERNEL_TAPS / 2 + 6;
+        let share = |h: f32, scale: f32| {
+            let keep = off_plane_weight(&lobes[outer], h, scale);
+            std::array::from_fn::<f32, 3, _>(|c| keep[c] / kernel[outer][c + 1])
+        };
+        let at_1mm = share(1.0, 1.0);
+        let at_3mm = share(3.0, 1.0);
+        // The tap 2 mm from the centre: red keeps the most and blue the least; blue's weight there
+        // is its widest Gaussian's alone (0.567 mm²).
+        assert!(at_1mm[0] > 0.5 && at_1mm[1] < at_1mm[0] && at_1mm[2] < at_1mm[1], "{at_1mm:?}");
+        let blue = (-0.5 / PROFILE_VARIANCES_MM2[3]).exp();
+        assert!((at_1mm[2] - blue).abs() < 0.02, "blue {} against {blue}", at_1mm[2]);
+        assert!(at_3mm[0] < at_1mm[0] && at_3mm[0] > 0.1, "{at_3mm:?}");
+        assert!(at_3mm[1] < at_3mm[0] && at_3mm[2] < 0.01, "{at_3mm:?}");
+        let stretched = share(2.0, 2.0);
+        assert!((0..3).all(|c| (stretched[c] - at_1mm[c]).abs() < 1e-6), "the scale stretches the distance");
+    }
+
+    // The one Gaussian per tap and channel the blur weighs with against the exact sum over the
+    // profile's Gaussians: the same distance of half weight, symmetric rates between the narrowest
+    // and the widest Gaussian's, red's falling to the widest one's at the outer taps; the two
+    // differ by a bounded share of a tap (most at the innermost taps, which mix all six Gaussians)
+    // and by a few percent of a channel's whole weight.
+    #[test]
+    fn todo_1_4_off_plane_rates_follow_the_exact_falloff() {
+        let kernel = separable_kernel();
+        let lobes = separable_kernel_lobes();
+        let rates = off_plane_rates();
+        let (slowest, fastest) = (0.5 / PROFILE_VARIANCES_MM2[5], 0.5 / PROFILE_VARIANCES_MM2[0]);
+        let (mut worst, mut worst_red_outside) = (0.0_f32, 0.0_f32);
+        for t in 0..KERNEL_TAPS {
+            let mirror = KERNEL_TAPS - 1 - t;
+            for c in 0..3 {
+                let (rate, weight) = (rates[t][c], kernel[t][c + 1]);
+                assert!((rate - rates[mirror][c]).abs() <= 1e-4 * rate, "tap {t} channel {c}: symmetric");
+                if weight < 1e-5 {
+                    continue;
+                }
+                assert!(rate >= slowest * 0.999 && rate <= fastest * 1.001, "tap {t} channel {c}: rate {rate}");
+                let half = (std::f32::consts::LN_2 / rate).sqrt();
+                let exact_at_half = off_plane_weight(&lobes[t], half, 1.0)[c] / weight;
+                assert!((exact_at_half - 0.5).abs() < 2e-3, "tap {t} channel {c}: {exact_at_half} at {half} mm");
+                for step in 0..=60 {
+                    let h = step as f32 * 0.1;
+                    let exact = off_plane_weight(&lobes[t], h, 1.0)[c] / weight;
+                    let fitted = off_plane_keep(&rates[t], h, 1.0)[c];
+                    let difference = (exact - fitted).abs();
+                    worst = worst.max(difference);
+                    if c == 0 && kernel[t][0].abs() > 0.9 {
+                        worst_red_outside = worst_red_outside.max(difference);
+                    }
+                }
+            }
+        }
+        // Over the whole kernel without the centre tap: what a channel keeps at a distance.
+        let mut worst_sum = [0.0_f32; 3];
+        for step in 0..=60 {
+            let h = step as f32 * 0.1;
+            let mut difference = [0.0_f32; 3];
+            for t in (0..KERNEL_TAPS).filter(|&t| t != KERNEL_TAPS / 2) {
+                let (exact, keep) = (off_plane_weight(&lobes[t], h, 1.0), off_plane_keep(&rates[t], h, 1.0));
+                for c in 0..3 {
+                    difference[c] += exact[c] - kernel[t][c + 1] * keep[c];
+                }
+            }
+            for c in 0..3 {
+                worst_sum[c] = worst_sum[c].max(difference[c].abs());
+            }
+        }
+        println!(
+            "off-plane fit: worst share of a tap {worst:.3}, red beyond 0.9 mm {worst_red_outside:.3}, of a channel's weight {worst_sum:.3?}"
+        );
+        assert!(worst < 0.3 && worst_red_outside < 0.1, "{worst} / {worst_red_outside}");
+        assert!(worst_sum.iter().all(|&d| d < 0.09), "{worst_sum:?}");
+        let outer = rates[KERNEL_TAPS - 1];
+        assert!((outer[0] - slowest).abs() < 0.02 * slowest, "the outer red tap is the widest Gaussian: {outer:?}");
+        assert!(rates[KERNEL_TAPS / 2 + 4][0] < rates[KERNEL_TAPS / 2 + 4][1], "green falls faster than red");
+        assert_eq!(off_plane_keep(&rates[3], 0.0, 1.0), [1.0; 3]);
+        assert_eq!(off_plane_keep(&rates[3], 2.0, 2.0), off_plane_keep(&rates[3], 1.0, 1.0), "the scale stretches h");
+    }
+
+    // Off the plane in the reference: a lit shelf 2 mm in front of a dark floor bleeds into the
+    // floor far less than on a flat surface, red the most, and what does not bleed stays: the lit
+    // pixel at the step keeps more of its light.
+    #[test]
+    fn todo_1_4_reference_blur_bleeds_less_across_a_depth_step() {
+        let (w, h) = (161, 1);
+        let px_per_mm = 4.0;
+        let flat: Vec<[f32; 4]> =
+            (0..w).map(|x| if x < 80 { [1.0, 1.0, 1.0, 1.0] } else { [0.0, 0.0, 0.0, 1.0] }).collect();
+        let step: Vec<[f32; 4]> =
+            flat.iter().enumerate().map(|(x, p)| [p[0], p[1], p[2], if x < 80 { 0.998 } else { 1.0 }]).collect();
+        let a = blur_pass_reference(&flat, w, h, true, px_per_mm, 1.0);
+        let b = blur_pass_reference(&step, w, h, true, px_per_mm, 1.0);
+        // 1 mm into the dark floor.
+        let floor = 84;
+        for c in 0..3 {
+            assert!(b[floor][c] < 0.6 * a[floor][c], "channel {c}: step {} vs flat {}", b[floor][c], a[floor][c]);
+        }
+        assert!(b[floor][0] > b[floor][1] && b[floor][1] >= b[floor][2], "red carries farthest: {:?}", b[floor]);
+        assert!(b[79][1] > a[79][1], "the lit edge keeps its light: {} vs {}", b[79][1], a[79][1]);
+        assert!(b.iter().all(|p| p.iter().all(|v| v.is_finite() && *v >= 0.0)));
     }
 }

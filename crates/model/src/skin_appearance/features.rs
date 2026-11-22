@@ -243,7 +243,7 @@ impl GeneratorKind {
     }
 
     /// The layer's blend mode and content attributes.
-    const fn layout(self) -> (BlendMode, [Option<Attribute>; CONTENT_ATTRIBUTES]) {
+    pub(super) const fn layout(self) -> (BlendMode, [Option<Attribute>; CONTENT_ATTRIBUTES]) {
         use Attribute as A;
         match self {
             Self::Freckles | Self::SunSpots => {
@@ -441,7 +441,7 @@ fn bump(d: f32) -> f32 {
 }
 
 /// Groove cross-section: Gaussian with σ = 1/2 of the radius, cut at 1.5.
-fn groove(d: f32) -> f32 {
+pub(super) fn groove(d: f32) -> f32 {
     if d >= 1.5 { 0.0 } else { (-2.0 * d * d).exp() }
 }
 

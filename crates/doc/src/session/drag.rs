@@ -27,8 +27,9 @@ impl Session<'_> {
     /// `set_params {id: value}` with [`RangePolicy::Clamp`] as part of a gesture
     /// ([`Command::in_gesture`]). A frame that only moves the open gesture of this author on this
     /// parameter (the steady state of a drag) is folded in place without allocating and returns
-    /// `None`: its warnings (clamped, outside the plausible span) are not reported, and a
-    /// session with a plausibility scorer always takes the full path. Every other frame (the
+    /// `None`: its warnings (clamped, outside the plausible span, the
+    /// [`crate::plausibility::RegistryPrior`] score) are not reported, and a session with an
+    /// installed plausibility scorer ([`Session::with_scorer`]) always takes the full path. Every other frame (the
     /// first, one that lands on the default, a refused one) goes through [`Session::execute`]
     /// and returns its outcome or error. End the gesture with [`Session::end_gesture`].
     pub fn drag_scalar(&mut self, author: &str, id: &str, value: f64) -> Result<Option<Outcome>, CommandError> {
@@ -101,7 +102,7 @@ impl Session<'_> {
 
     /// The value the frame stores, when the frame can be folded in place: the open top entry is
     /// this author's `set_params` gesture on `id` alone and holds only sets, no plausibility
-    /// scorer runs, the parameter is an editable scalar already stored with this author, the
+    /// scorer is installed, the parameter is an editable scalar already stored with this author, the
     /// (clamped) value is not its default, and the locks allow the change.
     fn foldable(&self, author: &str, id: &str, value: f64) -> Option<f64> {
         if self.scorer.is_some() || !value.is_finite() {

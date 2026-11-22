@@ -83,7 +83,7 @@ fn reg_01_bindings_match_the_registry_files() {
     let ours: BTreeSet<(String, String)> =
         BINDINGS.iter().chain(scan::SCAN_BINDINGS).map(|&(p, c)| (p.to_owned(), c.to_owned())).collect();
     assert_eq!(ours, registry, "BINDINGS and SCAN_BINDINGS differ from data/template/params");
-    assert_eq!(BINDINGS.len(), 72);
+    assert_eq!(BINDINGS.len(), 73);
     assert_eq!(scan::SCAN_BINDINGS.len(), 7);
 }
 
@@ -256,7 +256,15 @@ fn id_02_no_normal_discontinuity_at_region_borders() {
     let t = &*f.full;
     let space = Space::new(t).unwrap();
     let tris = t.mesh().triangulate().indices;
-    let pairs = edge_pairs(t, &space, &tris);
+    // The genital variants are left out: the switch moves them between their two states and
+    // other components carry them as helpers (`todo_1_3_sex_switch_*` test them).
+    let mut genital = region_ids(t, &crate::generate::genitals::MALE_REGIONS);
+    genital.extend(region_ids(t, &crate::generate::genitals::FEMALE_REGIONS));
+    let touches = |tri: usize| {
+        tris[tri * 3..tri * 3 + 3].iter().any(|&v| genital.contains(&t.regions().vertex_regions[v as usize]))
+    };
+    let pairs: Vec<(usize, usize, bool)> =
+        edge_pairs(t, &space, &tris).into_iter().filter(|p| !touches(p.0) && !touches(p.1)).collect();
     let rest = tri_normals(t.mesh().positions(), &tris);
     let index: Vec<usize> = BINDINGS.iter().map(|&(_, c)| t.deltas().find(c).unwrap() as usize).collect();
     let mut rng = Rng::new(0x1d02);
@@ -275,9 +283,19 @@ fn id_02_no_normal_discontinuity_at_region_borders() {
     let mut worst = [(0.0_f32, 0.0_f32); 2];
     for sample in 0..6 {
         let mut w = vec![0.0; t.deltas().len()];
+        // The sex switch takes its two values; the other components are compared with that sex.
+        let mut alone = vec![0.0; t.deltas().len()];
         for (&i, &(_, name)) in index.iter().zip(BINDINGS) {
-            w[i] = if name == "asymmetry.global" { rng.range_f32(0.0, 1.0) } else { rng.range_f32(-2.0, 2.0) };
+            w[i] = match name {
+                "asymmetry.global" => rng.range_f32(0.0, 1.0),
+                sex::SWITCH => {
+                    alone[i] = if rng.range_f32(-1.0, 1.0) < 0.0 { -1.0 } else { 1.0 };
+                    alone[i]
+                }
+                _ => rng.range_f32(-2.0, 2.0),
+            };
         }
+        let rest = tri_normals(&t.deformed_positions(&alone), &tris);
         let now = tri_normals(&t.deformed_positions(&w), &tris);
         let (b, i) = dihedral_quantile(&pairs, &rest, &now, 0.999);
         let (bm, im) = dihedral_change(&pairs, &rest, &now);
@@ -295,6 +313,11 @@ fn id_02_no_normal_discontinuity_at_region_borders() {
     }
     // Each component alone at the edge of the usual span.
     for (&i, &(_, name)) in index.iter().zip(BINDINGS) {
+        if name == sex::SWITCH {
+            // Two values only, each compared with the other components in
+            // `todo_1_3_sex_switch_is_fold_free`.
+            continue;
+        }
         let mut w = vec![0.0; t.deltas().len()];
         w[i] = 2.0;
         let now = tri_normals(&t.deformed_positions(&w), &tris);
@@ -627,7 +650,7 @@ fn id_03_ansur_constants_match_the_data_file() {
     let value = humanart_io::json::parse(&bytes).unwrap();
     let root = value.node();
     let stats = root.field("stats").unwrap();
-    for v in measure::VARIABLES {
+    for v in measure::VARIABLES.iter().chain(sex::VARIABLES) {
         for (sex, mean, sd) in [("male", v.male_mean, v.male_sd), ("female", v.female_mean, v.female_sd)] {
             let s = stats.field(sex).unwrap();
             let s = s.field(v.id).unwrap();
@@ -676,15 +699,16 @@ fn id_03_calibrated_axes_move_their_measurement_by_one_sd() {
     }
     assert!((tm / mm - 1.0).abs() < 0.03, "mass fit {}", tm / mm);
     lines.push(format!("  mass volume change per unit: {:.2} L", volume_change(&space, &d) * 1e3));
-    // Sex: +-1 reaches the sex means relative to stature for the calibrated terms (the terms
-    // overlap a little, so 25 %); chest and buttock circumference are reported only.
+    // Sex shape (within a sex): one unit is one within-sex SD (RMS of the sexes) in the male
+    // direction for the calibrated terms (the terms overlap a little, so 25 %); chest and buttock
+    // circumference are reported only.
     let d = node_disp(&space, component(f, "global.sex"));
     let stature = Gauge::Stature.measure(&space, &[], 0.0).unwrap();
     lines.push(format!("template stature {:.1} mm; global.sex per unit:", stature * 1e3));
     let check = |gauge: &Gauge, v: &Variable, strict: bool, lines: &mut Vec<String>| {
         let got = gauge.per_unit(&space, &d).unwrap();
-        let want = v.sex_half_difference(stature);
-        lines.push(format!("  {}: {:.2} mm (male-female half difference {:.2} mm)", v.id, got * 1e3, want * 1e3));
+        let want = v.sd_m().copysign(v.sex_half_difference(stature));
+        lines.push(format!("  {}: {:.2} mm (one within-sex SD toward male {:.2} mm)", v.id, got * 1e3, want * 1e3));
         if strict {
             assert!((got - want).abs() <= 0.25 * want.abs() + 1.5e-3, "{}: {got} against {want}", v.id);
         }
@@ -988,4 +1012,549 @@ fn todo_1_2_scan_components_are_bound_symmetric_and_fold_free_in_range() {
     std::fs::write(dir.join("scan-ranges.txt"), lines.join("\n")).unwrap();
     println!("{}", lines.join("\n"));
     assert!(failures.is_empty(), "{failures:#?}");
+}
+
+/// Positions of `t` with the named components at their weights.
+fn posed(t: &Template, weights: &[(&str, f32)]) -> Vec<Vec3> {
+    let mut p = t.mesh().positions().to_vec();
+    for &(name, w) in weights {
+        let c = t.deltas().find(name).unwrap_or_else(|| panic!("{name}")) as usize;
+        for (&v, &d) in t.deltas().indices(c).iter().zip(t.deltas().deltas(c)) {
+            p[v as usize] += crate::delta::DeltaBases::delta_f32(d) * w;
+        }
+    }
+    p
+}
+
+/// The region indices of the given generator regions.
+fn region_ids(t: &Template, list: &[crate::generate::regions::R]) -> Vec<u16> {
+    let regions = &t.regions().regions;
+    list.iter().map(|r| regions.iter().position(|x| x.name == r.name()).unwrap() as u16).collect()
+}
+
+/// Per vertex: whether a face of the `body` part uses it.
+fn on_body(t: &Template) -> Vec<bool> {
+    let mut on = vec![false; t.mesh().vertex_count()];
+    let body = t.mesh().parts().iter().find(|p| p.name == "body").unwrap().faces();
+    for f in body {
+        for &v in t.mesh().face(f) {
+            on[v as usize] = true;
+        }
+    }
+    on
+}
+
+/// todo 1.3: the switch puts every fitted measurement of both sexes near the ANSUR II mean
+/// (stated tolerance: 0.35 SD in the gauge's scale); the bust girth, the face breadth and the arm
+/// girth are printed, not checked (their gauges differ from ANSUR's).
+#[test]
+fn todo_1_3_sex_switch_meets_the_ansur_means() {
+    let f = fixture();
+    let space = Space::new(&f.base).unwrap();
+    let kit = Kit::new(&space).unwrap();
+    let (raw, amounts) = sex::fit(&kit).unwrap();
+    println!("amounts {amounts:?}");
+    let mut failed = Vec::new();
+    for (g, t) in &sex::FITTED {
+        let (fe, ma) = sex::states(&space, g, &raw).unwrap();
+        let rest = g.measure(&space, &[], 0.0).unwrap();
+        let (tf, tm) = sex::targets(*t, rest);
+        let v = t.variable();
+        // The SD in the gauge's own scale (relative and difference gauges are not ANSUR's).
+        let k = if matches!(t, sex::Target::Relative(_)) {
+            rest / (f32::midpoint(v.male_mean, v.female_mean) * 1e-3)
+        } else {
+            1.0
+        };
+        // Hip breadth and buttock depth take an extreme point that the switch moves outward at
+        // both settings (the fit matches their difference): 0.6 SD for them.
+        let tol = if ["hipbreadth", "buttockdepth"].contains(&v.id) { 0.6 } else { 0.35 };
+        let ok = (fe - tf).abs() <= tol * k * v.female_sd * 1e-3 && (ma - tm).abs() <= tol * k * v.male_sd * 1e-3;
+        let line = format!(
+            "{} ({t:?}): female {:.1} / {:.1}, male {:.1} / {:.1} mm (rest {:.1})",
+            v.id,
+            fe * 1e3,
+            tf * 1e3,
+            ma * 1e3,
+            tm * 1e3,
+            rest * 1e3
+        );
+        println!("{line}");
+        if !ok {
+            failed.push(line);
+        }
+    }
+    for (g, v) in &sex::REPORTED_RELATIVE {
+        let (fe, ma) = sex::states(&space, g, &raw).unwrap();
+        let rest = g.measure(&space, &[], 0.0).unwrap();
+        let mid = f32::midpoint(v.male_mean, v.female_mean);
+        println!(
+            "{} (reported, relative): female {:.3} / {:.3}, male {:.3} / {:.3}",
+            v.id,
+            fe / rest,
+            v.female_mean / mid,
+            ma / rest,
+            v.male_mean / mid
+        );
+    }
+    for (g, v) in &sex::REPORTED {
+        let (fe, ma) = sex::states(&space, g, &raw).unwrap();
+        let line = format!(
+            "{} (reported): female {:.1} / {:.1}, male {:.1} / {:.1} mm",
+            v.id,
+            fe * 1e3,
+            v.female_mean,
+            ma * 1e3,
+            v.male_mean
+        );
+        println!("{line}");
+    }
+    assert!(failed.is_empty(), "{failed:#?}");
+}
+
+/// todo 1.3, ADR-039: one template carries both genital variants; `identity.sex` −1 shows the
+/// vulva and keeps the male piece inside the pelvis, +1 shows the male piece (meeting the body at
+/// the attachment loop) with the vulva folded under it. No rebuild: only a component weight.
+#[test]
+fn todo_1_3_sex_switch_shows_one_genital_variant() {
+    use crate::generate::genitals;
+    let t = &*fixture().full;
+    let rest = t.mesh().positions();
+    let vr = &t.regions().vertex_regions;
+    let (male, female) = (region_ids(t, &genitals::MALE_REGIONS), region_ids(t, &genitals::FEMALE_REGIONS));
+    let on = on_body(t);
+    let is = |v: usize, list: &[u16]| on[v] && list.contains(&vr[v]);
+    let fem = posed(t, &[(sex::SWITCH, -1.0)]);
+    let mal = posed(t, &[(sex::SWITCH, 1.0)]);
+    // Each variant rides on the groin, which the switch moves with the hips and thighs: its
+    // shown state is the real shape carried by the skin around it, so the offsets from the real
+    // shape are a few millimetres and nearly the same for the whole variant.
+    let (mut n_male, mut n_female, mut worst_fold) = (0, 0, f32::MIN);
+    let (mut male_off, mut vulva_off) = (Vec::new(), Vec::new());
+    // The stowed piece rides with the groin too (the female groin lies about 3 cm lower than the
+    // rest shape's): it stays within 4 cm of the stow centre carried as the vulva is.
+    let carried: Vec<Vec3> =
+        (0..rest.len()).filter(|&v| is(v, &female)).map(|v| fem[v] - genitals::vulva_states(rest[v]).0).collect();
+    let carry = carried.iter().fold(Vec3::ZERO, |s, o| s + *o) / carried.len().max(1) as f32;
+    for v in 0..rest.len() {
+        if is(v, &male) {
+            n_male += 1;
+            let stowed = fem[v].distance(genitals::STOW_CENTRE + carry);
+            assert!(stowed < 0.04, "male vertex {v} not stowed: {:?} (carry {carry:?})", fem[v]);
+            male_off.push(mal[v] - genitals::male_real(rest[v]));
+        } else if is(v, &female) {
+            n_female += 1;
+            vulva_off.push(fem[v] - genitals::vulva_states(rest[v]).0);
+            worst_fold = worst_fold.max(genitals::site_coords(mal[v]).2);
+        }
+    }
+    for (name, off) in [("male piece", &male_off), ("vulva", &vulva_off)] {
+        let mean = off.iter().fold(Vec3::ZERO, |s, o| s + *o) / off.len().max(1) as f32;
+        let spread = off.iter().map(|o| o.distance(mean)).fold(0.0, f32::max);
+        println!(
+            "{name}: carried {:.2} mm with the groin, shape error at most {:.2} mm",
+            mean.length() * 1e3,
+            spread * 1e3
+        );
+        assert!(mean.length() < 0.012, "{name} carried {:.1} mm", mean.length() * 1e3);
+        assert!(spread < 0.003, "{name} distorted by {:.2} mm", spread * 1e3);
+    }
+    assert!(n_male > 500 && n_female > 500, "{n_male} male, {n_female} female vertices");
+    assert!(worst_fold < -4.0e-4, "a folded vulva vertex is only {:.2} mm under the site", -worst_fold * 1e3);
+    // The male piece meets the body: its border vertices lie on body vertices outside both variants.
+    let near_body: Vec<Vec3> = (0..rest.len())
+        .filter(|&v| on[v] && !is(v, &male) && !is(v, &female))
+        .map(|v| mal[v])
+        .filter(|p| p.y < 0.9 && p.y > 0.75 && p.x.abs() < 0.05)
+        .collect();
+    let met = (0..rest.len())
+        .filter(|&v| is(v, &male))
+        .filter(|&v| near_body.iter().any(|q| q.distance(mal[v]) < 1.0e-4))
+        .count();
+    println!(
+        "male {n_male}, vulva {n_female}, deepest fold {:.2} mm, male vertices on the body {met}",
+        -worst_fold * 1e3
+    );
+    assert!(met >= 48, "only {met} male vertices meet the body");
+}
+
+/// Count of body faces (outside the regions `skip`) whose normal turns over between `a` and `b`.
+fn turned_faces(t: &Template, a: &[Vec3], b: &[Vec3], skip: &[u16]) -> usize {
+    let vr = &t.regions().vertex_regions;
+    let normal = |p: &[Vec3], c: &[u32]| {
+        (0..c.len()).fold(Vec3::ZERO, |s, k| s + p[c[k] as usize].cross(p[c[(k + 1) % c.len()] as usize]))
+    };
+    let body = t.mesh().parts().iter().find(|p| p.name == "body").unwrap().faces();
+    body.filter(|&f| {
+        let c = t.mesh().face(f);
+        !c.iter().any(|&v| skip.contains(&vr[v as usize])) && normal(a, c).dot(normal(b, c)) < 0.0
+    })
+    .count()
+}
+
+/// todo 1.3: both settings are fold-free against the rest shape, and stay so across `sex_shape`
+/// −2..2 and the breast parameters at their soft ranges (±2).
+#[test]
+fn todo_1_3_sex_switch_is_fold_free() {
+    use crate::generate::genitals;
+    let t = &*fixture().full;
+    let rest = t.mesh().positions();
+    let mut skip = region_ids(t, &genitals::MALE_REGIONS);
+    skip.extend(region_ids(t, &genitals::FEMALE_REGIONS));
+    let mut lines = Vec::new();
+    let mut bad = 0;
+    for w in [-1.0, 1.0] {
+        let base = posed(t, &[(sex::SWITCH, w)]);
+        let n = turned_faces(t, rest, &base, &skip);
+        lines.push(format!("sex {w}: {n} turned faces against the rest shape"));
+        bad += n;
+        if n > 0 {
+            let body = t.mesh().parts().iter().find(|p| p.name == "body").unwrap().faces();
+            for f in body {
+                let c = t.mesh().face(f);
+                let vr = &t.regions().vertex_regions;
+                let nrm = |p: &[Vec3]| {
+                    (0..c.len()).fold(Vec3::ZERO, |s, k| s + p[c[k] as usize].cross(p[c[(k + 1) % c.len()] as usize]))
+                };
+                if !c.iter().any(|&v| skip.contains(&vr[v as usize])) && nrm(rest).dot(nrm(&base)) < 0.0 {
+                    let r = vr[c[0] as usize];
+                    lines.push(format!("  at {:?} in {}", base[c[0] as usize], t.regions().regions[r as usize].name));
+                }
+            }
+        }
+        let mut cases: Vec<(&str, f32)> = vec![("global.sex", -2.0), ("global.sex", 2.0)];
+        for c in
+            ["semantic.bust-size", "semantic.breast-projection", "semantic.breast-ptosis", "semantic.breast-spacing"]
+        {
+            cases.push((c, -2.0));
+            cases.push((c, 2.0));
+        }
+        for (c, x) in cases {
+            let p = posed(t, &[(sex::SWITCH, w), (c, x)]);
+            let n = turned_faces(t, &base, &p, &skip);
+            // What the parameter turns over on the rest shape without the switch is not the
+            // switch's doing.
+            let alone = turned_faces(t, rest, &posed(t, &[(c, x)]), &skip);
+            lines.push(format!("sex {w}, {c} {x}: {n} (alone on the rest shape {alone})"));
+            if n > alone {
+                let body = t.mesh().parts().iter().find(|p| p.name == "body").unwrap().faces();
+                for f in body {
+                    let c = t.mesh().face(f);
+                    let nrm = |p: &[Vec3]| {
+                        (0..c.len())
+                            .fold(Vec3::ZERO, |s, k| s + p[c[k] as usize].cross(p[c[(k + 1) % c.len()] as usize]))
+                    };
+                    if nrm(&base).dot(nrm(&p)) < 0.0 {
+                        let r = t.regions().vertex_regions[c[0] as usize];
+                        lines.push(format!(
+                            "  at {:?} in {}",
+                            base[c[0] as usize],
+                            t.regions().regions[r as usize].name
+                        ));
+                    }
+                }
+            }
+            bad += n.saturating_sub(alone);
+        }
+    }
+    println!("{}", lines.join("\n"));
+    assert_eq!(bad, 0, "{lines:#?}");
+}
+
+/// The frontmost skin point of each millimetre of height near the midline (|x| < 2 mm) between
+/// the heights `lo` and `hi` and in front of `front` (depth), top down: the profile of the face as
+/// a camera at the side sees it. Without `front` a height whose few midline vertices all lie on
+/// the back of the head would give a back point.
+fn midline_profile(p: &[Vec3], on: &[bool], lo: f32, hi: f32, front: f32) -> Vec<Vec3> {
+    let mut bins: Vec<Option<Vec3>> = vec![None; ((hi - lo) * 1000.0) as usize + 1];
+    for (q, _) in p.iter().zip(on).filter(|(q, on)| **on && q.x.abs() < 0.002 && q.y > lo && q.y < hi && q.z > front) {
+        let slot = &mut bins[((hi - q.y) * 1000.0) as usize];
+        if slot.is_none_or(|o: Vec3| q.z > o.z) {
+            *slot = Some(*q);
+        }
+    }
+    bins.into_iter().flatten().collect()
+}
+
+/// The profile point between the heights `lo` and `hi` that lies farthest along `dir`.
+fn profile_support(profile: &[Vec3], lo: f32, hi: f32, dir: Vec3) -> Vec3 {
+    profile
+        .iter()
+        .copied()
+        .filter(|q| q.y >= lo && q.y <= hi)
+        .max_by(|a, b| a.dot(dir).total_cmp(&b.dot(dir)))
+        .unwrap_or_else(|| panic!("no profile point between {lo} and {hi}"))
+}
+
+/// What the adult-proportion test measures on one posed character, metres.
+/// The midline points are found on the posed profile, not taken from the template's landmarks:
+/// `forehead.glabella`, `nose.root` and `chin.menton` are found on the procedural head before the
+/// scanned face moves it and no longer sit where their names say.
+#[derive(Debug)]
+struct AdultGauge {
+    /// Floor to the top of the head.
+    stature: f32,
+    /// Vertex to menton, vertical.
+    head: f32,
+    /// Tragion to vertex, vertical (ANSUR `tragiontopofhead`).
+    vault: f32,
+    /// Sellion to menton, straight (ANSUR `mentonsellionlength`).
+    face: f32,
+    /// Sellion to subnasale, vertical (Farkas n-sn).
+    nose: f32,
+    /// Subnasale to menton, vertical (Farkas sn-gn).
+    lower: f32,
+    /// Subnasale to pronasale, straight (Farkas sn-prn).
+    protrusion: f32,
+    /// Between the zygion landmarks (ANSUR `bizygomaticbreadth`).
+    bizygomatic: f32,
+    /// The widest skin in front of the ears between the mouth and the brows.
+    face_breadth: f32,
+    /// The widest skin above the ears (ANSUR `headbreadth`).
+    head_breadth: f32,
+    /// Face breadth at the height of the mouth (stomion), in front of the ears.
+    jaw_breadth: f32,
+    /// Endocanthion to exocanthion (Farkas en-ex).
+    fissure: f32,
+    /// Upper to lower lid margin at mid-lid.
+    opening: f32,
+    /// Between the iris centres (ANSUR `interpupillarybreadth`).
+    pupils: f32,
+    /// How far the pogonion lies in front of the supramentale.
+    sulcus: f32,
+    /// How far the pogonion lies behind the subnasale.
+    chin_setback: f32,
+    /// Menton above the lowest midline point within 50 mm behind it (0: a chin that ends the
+    /// face; large: the underside runs down into the neck).
+    submental_drop: f32,
+    /// Height of the upper plus the lower vermilion at the midline.
+    lips: f32,
+    /// Superaurale to subaurale (ANSUR `earlength`).
+    ear: f32,
+    /// The malar landmark's height.
+    malar_y: f32,
+}
+
+fn adult_gauge(t: &Template, on: &[bool], weights: &[(&str, f32)], print_profile: bool) -> AdultGauge {
+    let p = posed(t, weights);
+    let lm = |name: &str| {
+        t.landmarks().iter().find(|l| l.name == name).unwrap_or_else(|| panic!("{name}")).position(&p).unwrap()
+    };
+    let floor = p.iter().zip(on).filter(|x| *x.1).map(|x| x.0.y).fold(f32::INFINITY, f32::min);
+    let vertex = lm("head.vertex");
+    let tragion = lm("ear.L.tragion");
+    let (en, ex) = (lm("L.eye.canthus.medial"), lm("L.eye.canthus.lateral"));
+    let prn = lm("nose.tip");
+    let sn = lm("nose.subnasale");
+    let (ls, li, sto) = (lm("lip.upper.outer.06"), lm("lip.lower.outer.06"), lm("lip.upper.inner.06"));
+    let brow = lm("L.brow.03");
+    let profile = midline_profile(&p, on, sto.y - 0.09, vertex.y, tragion.z);
+    if print_profile {
+        let line: Vec<String> = profile
+            .iter()
+            .filter(|q| q.y < brow.y + 0.03)
+            .map(|q| format!("{:.0}:{:.1}", (q.y - en.y) * 1e3, (q.z - tragion.z) * 1e3))
+            .collect();
+        println!("profile (mm above the endocanthion : mm in front of the tragion) {}", line.join(" "));
+    }
+    let sellion = profile_support(&profile, prn.y + 0.012, brow.y + 0.006, -Vec3::Z);
+    let supramentale = profile_support(&profile, li.y - 0.022, li.y - 0.003, -Vec3::Z);
+    let pogonion = profile_support(&profile, supramentale.y - 0.03, supramentale.y - 0.003, Vec3::Z);
+    // Menton: the lowest point of the chin, taken 60 degrees below the horizontal among the
+    // points at most 25 mm behind the pogonion, so that the neck below does not count as chin.
+    let chin: Vec<Vec3> = profile.iter().copied().filter(|q| q.z > pogonion.z - 0.025).collect();
+    let menton = profile_support(&chin, pogonion.y - 0.035, pogonion.y, Vec3::new(0.0, -0.866, 0.5));
+    let behind = p
+        .iter()
+        .zip(on)
+        .filter(|(q, on)| **on && q.x.abs() < 0.002 && q.z < menton.z && q.z > menton.z - 0.05 && q.y < pogonion.y)
+        .filter(|(q, _)| q.y > menton.y - 0.06)
+        .map(|(q, _)| q.y)
+        .fold(menton.y, f32::min);
+    let front = |q: &Vec3| q.z > tragion.z + 0.012;
+    let widest = |keep: &dyn Fn(&Vec3) -> bool| {
+        2.0 * p.iter().zip(on).filter(|(q, on)| **on && keep(q)).map(|(q, _)| q.x.abs()).fold(0.0, f32::max)
+    };
+    let superaurale = lm("ear.L.superaurale");
+    if print_profile {
+        println!(
+            "sellion {:.1} mm above the endocanthion, subnasale {:.1} below, stomion {:.1}, pogonion {:.1}, menton {:.1} below it",
+            (sellion.y - en.y) * 1e3,
+            (en.y - sn.y) * 1e3,
+            (en.y - sto.y) * 1e3,
+            (en.y - pogonion.y) * 1e3,
+            (en.y - menton.y) * 1e3
+        );
+    }
+    AdultGauge {
+        stature: vertex.y - floor,
+        head: vertex.y - menton.y,
+        vault: vertex.y - tragion.y,
+        face: sellion.distance(menton),
+        nose: sellion.y - sn.y,
+        lower: sn.y - menton.y,
+        protrusion: sn.distance(prn),
+        bizygomatic: lm("L.zygion").distance(lm("R.zygion")),
+        face_breadth: widest(&|q| front(q) && q.y > sto.y && q.y < brow.y),
+        head_breadth: widest(&|q| q.y > superaurale.y + 0.005),
+        jaw_breadth: widest(&|q| front(q) && (q.y - sto.y).abs() < 0.003),
+        fissure: en.distance(ex),
+        opening: lm("L.eye.upper.04").y - lm("L.eye.lower.04").y,
+        pupils: lm("L.iris.center").distance(lm("R.iris.center")),
+        sulcus: pogonion.z - supramentale.z,
+        chin_setback: sn.z - pogonion.z,
+        submental_drop: menton.y - behind,
+        lips: ls.y - li.y,
+        ear: superaurale.distance(lm("ear.L.lobule")),
+        malar_y: lm("L.cheek.malar").y,
+    }
+}
+
+/// `tragiontopofhead` of ANSUR II (checked against the data file below).
+const TRAGION_TOP: measure::Variable =
+    measure::Variable { id: "tragiontopofhead", male_mean: 131.1, male_sd: 6.2, female_mean: 126.5, female_sd: 6.5 };
+/// `headbreadth` of ANSUR II.
+const HEAD_BREADTH: measure::Variable =
+    measure::Variable { id: "headbreadth", male_mean: 154.3, male_sd: 5.5, female_mean: 147.8, female_sd: 5.2 };
+
+/// todo 1.3 ("sufficiently adult"): both sexes at the registry defaults have the proportions of an
+/// adult, by measurement. ANSUR II (adults, mean age 30.2 / 28.9 years, the file in the
+/// repository) gives the head and face sizes against the stature; what ANSUR II does not hold
+/// (nose, eye fissure, chin) is checked against wide windows around adult values of Farkas,
+/// "Anthropometry of the Head and Face" (1994), North American adults 19 to 25, quoted from the
+/// secondary literature: nose height n-sn 54.8 (SD 3.3) men, 50.6 (3.1) women; eye fissure en-ex
+/// 31.3 / 30.7 (1.2) mm. A child of six has a face height of about 0.78 of the vault height, a
+/// nose of about 40 mm and a stature of about six head heights.
+#[test]
+fn todo_1_3_both_sexes_have_adult_proportions() {
+    let t = &*fixture().full;
+    let on = on_body(t);
+    let mut failed = Vec::new();
+    let mut check = |what: String, value: f32, lo: f32, hi: f32| {
+        let line = format!("{what}: {value:.3} (adult window {lo:.3} .. {hi:.3})");
+        println!("{line}");
+        if !(lo..=hi).contains(&value) {
+            failed.push(line);
+        }
+    };
+    for (name, w) in [("female", -1.0_f32), ("male", 1.0)] {
+        let g = adult_gauge(t, &on, &[(sex::SWITCH, w)], true);
+        println!("{name}: {g:#?}");
+        let mean = |v: &measure::Variable| 1.0e-3 * if w < 0.0 { v.female_mean } else { v.male_mean };
+        let sd = |v: &measure::Variable| 1.0e-3 * if w < 0.0 { v.female_sd } else { v.male_sd };
+        // Head to body: the classical 7.5 heads (ANSUR II has no vertex-to-menton height).
+        check(format!("{name} stature in head heights"), g.stature / g.head, 7.0, 8.0);
+        // Face and vault sizes against ANSUR II, within 1.5 SD.
+        for (what, value, v) in [
+            ("menton-sellion length", g.face, &sex::MENTON_SELLION),
+            ("bizygomatic breadth", g.bizygomatic, &sex::BIZYGOMATIC),
+            ("tragion to top of head", g.vault, &TRAGION_TOP),
+            ("head breadth", g.head_breadth, &HEAD_BREADTH),
+            ("interpupillary breadth", g.pupils, &measure::INTERPUPILLARY),
+            ("ear length", g.ear, &measure::EAR_LENGTH),
+        ] {
+            check(
+                format!("{name} {what} (ANSUR mean {:.1}) mm", mean(v) * 1e3),
+                value * 1e3,
+                (mean(v) - 1.5 * sd(v)) * 1e3,
+                (mean(v) + 1.5 * sd(v)) * 1e3,
+            );
+        }
+        // The face against the vault: small in a child, 0.89 (women) and 0.94 (men) in ANSUR II.
+        let ratio = mean(&sex::MENTON_SELLION) / mean(&TRAGION_TOP);
+        check(format!("{name} face height / vault height"), g.face / g.vault, ratio * 0.92, ratio * 1.1);
+        // The face's height against its breadth: 0.845 (women) and 0.860 (men) in ANSUR II.
+        let index = mean(&sex::MENTON_SELLION) / mean(&sex::BIZYGOMATIC);
+        check(format!("{name} face height / bizygomatic breadth"), g.face / g.bizygomatic, index * 0.93, index * 1.08);
+        // Nose (Farkas, within 2 SD) and the lower face's share of the face height.
+        let (n, n_sd) = if w < 0.0 { (0.0506, 0.0031) } else { (0.0548, 0.0033) };
+        check(format!("{name} nose height n-sn mm"), g.nose * 1e3, (n - 2.0 * n_sd) * 1e3, (n + 2.0 * n_sd) * 1e3);
+        check(format!("{name} nose protrusion sn-prn mm"), g.protrusion * 1e3, 16.0, 24.0);
+        check(format!("{name} lower face / face height"), g.lower / (g.nose + g.lower), 0.52, 0.62);
+        // Eyes against the face breadth: fissure 31.3 / 137.1 and 30.7 / 129.9 in Farkas.
+        check(format!("{name} eye fissure / bizygomatic breadth"), g.fissure / g.bizygomatic, 0.20, 0.245);
+        check(format!("{name} eye opening / fissure length"), g.opening / g.fissure, 0.28, 0.42);
+        // Chin: a labiomental fold of 2 to 8 mm, the pogonion at most 12 mm behind the subnasale,
+        // and an underside that does not run down into the neck by more than 10 mm.
+        check(format!("{name} labiomental fold depth mm"), g.sulcus * 1e3, 2.0, 8.0);
+        check(format!("{name} pogonion behind subnasale mm"), g.chin_setback * 1e3, -4.0, 12.0);
+        check(format!("{name} submental drop mm"), g.submental_drop * 1e3, 0.0, 10.0);
+        // Jaw against the cheekbones (reported with the face breadth; no ANSUR II variable).
+        println!(
+            "{name}: face breadth {:.1} mm, at the mouth {:.1} mm ({:.3} of it)",
+            g.face_breadth * 1e3,
+            g.jaw_breadth * 1e3,
+            g.jaw_breadth / g.face_breadth
+        );
+        // `identity.age` (0 at the default: the adult of the ANSUR II means) moves the face the
+        // right way, and the youngest setting of its usual span is still an adult.
+        let old = adult_gauge(t, &on, &[(sex::SWITCH, w), ("global.age", 2.0)], false);
+        let young = adult_gauge(t, &on, &[(sex::SWITCH, w), ("global.age", -2.0)], false);
+        println!(
+            "{name} age -2 / 0 / +2: nose {:.1} / {:.1} / {:.1} mm, ear {:.1} / {:.1} / {:.1} mm, lips {:.1} / {:.1} / {:.1} mm, malar height {:+.1} / 0 / {:+.1} mm",
+            young.nose * 1e3,
+            g.nose * 1e3,
+            old.nose * 1e3,
+            young.ear * 1e3,
+            g.ear * 1e3,
+            old.ear * 1e3,
+            young.lips * 1e3,
+            g.lips * 1e3,
+            old.lips * 1e3,
+            (young.malar_y - g.malar_y) * 1e3,
+            (old.malar_y - g.malar_y) * 1e3
+        );
+        assert!(old.nose > g.nose && g.nose > young.nose, "{name}: the nose grows with age");
+        assert!(old.ear > g.ear && g.ear > young.ear, "{name}: the ears grow with age");
+        assert!(old.lips < g.lips && g.lips < young.lips, "{name}: the lips thin with age");
+        assert!(old.malar_y < g.malar_y && g.malar_y < young.malar_y, "{name}: the cheeks descend with age");
+        check(format!("{name} at age -2: stature in head heights"), young.stature / young.head, 7.0, 8.0);
+        check(
+            format!("{name} at age -2: face height / vault height"),
+            young.face / young.vault,
+            ratio * 0.92,
+            ratio * 1.1,
+        );
+        check(
+            format!("{name} at age -2: nose height n-sn mm"),
+            young.nose * 1e3,
+            (n - 2.0 * n_sd) * 1e3,
+            (n + 2.0 * n_sd) * 1e3,
+        );
+    }
+    // The body's adult build: shoulders against hips (ANSUR II means: 1.03 women, 1.20 men).
+    let f = fixture();
+    let space = Space::new(&f.base).unwrap();
+    let kit = Kit::new(&space).unwrap();
+    let (raw, _) = sex::fit(&kit).unwrap();
+    let (sh_f, sh_m) = sex::states(&space, &measure::BIACROMIAL_GAUGE, &raw).unwrap();
+    let (hip_f, hip_m) = sex::states(&space, &measure::HIP_BREADTH_GAUGE, &raw).unwrap();
+    let (b, h) = (measure::BIACROMIAL, measure::HIP_BREADTH);
+    let (want_f, want_m) = (b.female_mean / h.female_mean, b.male_mean / h.male_mean);
+    check("female biacromial / hip breadth".to_owned(), sh_f / hip_f, want_f - 0.05, want_f + 0.05);
+    check("male biacromial / hip breadth".to_owned(), sh_m / hip_m, want_m - 0.05, want_m + 0.05);
+    assert!(failed.is_empty(), "{failed:#?}");
+}
+
+/// The ANSUR II constants of the adult-proportion test match the data file, and the survey's
+/// mean age is about 30 (what `identity.age` 0 stands for).
+#[test]
+fn todo_1_3_adult_test_constants_match_the_data_file() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../data/anthropometry/ansur2.json");
+    let value = humanart_io::json::parse(&std::fs::read(path).unwrap()).unwrap();
+    let root = value.node();
+    let stats = root.field("stats").unwrap();
+    for v in [&TRAGION_TOP, &HEAD_BREADTH] {
+        for (sex, mean, sd) in [("male", v.male_mean, v.male_sd), ("female", v.female_mean, v.female_sd)] {
+            let s = stats.field(sex).unwrap();
+            let s = s.field(v.id).unwrap();
+            let (m, d) = (s.field("mean").unwrap().f64().unwrap(), s.field("sd").unwrap().f64().unwrap());
+            assert!((m - f64::from(mean)).abs() < 0.01 && (d - f64::from(sd)).abs() < 0.01, "{} {sex}", v.id);
+        }
+    }
+    for (sex, lo, hi) in [("male", 29.0, 31.0), ("female", 28.0, 30.0)] {
+        let s = stats.field(sex).unwrap();
+        let age = s.field("age").unwrap().field("mean").unwrap().f64().unwrap();
+        assert!((lo..=hi).contains(&age), "{sex} mean age {age}");
+    }
 }

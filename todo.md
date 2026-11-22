@@ -21,21 +21,33 @@ forms) are checked and in use; FLAME is out (owner, 2026-11-20).
    stills `target/review/face/r2-final-*.png`): the mean face of 8 HSRD-100 people is on in the default
    template, with a rounded skull matching ANSUR head length, breadth and circumference, ears with a rim,
    and the nose-root seam faired (fold 88 -> 9 degrees). Round 3: the nape knob is a low, broad bump
-   now; the head render test checks the shipped skin and passes. Still to do: the ears are thin, flat
-   and pointed from the front (a 16-slot ear with rim, antihelix, concha, tragus and lobe is drafted in
-   `target/agents/face-scan/py/ear_r3_wip.rs`, reverted for a fold in the concha floor; fix in that
-   STATUS); the side of the forehead meets the temple along a near-vertical edge in three-quarter view
-   (the skull's `VAULT` cross-section is boxy in front); a bump in the far shoulder's outline (body); a
-   red mark at the base of the throat (jugular notch) in today's renders, cause unknown; natural asymmetry
-   as the default (`identity.asymmetry` 0.35, tests that need a symmetric face set it to 0); the eye
-   corners (already in the procedural base): a pale column of skin bridging the lids at the outer
-   corner, the caruncle split in two with a white sliver, crumpled lashes at both corners.
+   now; the head render test checks the shipped skin and passes. Round 4 (2026-11-22, stills
+   `target/review/face/r4-*.png`): ears with rim, scapha, antihelix, concha, tragus and lobe, fold-free
+   and ANSUR-sized (length 61.0 mm, breadth 34.0, protrusion 22.1; 25.6 degrees off the head; test
+   `wp25_finished_ear_is_fold_free_and_ansur_sized`); a rounder forehead-to-temple curve; the pale
+   column at the outer eye corner is gone. Still to do: the concha floor reads as a diamond-shaped pit in
+   profile and a short crease runs forward from the ear's lower front; a faint tone change remains at the
+   temple; the white sliver across the caruncle (a lid-margin highlight, not the tear line); natural
+   asymmetry as the default (`identity.asymmetry` 0.35, tests that need a symmetric face set it to 0);
+   a default procedural mole sits on the jugular notch since the torso UV repack (moles are placed in
+   texture space: `skin_appearance/features.rs` should place them on the surface or keep them off
+   landmarks).
 2. **Face-shape controls from the scans.** Done 2026-11-21: `face.scan.shape_01..07` in the registry
    (`provisional`), each with a range measured to fold no triangle (shape_03 -1.6..0.6, the others about
    -1..1 or wider). Still to do: each component still mixes ancestry, sex, age and weight; ranges were
    measured one component at a time, not in combination.
 3. **Body.** Done: measurements, pelvis, crotch, thighs and girths match ANSUR II. Still to do, in
    order:
+   - **a female and a male body, both clearly adult** (owner, 2026-11-22): a Female / Male switch
+     `identity.sex` (ADR-039: picks the genital variant, both shipped in the template, and the ANSUR
+     women's or men's body and face), with `identity.sex_shape` as variation within a sex; the default
+     character must read unmistakably as an adult of about 30 (today the face reads boyish).
+     `identity.sex_shape=-1` barely changes the body (flat chest, hips
+     hardly wider, no waist; lead's render 2026-11-22, `target/review/lead/female-*.png`) and the face
+     stays boyish. The sex axis must give ANSUR women's and men's bust, waist, hip and shoulder girths
+     and breadths (`data/anthropometry/ansur2.json`), breasts with volume, sex-typical fat distribution,
+     and a female face direction; `body.torso.bust_size` and the other breast, waist and hip parameters
+     must follow from it;
    - external genitalia, both variants (ADR-039): built 2026-11-21 (`generate/genitals.rs`; the body
      outside the crease loop is bit-identical with either variant; stills `target/review/body/`), but
      crude: the female site has a hard outline with a pointed top, thin ridges beside the penis root,
@@ -43,9 +55,15 @@ forms) are checked and in use; FLAME is out (owner, 2026-11-20).
      now renders the shipped skin and passes (furnace error 0). UV packing: the face tile now packs better (nostril 1204 texels);
      the other tiles can't be repacked until `Mesh::face_uv_area` stops calling one-texel navel faces
      collapsed (f32 rounding);
-   - visible surface anatomy: clavicles, scapulae, pectorals, spine groove, limb muscles
-     (BodyParts3D as reference);
-   - hands (knuckles, nails, palm creases) and feet (arches, toes, nails, thin spots on the soles);
+   - surface anatomy: done 2026-11-22 for the torso (clavicles, jugular notch, sternocleidomastoid,
+     pectoral border, sternum, costal margin, linea alba, iliac crest, ASIS, spine groove with erector
+     columns, scapulae, PSIS dimples; smooth, tested for width and slope; stills
+     `target/review/body/w10*`). Still to do: limb muscles; a faint crease at the front of each armpit;
+     a small kink at the end of the shoulder outline;
+   - hands and feet: done 2026-11-22 (knuckles, joint and palm creases, nails with folds and lunula
+     regions, finger and toe pads, arch, malleoli, ANSUR hand and foot sizes). Still to do: toes are
+     boxy; a back-facing sliver at a toe base; nails and creases are at the limit of the mesh density
+     and need the skin side to shade the new nail regions;
    - pose correctives for shoulders, armpits, elbows, hips and knees;
 4. **Skin surface.** Done 2026-11-21 (`target/agents/skin-surface/STATUS.md`, stills
    `target/review/skin/`): `skin.*` values reach the compositor (CLI, editor, agent server), baked
@@ -85,10 +103,12 @@ forms) are checked and in use; FLAME is out (owner, 2026-11-20).
    turns a triangle over, the smile no longer shows the mouth lining at the corners, the open mouth no
    longer stretches a skin sheet across the opening, the neutral upper lip has no folds, and
    `ExpressionDrive` drives the face from the document's sliders (clamped to each parameter's range,
-   tested). Still to do: sadness and disgust read weakly, contempt barely shows and has no preset
-   (proposal in that STATUS: one-sided AU12 + AU14), wrinkles do not appear with the expressions (no
-   authored maps; disgust shows no nose wrinkle), visemes cannot be set from the CLI; checked against
-   FACS from memory, not against reference photographs.
+   tested). 2026-11-22: contempt presets (one-sided AU12 + AU14, low/medium/high), 7 viseme
+   parameters, `humanart-cli render --preset NAME` for every emotion and viseme. Still to do: sadness,
+   disgust and contempt read weakly (contempt is a slight one-sided corner pull even at high: stronger
+   AU14 shape needed), wrinkles do not appear with the expressions (no authored maps; disgust shows no
+   nose wrinkle); `batch` cannot apply built-in presets; checked against FACS from memory, not against
+   reference photographs.
 9. **Light and camera.** Done 2026-11-21 (`target/agents/light-camera/STATUS.md`, stills
    `target/review/light/s4-*.png`): shadow maps fitted to the view (about 0.25 mm per texel on the
    face), soft penumbrae that grow with distance, ambient occlusion and contact shadows, 13 rigs
@@ -118,8 +138,12 @@ forms) are checked and in use; FLAME is out (owner, 2026-11-20).
 2. Application shell: all modes usable by mouse and keyboard, property grid from the registry with
    search, history, provenance and proposal views, compare view and colour scopes, profiler overlay,
    preferences, crash recovery on relaunch.
-3. Sliders: check that every registry parameter moves the character; wire plausibility scoring into
-   command results; viseme parameters.
+3. Sliders: done 2026-11-22 (`target/agents/sliders/STATUS.md`): a test sets every registry parameter
+   and checks the character changes (`crates/doc/src/registry/tests/effect.rs`); command results carry a
+   plausibility score and an `implausible` warning; viseme parameters. Still to do: **97 of 293
+   parameters do nothing** (eye, mouth and hair materials and grooms never fed from the document,
+   45 `skin.features.*` read only from a skin layer, 5 without a skin target, gaze): being wired by the
+   agent engine and app (list `KNOWN_DEAD` in that test).
 4. Sculpt, paint and groom tools (WP-20): GPU brushes, symmetry, falloff, pen pressure, masks, locks.
 5. Comparison, calibration and photo-guided fit (WP-22): colour-checker calibration, landmark
    annotation, camera and parameter fit from a photo.

@@ -1705,6 +1705,15 @@ impl Renderer {
         frame.unjittered_view_proj = view.view_projection.to_cols_array();
         frame.prev_view_proj = prev_view_proj.to_cols_array();
         frame.inv_view_proj = view.inverse_view_projection.to_cols_array();
+        // The whole image's matrix, made the same way for every tile of a still (and for its
+        // untiled render), so they all snap a vertex to the same sub-pixel point [QUAL-04].
+        frame.image_view_proj = match tile {
+            Some((fw, fh, _)) => {
+                let whole = TileRect { x: 0, y: 0, width: fw, height: fh };
+                ViewMatrices::new(camera, fw, fh, jitter, Some((fw, fh, whole))).jittered.to_cols_array()
+            }
+            None => frame.view_proj,
+        };
         let mut shadow_views = [ShadowViewUniforms { view_proj: [0.0; 16] }; MAX_SHADOWED];
         let mut shadow_count = 0;
         for (slot, light) in rig.lights.iter().enumerate() {

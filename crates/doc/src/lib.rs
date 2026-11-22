@@ -21,6 +21,7 @@ pub mod journal;
 pub mod lock;
 pub mod migrate;
 pub mod notify;
+pub mod plausibility;
 pub mod project;
 pub mod proposal;
 pub mod registry;

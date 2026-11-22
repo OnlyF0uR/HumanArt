@@ -25,6 +25,7 @@ use humanart_math::Vec3;
 use super::error::{IdResult, IdentityError};
 use crate::delta::DeltaKind;
 use crate::expression::field::{FaceField, falloff};
+use crate::generate::genitals;
 use crate::template::Template;
 
 /// Displacements shorter than this (metres) are not stored.
@@ -151,6 +152,7 @@ pub struct Space<'t> {
     kinds: Vec<PartKind>,
     mirror: Vec<u32>,
     attach: Vec<u32>,
+    stowed: Vec<bool>,
 }
 
 /// A uniform grid of node indices for nearest-node queries.
@@ -288,6 +290,23 @@ impl<'t> Space<'t> {
             .ok_or_else(|| IdentityError::missing("mesh part", "body"))? as u16;
         let pos = field.positions();
         let count = pos.len();
+        // The male piece (ADR-039, `generate::genitals::male_rest`) when the template carries both
+        // variants: skin nodes of the male regions. They follow the skin like helper nodes,
+        // attached where they belong, not where the rest shape keeps them.
+        let ids = |list: &[crate::generate::regions::R]| -> Vec<u16> {
+            template
+                .regions()
+                .regions
+                .iter()
+                .enumerate()
+                .filter(|(_, r)| list.iter().any(|m| m.name() == r.name))
+                .map(|(i, _)| i as u16)
+                .collect()
+        };
+        let (male, female) = (ids(&genitals::MALE_REGIONS), ids(&genitals::FEMALE_REGIONS));
+        let on_body = |n: usize, list: &[u16]| field.part_of(n) == body && list.contains(&field.region_of(n));
+        let both = (0..count).any(|n| on_body(n, &female));
+        let stowed: Vec<bool> = (0..count).map(|n| both && on_body(n, &male)).collect();
         // Mirror map: per part, the node within the tolerance of the mirrored position.
         let grid = Grid::new(0.002, (0..count as u32).filter_map(|n| pos.get(n as usize).map(|&p| (n, p))));
         // The mirror part of each part: the part whose name swaps a `-L` / `-R` suffix, else itself.
@@ -343,17 +362,19 @@ impl<'t> Space<'t> {
         let body_grid = Grid::new(
             0.005,
             (0..count as u32)
-                .filter(|&n| field.part_of(n as usize) == body)
+                .filter(|&n| field.part_of(n as usize) == body && !stowed.get(n as usize).copied().unwrap_or(false))
                 .filter_map(|n| pos.get(n as usize).map(|&p| (n, p))),
         );
         let max_rings = (ATTACH_RADIUS / 0.005).ceil() as i32;
         let mut attach = vec![u32::MAX; count];
         for (n, slot) in attach.iter_mut().enumerate() {
             let kind = kinds.get(field.part_of(n) as usize).copied().unwrap_or(PartKind::Rigid);
-            if kind != PartKind::Helper {
+            let stow = stowed.get(n).copied().unwrap_or(false);
+            if kind != PartKind::Helper && !stow {
                 continue;
             }
             let Some(&p) = pos.get(n) else { continue };
+            let p = if stow { genitals::male_real(p) } else { p };
             // Grow the search until a body node is found (one ring beyond the first hit is enough
             // for the nearest within the grid metric).
             let mut rings = 1;
@@ -366,7 +387,7 @@ impl<'t> Space<'t> {
                 rings += 1;
             }
         }
-        Ok(Self { field, kinds, mirror: mirror_map, attach })
+        Ok(Self { field, kinds, mirror: mirror_map, attach, stowed })
     }
 
     /// The shared surface context.
@@ -397,7 +418,24 @@ impl<'t> Space<'t> {
     /// The part kind of node `n`.
     #[must_use]
     pub fn kind_of(&self, n: usize) -> PartKind {
+        if self.is_stowed(n) {
+            return PartKind::Helper;
+        }
         self.kinds.get(self.field.part_of(n) as usize).copied().unwrap_or(PartKind::Rigid)
+    }
+
+    /// The body node that helper (or male-piece) node `n` follows, if it has one.
+    #[must_use]
+    pub fn attached(&self, n: usize) -> Option<usize> {
+        self.attach.get(n).copied().filter(|&m| m != u32::MAX).map(|m| m as usize)
+    }
+
+    /// Whether node `n` belongs to the male piece of a template that carries both genital variants
+    /// (ADR-039). It counts as a helper ([`PartKind::Helper`]) attached to the skin node nearest to
+    /// where it belongs ([`crate::generate::genitals::male_real`]).
+    #[must_use]
+    pub fn is_stowed(&self, n: usize) -> bool {
+        self.stowed.get(n).copied().unwrap_or(false)
     }
 
     /// Node `n` as a recipe sees it (`None` when out of range).

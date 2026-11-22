@@ -1,7 +1,7 @@
 {
  "format": "humanart-expression-presets",
  "version": 1,
- "description": "Expression presets [EXP-07]: neutral; the six basic emotions at three intensities, built from the prototype action-unit sets associated with each emotion in the FACS/EMFACS literature (Ekman and Friesen), with authored per-unit weights (model choices, not measurements); speech-neutral visemes (the 15-viseme set sil, PP, FF, TH, DD, kk, CH, SS, nn, RR, aa, E, ih, oh, ou) with authored control values; and the range-of-motion sweep, which animates every control alone from 0 to 1 and back over 2 x frames_per_control frames. Control names are the control rig's (rig.json); values are in [0, 1].",
+ "description": "Expression presets [EXP-07]: neutral; the six basic emotions at three intensities, built from the prototype action-unit sets associated with each emotion in the FACS/EMFACS literature (Ekman and Friesen), with authored per-unit weights (model choices, not measurements); speech-neutral visemes (the 15-viseme set sil, PP, FF, TH, DD, kk, CH, SS, nn, RR, aa, E, ih, oh, ou) with authored control values; contempt at three intensities as the one-sided EMFACS prototype R12A+R14A (lip corner puller and dimpler on the character's right only); and the range-of-motion sweep, which animates every control alone from 0 to 1 and back over 2 x frames_per_control frames. Control names are the control rig's (rig.json); values are in [0, 1].",
  "sweep": {
   "frames_per_control": 30
  },
@@ -389,6 +389,30 @@
    "controls": {
     "viseme.pucker": 1.0,
     "expression.au25_lips_part": 0.2
+   }
+  },
+  {
+   "name": "contempt.low",
+   "group": "emotion",
+   "controls": {
+    "expression.au12_lip_corner_puller.r": 0.3,
+    "expression.au14_dimpler.r": 0.4
+   }
+  },
+  {
+   "name": "contempt.medium",
+   "group": "emotion",
+   "controls": {
+    "expression.au12_lip_corner_puller.r": 0.5,
+    "expression.au14_dimpler.r": 0.7
+   }
+  },
+  {
+   "name": "contempt.high",
+   "group": "emotion",
+   "controls": {
+    "expression.au12_lip_corner_puller.r": 0.7,
+    "expression.au14_dimpler.r": 1.0
    }
   }
  ]

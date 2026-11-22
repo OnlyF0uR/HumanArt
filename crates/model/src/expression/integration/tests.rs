@@ -217,6 +217,8 @@ fn preview_all_targets() {
 }
 
 /// The registry's expression target names and control ids (`data/template/params/expression.json`).
+/// The viseme parameters (group `expression/viseme`, todo 2.3) drive the rig control their target
+/// names (`viseme.lip-closure`), not one named like their id.
 fn registry() -> (Vec<String>, Vec<String>) {
     let text = std::fs::read_to_string(
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../data/template/params/expression.json"),
@@ -234,6 +236,9 @@ fn registry() -> (Vec<String>, Vec<String>) {
                 controls.push(format!("{id}.{l}"));
                 targets.push(t.replace("{side}", u));
             }
+        } else if p.get("group").and_then(|g| g.as_str()) == Some("expression/viseme") {
+            controls.push(t.to_owned());
+            targets.push(t.to_owned());
         } else {
             controls.push(id.to_owned());
             targets.push(t.to_owned());
@@ -246,7 +251,9 @@ fn registry() -> (Vec<String>, Vec<String>) {
 fn exp_01_every_appendix_b_control_has_its_target_and_rig_control() {
     let t = expressive();
     let (targets, controls) = registry();
-    assert_eq!(targets.len(), 82);
+    // Appendix B's 82 controls and the 7 viseme controls.
+    assert_eq!(targets.len(), 89);
+    assert_eq!(targets.iter().filter(|t| t.starts_with("viseme.")).count(), 7);
     let set = t.expressions();
     for name in &targets {
         assert!(set.expressions.iter().any(|e| &e.name == name), "missing target {name}");
@@ -448,6 +455,14 @@ fn exp_07_presets_resolve_and_preview() {
             .unwrap();
         render_sheet(&format!("presets-{s}"), &t, &tris, chunk, Vec3::new(-0.35, 0.0, -1.0), centre, 0.085, 6);
     }
+    // No preset turns a triangle over (todo 1.8).
+    let folded: Vec<(&str, usize)> = names
+        .iter()
+        .zip(&tiles)
+        .map(|(n, tile)| (n.as_str(), tile.flag.iter().filter(|&&x| x).count()))
+        .filter(|&(_, k)| k > 0)
+        .collect();
+    assert!(folded.is_empty(), "presets with inverted triangles: {folded:?}");
 }
 
 #[test]

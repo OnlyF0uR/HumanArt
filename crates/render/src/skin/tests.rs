@@ -383,9 +383,18 @@ fn timed_resolve(compositor: &mut SkinCompositor, stack: &mut LayerStack, rect: 
 #[test]
 fn ac_wp13_3_partial_rect_cost_scales_with_area() {
     // [AC-WP13-3] Re-resolve cost of a dirty rectangle on a 2048² tile with six layers, measured
-    // with GPU timestamps around the pass (median of 7): the time per texel stays flat from 256²
-    // up, so the cost follows the rectangle's area, and a small stroke costs a tiny fraction of
-    // the tile.
+    // with GPU timestamps around the pass: the time per texel stays flat from 256² up, so the cost
+    // follows the rectangle's area, and a small stroke costs a tiny fraction of the tile.
+    //
+    // The device is shared with the other tests of this binary, which run on other threads: work
+    // they submit while a resolve runs stretches its timestamps (with two test threads the 2048²
+    // rectangle read 2.05x and 2.39x the per-texel cost of 256², alone about 1x). Other work only
+    // ever adds time, so each size's cost is the fastest of ROUNDS measurements, taken in rounds
+    // that visit every size in turn (a busy stretch of the device then slows a round, not one
+    // size); the other timing tests of the crate wait on `gpu_timing_lock`.
+    const ROUNDS: usize = 15;
+    const SIDES: [u32; 7] = [32, 64, 128, 256, 512, 1024, 2048];
+    let _timing = crate::tests::gpu_timing_lock();
     let gpu = gpu();
     assert!(gpu.has(Capability::TimestampQueries), "the test adapter supports timestamp queries");
     let size = 2048;
@@ -414,16 +423,19 @@ fn ac_wp13_3_partial_rect_cost_scales_with_area() {
         ty: wgpu::QueryType::Timestamp,
         count: 2,
     });
-    // Warm up.
-    timed_resolve(&mut compositor, &mut stack, Rect::new(0, 0, size, size), &queries);
-    let mut rows = Vec::new();
-    for side in [32_u32, 64, 128, 256, 512, 1024, 2048] {
-        let mut samples: Vec<f64> =
-            (0..7).map(|_| timed_resolve(&mut compositor, &mut stack, Rect::new(0, 0, side, side), &queries)).collect();
-        samples.sort_by(f64::total_cmp);
-        let ns = samples[3];
-        rows.push((side, ns, ns / f64::from(side * side)));
+    // Warm up: the pipelines, the caches and the clocks.
+    for _ in 0..3 {
+        timed_resolve(&mut compositor, &mut stack, Rect::new(0, 0, size, size), &queries);
     }
+    let mut fastest = [f64::INFINITY; SIDES.len()];
+    for _ in 0..ROUNDS {
+        for (best, side) in fastest.iter_mut().zip(SIDES) {
+            let ns = timed_resolve(&mut compositor, &mut stack, Rect::new(0, 0, side, side), &queries);
+            *best = best.min(ns);
+        }
+    }
+    let rows: Vec<(u32, f64, f64)> =
+        SIDES.iter().zip(fastest).map(|(&side, ns)| (side, ns, ns / f64::from(side * side))).collect();
     for (side, ns, per) in &rows {
         eprintln!("rect {side:>4}²: {:>9.3} ms, {per:.3} ns/texel", ns / 1e6);
     }
@@ -431,6 +443,7 @@ fn ac_wp13_3_partial_rect_cost_scales_with_area() {
     let ms = |side: u32| rows.iter().find(|r| r.0 == side).map_or(0.0, |r| r.1);
     for side in [512, 1024, 2048] {
         let ratio = per(side) / per(256);
+        eprintln!("{side}²: per-texel cost {ratio:.2}x that of 256²");
         assert!((0.5..2.0).contains(&ratio), "{side}²: per-texel cost {ratio:.2}x that of 256²");
     }
     assert!(ms(2048) > 8.0 * ms(256), "the full tile costs far more than a 256² rectangle");

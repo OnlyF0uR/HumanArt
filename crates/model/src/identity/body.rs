@@ -10,7 +10,7 @@
 //! | `global.height` | trunk, arm and leg bones longer, clavicles half as much, neck bones 0.4x as much, hands and feet 0.8x, head 0.32x as much; soles stay on the floor | SD of `stature` |
 //! | `global.mass` | soft-tissue thickness along the normal by region (abdomen 10 : pelvis 9 : thigh 8 : chest, upper arm 6 : back 5 : ...), plus belly, buttocks and under the chin | expected waist, chest, buttock and thigh circumference change per SD of `weightkg` at fixed stature |
 //! | `global.muscularity` | muscle-group bumps of 1 to 5 mm (deltoid, arms, chest, trapezius, back, thighs, buttocks, calves, neck, masseter) | authored |
-//! | `global.sex` | toward typically male shape: shoulders, hips, waist, neck; breasts −6 mm, chest muscle +2 mm, buttocks −4 mm, hip flanks −3 mm, brow ridge, jaw, chin, larynx, lips | shoulders, hips, waist and neck: ±1 reaches the male / female mean relative to stature; the rest authored |
+//! | `global.sex` | within a sex, toward typically male shape: shoulders, hips, waist, neck; breasts −6 mm, chest muscle +2 mm, buttocks −4 mm, hip flanks −3 mm, brow ridge, jaw, chin, larynx, lips | shoulders, hips, waist and neck: one within-sex SD (RMS of the two sexes) in the male direction; the rest authored |
 //! | `global.age` | toward older: jowls, cheek descent, longer nose and ears, thinner lips, lower brows, belly +3 mm, breast and buttock descent | authored |
 //! | `semantic.arm-length` | upper arm and forearm longer | SD of `acromionradialelength` + `radialestylionlength` |
 //! | `semantic.leg-length` | thigh and shin longer, everything above rises | SD of `crotchheight` |
@@ -20,8 +20,8 @@
 //! | `semantic.thigh-fullness` | soft tissue along the normal from the gluteal fold to two thirds down the thigh, fading at the knee | SD of `thighcircumference` |
 //! | `semantic.glute-size` | a rounded buttock mound, back and a little out, its lower pole round into the gluteal fold | SD of `buttockdepth` |
 //! | `semantic.hip-flank` | 8 mm over the upper outer thigh | authored |
-//! | `semantic.bust-size` | a rounded breast mound of 20 mm on the pectoral, full lower pole over the inframammary fold | authored (no breast variable in ANSUR II) |
-//! | `semantic.breast-projection` | the central part of the mound 8 mm forward | authored |
+//! | `semantic.bust-size` | a rounded breast mound of 12 mm on the pectoral, full lower pole over the inframammary fold (on top of the female breast of `identity.sex`; −2 leaves it 6 mm) | authored (no breast variable in ANSUR II) |
+//! | `semantic.breast-projection` | the central part of the mound 6 mm forward | authored |
 //! | `semantic.breast-ptosis` | the lower pole 8 mm down and the upper pole 3 mm flatter (negative: lifted) | authored |
 //! | `semantic.breast-spacing` | the mounds 6 mm apart (negative: closer together) | authored |
 //! | `semantic.nipple-size` | the nipple (region `nipple-L` / `-R`) 15 % larger about its base | authored |
@@ -139,8 +139,8 @@ pub fn recipe(kit: &Kit<'_, '_>, name: &str) -> IdResult<Option<IdentityComponen
         "semantic.thigh-fullness" => thighs(kit, 0.008)?,
         "semantic.glute-size" => glutes(kit, 0.012)?,
         "semantic.hip-flank" => flanks(kit, 0.008)?,
-        "semantic.bust-size" => breasts(kit, 0.020)?,
-        "semantic.breast-projection" => breast_shape(kit, BreastShape::Projection, 0.008)?,
+        "semantic.bust-size" => breasts(kit, 0.012)?,
+        "semantic.breast-projection" => breast_shape(kit, BreastShape::Projection, 0.006)?,
         "semantic.breast-ptosis" => breast_shape(kit, BreastShape::Ptosis, 0.008)?,
         "semantic.breast-spacing" => breast_shape(kit, BreastShape::Spacing, 0.006)?,
         "semantic.nipple-size" => nipples(kit, 0.15)?,
@@ -156,7 +156,11 @@ fn joint(s: &Space<'_>, name: &str) -> IdResult<u16> {
 }
 
 /// A skeletal field from a stretch built by `f`, over the whole template.
-fn skeleton_raw(kit: &Kit<'_, '_>, ground: bool, f: impl FnOnce(&mut Stretch) -> IdResult<()>) -> IdResult<Raw> {
+pub(crate) fn skeleton_raw(
+    kit: &Kit<'_, '_>,
+    ground: bool,
+    f: impl FnOnce(&mut Stretch) -> IdResult<()>,
+) -> IdResult<Raw> {
     let mut st = Stretch::new(kit.bones.len());
     f(&mut st)?;
     let (disp, joints) = skeletal(kit.space, &kit.bones, &st, ground)?;
@@ -570,7 +574,7 @@ pub fn thighs(kit: &Kit<'_, '_>, a: f32) -> IdResult<Raw> {
 
 /// A factor that keeps the armpit folds of the A-pose: 0.1 within 7 cm of a shoulder joint,
 /// rising to 1 at 15 cm (the fold triangles turn over under a few millimetres of offset).
-fn axilla_damping(s: &Space<'_>) -> IdResult<impl Fn(Vec3) -> f32 + use<>> {
+pub(crate) fn axilla_damping(s: &Space<'_>) -> IdResult<impl Fn(Vec3) -> f32 + use<>> {
     let joints = [s.joint("L.upper-arm")?, s.joint("R.upper-arm")?];
     Ok(move |p: Vec3| joints.iter().map(|&j| 0.1 + 0.9 * smoothstep(0.07, 0.15, p.distance(j))).fold(1.0, f32::min))
 }
@@ -665,7 +669,7 @@ pub fn muscularity(kit: &Kit<'_, '_>) -> IdResult<Raw> {
 }
 
 /// The muscle bumps: `limbs` scales the arm, leg, back and neck groups, `chest` the pectorals.
-fn muscle_field(kit: &Kit<'_, '_>, limbs: f32, chest: f32) -> IdResult<Vec<Vec3>> {
+pub(crate) fn muscle_field(kit: &Kit<'_, '_>, limbs: f32, chest: f32) -> IdResult<Vec<Vec3>> {
     let s = kit.space;
     let j = |n: &str| s.joint(n);
     let (shoulder, elbow, wrist) = (j("L.upper-arm")?, j("L.forearm")?, j("L.hand")?);
@@ -710,22 +714,30 @@ fn muscle_field(kit: &Kit<'_, '_>, limbs: f32, chest: f32) -> IdResult<Vec<Vec3>
     Ok(s.eval(|pt| s.sym(pt, &f)))
 }
 
-/// `global.sex`: toward typically male shape for positive weights (see the module table). The
-/// shoulder, hip, waist and neck terms are scaled so that ±1 reaches the male and the female mean
-/// of `biacromialbreadth`, `hipbreadth`, `waistbreadth` and `neckcircumference` relative to stature
-/// at the template's stature ([`measure::Variable::sex_half_difference`]); the other terms are
-/// authored. Genital parts are a discrete variant (ADR-039) and never move here.
+/// `global.sex` (`identity.sex_shape`): variation within a sex toward typically male shape for
+/// positive weights (see the module table); the sex itself is `identity.sex`
+/// ([`super::sex::SWITCH`]). The shoulder, hip, waist and neck terms are scaled so that one unit
+/// moves `biacromialbreadth`, `hipbreadth`, `waistbreadth` and `neckcircumference` by one
+/// within-sex SD (the RMS of the male and female SD, [`measure::Variable::sd`]: a linear axis
+/// cannot take a different SD per sex), in the direction of the male-minus-female difference
+/// relative to stature ([`measure::Variable::sex_half_difference`]); the other terms are authored.
+/// Genital parts are a discrete variant (ADR-039) and never move here.
 pub fn sex(kit: &Kit<'_, '_>) -> IdResult<Raw> {
     let s = kit.space;
     let stature = Gauge::Stature.measure(s, &[], 0.0)?;
     let term = |raw: Raw, gauge: &Gauge, v: &measure::Variable| {
-        measure::scaled_to(s, raw, gauge, v.sex_half_difference(stature))
+        measure::scaled_to(s, raw, gauge, v.sd_m().copysign(v.sex_half_difference(stature)))
     };
     let mut raw = term(shoulders(kit, 0.04, 0.01)?, &BIACROMIAL_GAUGE, &BIACROMIAL)?;
     raw.add(&term(hips(kit, 0.03)?, &HIP_BREADTH_GAUGE, &HIP_BREADTH)?, 1.0);
     raw.add(&term(waist(kit, 0.04)?, &WAIST_BREADTH_GAUGE, &WAIST_BREADTH)?, 1.0);
     raw.add(&term(face::neck_width(kit)?, &NECK_GIRTH, &NECK_CIRC)?, 1.0);
     raw.add(&breasts(kit, -0.006)?, 1.0);
+    // The ptosis shrinks with the mound (as in the switch's breast): a female breast reduced by
+    // this axis would otherwise keep a lower pole hanging over a smaller mound and turn the faces
+    // at the inframammary fold over.
+    let ptosis = -0.006 * super::sex::BREAST_PTOSIS / super::sex::BREAST_HEIGHT;
+    raw.add(&breast_shape(kit, BreastShape::Ptosis, ptosis)?, 1.0);
     raw.add(&Raw::confined(s, SOFT_TISSUE, Symmetry::Mirror, muscle_field(kit, 0.0, 0.5)?, Vec::new())?, 1.0);
     raw.add(&glutes(kit, -0.004)?, 1.0);
     raw.add(&flanks(kit, -0.003)?, 1.0);

@@ -15,6 +15,8 @@
 //! - [`presets`]: the preset grooms grown from guide templates `[HAIR-03]`.
 //! - [`features`]: the brow and lash generators and the lid-following hook `[HAIR-04]`.
 //! - [`facial`]: beard, moustache, goatee, stubble and body hair `[HAIR-05]`.
+//! - [`settings`]: the document's character-wide groom settings and how they scale the groom set
+//!   (todo 2.3).
 //! - [`cards`]: hair-card geometry and atlas layout for game LODs `[HAIR-10]`.
 //! - [`format`]: the `.anthair` strand file `[IO-12]`.
 //! - [`color`]: melanin, grey and dye to absorption coefficients for the shader `[HAIR-06]`.
@@ -38,6 +40,7 @@ pub mod generate;
 pub mod params;
 pub mod placement;
 pub mod presets;
+pub mod settings;
 pub mod strands;
 pub mod surface;
 pub mod template;

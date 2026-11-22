@@ -152,6 +152,9 @@ pub fn run(job: &TurntableJob) -> Result<TurntableSummary, CliError> {
         let (doc, _) = host::read_document(&fs, &name, &registry)
             .map_err(|e| CliError::Project(format!("{}: {e}", dir.display())))?;
         model.sync(&doc, &registry)?;
+    } else {
+        // The registry defaults (`identity.sex` -1: the template's rest shape is no character).
+        model.sync(&crate::render::default_document(), &registry)?;
     }
     std::fs::create_dir_all(&job.out).map_err(|e| CliError::io(&job.out, e))?;
     let mut service = RenderService::new(job.options);

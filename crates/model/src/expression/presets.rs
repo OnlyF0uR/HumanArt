@@ -198,7 +198,7 @@ mod tests {
     fn exp_07_builtin_presets() {
         let p = Presets::builtin().unwrap();
         assert!(p.find("neutral").is_some_and(|n| n.controls.is_empty()));
-        for e in ["happiness", "sadness", "surprise", "fear", "anger", "disgust"] {
+        for e in ["happiness", "sadness", "surprise", "fear", "anger", "disgust", "contempt"] {
             for i in ["low", "medium", "high"] {
                 let preset = p.find(&format!("{e}.{i}")).unwrap();
                 assert_eq!(preset.group, PresetGroup::Emotion);
@@ -206,6 +206,12 @@ mod tests {
             }
         }
         assert_eq!(p.presets.iter().filter(|x| x.group == PresetGroup::Viseme).count(), 15);
+        // Contempt is one-sided (EMFACS R12A+R14A, todo 1.8): the character's right only.
+        for i in ["low", "medium", "high"] {
+            let c = &p.find(&format!("contempt.{i}")).unwrap().controls;
+            assert_eq!(c.len(), 2, "{c:?}");
+            assert!(c.iter().all(|(name, v)| name.rsplit('.').next() == Some("r") && *v > 0.0 && *v <= 1.0), "{c:?}");
+        }
     }
 
     #[test]

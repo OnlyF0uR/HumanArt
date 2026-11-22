@@ -285,6 +285,45 @@ fn preview_body_surface() {
     let foot = Vec3::new(a.ankle.x, 0.05, a.ankle.z + 0.07);
     render(&plain, &View::new("foot-L-top", Vec3::new(0.0, -1.0, -0.6)).window(foot, 0.10).size(800, 800).wire());
     render(&plain, &View::new("foot-L-side", -Vec3::X).window(foot, 0.10).size(800, 800));
+    // Round 2 (todo 1.3): the whole foot from both sides and below, nails and regions.
+    let only_foot = near(Vec3::new(a.ankle.x, 0.04, a.ankle.z + 0.05), 0.17);
+    let mid_foot = Vec3::new(a.ankle.x + 0.01, 0.05, a.ankle.z + 0.05);
+    render(&only_foot, &View::new("foot-L-lateral", -Vec3::X).window(mid_foot, 0.085).size(900, 600));
+    render(&only_foot, &View::new("foot-L-medial", Vec3::X).window(mid_foot, 0.085).size(900, 600));
+    render(
+        &only_foot,
+        &View::new("foot-L-below", Vec3::new(0.0, 1.0, -0.25)).window(mid_foot, 0.16).size(600, 900).wire(),
+    );
+    render(
+        &only_foot,
+        &View::new("foot-L-front", Vec3::new(-0.3, -0.5, -1.0)).window(mid_foot + Vec3::Z * 0.08, 0.07).size(800, 800),
+    );
+    let region_scene = |c: Vec3, r: f32| Scene {
+        pos: mesh.pos.clone(),
+        faces: (0..mesh.face_count())
+            .filter(|&f| mesh.pos[mesh.corners_of(f)[0] as usize].distance(c) < r)
+            .map(|f| (mesh.corners_of(f).to_vec(), id_color(u32::from(mesh.tags[f].region))))
+            .collect(),
+    };
+    let toes = Vec3::new(a.ankle.x + 0.02, 0.02, a.ankle.z + 0.17);
+    render(
+        &region_scene(Vec3::new(a.ankle.x, 0.04, a.ankle.z + 0.05), 0.17),
+        &View::new("foot-L-regions", Vec3::new(0.0, -0.8, -0.6)).window(toes, 0.05).size(800, 800),
+    );
+    render(&only_foot, &View::new("toes-L", Vec3::new(0.0, -0.8, -0.6)).window(toes, 0.05).size(800, 800).wire());
+    let fingertips = a.hand_point([0.0, 0.17, 0.0]);
+    render(
+        &region_scene(hand, 0.15),
+        &View::new("hand-L-regions", a.hand_axes[1]).window(fingertips, 0.05).size(800, 800),
+    );
+    render(&only_hand, &View::new("fingers-L", a.hand_axes[1]).window(fingertips, 0.05).size(800, 800).raking());
+    render(
+        &only_hand,
+        &View::new("fingers-L-34", (a.hand_axes[1] - a.hand_axes[2]).normalize())
+            .window(fingertips, 0.05)
+            .size(800, 800),
+    );
+    render(&only_hand, &View::new("palm-L", -a.hand_axes[1]).window(hand - a.hand_axes[0] * 0.03, 0.07).size(800, 800));
     let eye = a.eye_center + Vec3::new(0.0, 0.0, 0.01);
     render(&plain, &View::new("eye-L", -Vec3::Z).window(eye, 0.025).size(800, 800).wire());
     let corner = s.anatomy.head_origin + Vec3::new(-0.024, -0.048, 0.085);
@@ -1331,6 +1370,24 @@ pub fn measure_surface(
     let wrist = (at("L.wrist.radial") + at("L.wrist.ulnar")) * 0.5;
     // The rest hand is relaxed (fingers flexed), so the straight-line length is a little short.
     row("handlength (relaxed)", wrist.distance(at("L.hand.middle.tip")), an::HAND_LENGTH, 0.04 * an::HAND_LENGTH);
+    // Hand breadth across the metacarpal heads (II to V): the extent of the palm along the radial
+    // axis in the band of the knuckles (calipers press the soft tissue a little).
+    let a = &s.anatomy;
+    let [hd, _, hr] = a.hand_axes;
+    let knuckle_band: Vec<Vec3> = all()
+        .filter(|&v| {
+            let q = body[v] - a.wrist;
+            body[v].x > 0.0 && (0.080..0.095).contains(&q.dot(hd)) && in_region(v, &["hand-L.palm"])
+        })
+        .map(|v| body[v])
+        .collect();
+    row("handbreadth", extent(&knuckle_band, &|p| p.dot(hr)), an::HAND_BREADTH, 0.06 * an::HAND_BREADTH);
+    row(
+        "footbreadth (mtp1-mtp5)",
+        at("L.foot.mtp1").distance(at("L.foot.mtp5")),
+        an::FOOT_BREADTH,
+        0.05 * an::FOOT_BREADTH,
+    );
     row("biacromialbreadth", at("L.shoulder.acromion").distance(at("R.shoulder.acromion")), an::BIACROMIAL, 0.008);
     // ANSUR measures the acromion with the arms hanging; the rest pose's 45-degree abduction lifts
     // the shoulder girdle, so the template's acromion stands about 20 mm higher.
@@ -1984,4 +2041,238 @@ fn diag_finished_head_folds() {
         }
     }
     eprintln!("finished template: {found} folded faces above 1.40 m (UV seams split vertices, so seams count too)");
+}
+
+/// Diagnostic for the red mark at the base of the throat (todo 1.1, 2026-11-21 renders): the
+/// finished template's faces around the jugular notch and the shoulders with their fold measure
+/// (face normal against its corners' mean normals), UV tile, UV area and vertex regions.
+#[test]
+#[ignore = "diagnostic"]
+fn diag_neck_base_faces() {
+    let options = super::build::Options { lods: false, ..super::build::Options::default() };
+    let generated = super::build::template(&options).unwrap();
+    let t = &generated.template;
+    let mesh = t.mesh();
+    let pos = mesh.positions();
+    let normal = |c: &[u32]| {
+        let o = pos[c[0] as usize];
+        (1..c.len() - 1)
+            .map(|k| (pos[c[k] as usize] - o).cross(pos[c[k + 1] as usize] - o))
+            .fold(Vec3::ZERO, |a, b| a + b)
+    };
+    // Mean normals by position (UV seams split vertices).
+    let key = |p: Vec3| ((p.x * 1e5).round() as i64, (p.y * 1e5).round() as i64, (p.z * 1e5).round() as i64);
+    let mut by_pos: std::collections::HashMap<(i64, i64, i64), Vec3> = std::collections::HashMap::new();
+    for f in mesh.parts()[0].faces() {
+        let c = mesh.face(f);
+        let n = normal(c);
+        for &v in c {
+            *by_pos.entry(key(pos[v as usize])).or_insert(Vec3::ZERO) += n;
+        }
+    }
+    let regions = t.regions();
+    let mut counts: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+    for f in mesh.parts()[0].faces() {
+        let c = mesh.face(f);
+        let centre = c.iter().fold(Vec3::ZERO, |s, &v| s + pos[v as usize]) / c.len() as f32;
+        if !(1.30..1.47).contains(&centre.y) || centre.z < -0.03 || centre.x.abs() > 0.22 {
+            continue;
+        }
+        let n = normal(c).normalize_or_zero();
+        let worst = c.iter().map(|&v| n.dot(by_pos[&key(pos[v as usize])].normalize_or_zero())).fold(1.0_f32, f32::min);
+        let names: Vec<&str> =
+            c.iter().map(|&v| regions.regions[regions.vertex_regions[v as usize] as usize].name.as_str()).collect();
+        *counts.entry(names[0].to_string()).or_default() += 1;
+        let uv = c.iter().fold(Vec2::ZERO, |s, &v| s + mesh.uvs()[v as usize]) / c.len() as f32;
+        let odd = names.iter().any(|n| !matches!(*n, "neck" | "chest" | "shoulder-L" | "shoulder-R" | "upper-back"));
+        if worst < 0.5 || odd || mesh.face_uv_area(f).abs() < 1e-9 {
+            eprintln!(
+                "face {f} at ({:.4} {:.4} {:.4}) worst {worst:.2} tile {} uv ({:.4} {:.4}) uv-area {:.3e} regions {names:?}",
+                centre.x,
+                centre.y,
+                centre.z,
+                mesh.face_tiles()[f],
+                uv.x,
+                uv.y,
+                mesh.face_uv_area(f)
+            );
+        }
+    }
+    eprintln!("regions in the box: {counts:?}");
+}
+
+/// Folded faces of `m` (face normal against a corner's mean normal below zero) between heights
+/// `y0` and `y1`, with their centroids.
+fn folded_faces(m: &super::cage::Cage, y0: f32, y1: f32) -> Vec<Vec3> {
+    let face_normal = |f: usize| {
+        let c = m.corners_of(f);
+        let o = m.pos[c[0] as usize];
+        (1..c.len() - 1)
+            .map(|k| (m.pos[c[k] as usize] - o).cross(m.pos[c[k + 1] as usize] - o))
+            .fold(Vec3::ZERO, |a, b| a + b)
+    };
+    let mut normals = vec![Vec3::ZERO; m.pos.len()];
+    for f in 0..m.face_count() {
+        let n = face_normal(f);
+        for &v in m.corners_of(f) {
+            normals[v as usize] += n;
+        }
+    }
+    (0..m.face_count())
+        .filter(|&f| (y0..y1).contains(&m.centroid(f).y))
+        .filter(|&f| {
+            let n = face_normal(f).normalize_or_zero();
+            m.corners_of(f).iter().any(|&v| n.dot(normals[v as usize].normalize_or_zero()) < 0.0)
+        })
+        .map(|f| m.centroid(f))
+        .collect()
+}
+
+/// Diagnostic (wave 10): folded faces of the torso and shoulders with and without the surface
+/// anatomy (`relief::apply`), and the torso's edge lengths (the shortest form the relief can draw).
+#[test]
+#[ignore = "diagnostic"]
+fn diag_relief_folds_and_spacing() {
+    let anatomy = super::anatomy::Anatomy::neutral();
+    let mut body = super::body::build_with(&anatomy, super::genitals::Variant::default()).unwrap();
+    let creases: std::collections::HashSet<(u32, u32)> =
+        body.loops.creases.iter().map(|&(a, b)| (a.min(b), a.max(b))).collect();
+    let sharp = |a: u32, b: u32| creases.contains(&(a.min(b), a.max(b)));
+    let targets = body.cage.pos.clone();
+    super::cage::fit(&mut body.cage, &targets, super::LEVELS, super::FIT_ITERATIONS, &sharp);
+    let mut levels = super::cage::subdivide_levels(&body.cage, super::LEVELS, &sharp);
+    let mut m = levels.pop().unwrap().cage;
+    let before = folded_faces(&m, 0.75, 1.47);
+    super::relief::fair_cheeks(&mut m, &anatomy);
+    super::relief::apply(&mut m, &anatomy);
+    let after = folded_faces(&m, 0.75, 1.47);
+    eprintln!("folded faces 0.75..1.47 m: {} without relief, {} with", before.len(), after.len());
+    let mut clusters: std::collections::BTreeMap<(i32, i32, i32), usize> = std::collections::BTreeMap::new();
+    for c in &before {
+        *clusters
+            .entry(((c.x * 50.0).round() as i32, (c.y * 50.0).round() as i32, (c.z * 50.0).round() as i32))
+            .or_default() += 1;
+    }
+    for (k, n) in &clusters {
+        eprintln!("  without, 2 cm cell {:?} m: {n}", (k.0 as f32 / 50.0, k.1 as f32 / 50.0, k.2 as f32 / 50.0));
+    }
+    for c in after.iter().filter(|c| !before.iter().any(|b| b.distance(**c) < 1e-3)).take(20) {
+        eprintln!("  new with relief: {c:?}");
+    }
+    let mut lengths: Vec<f32> = Vec::new();
+    for f in 0..m.face_count() {
+        let c = m.corners_of(f);
+        let centre = m.centroid(f);
+        if centre.z > 0.05 && (1.10..1.20).contains(&centre.y) && (0.03..0.10).contains(&centre.x.abs()) {
+            for k in 0..c.len() {
+                lengths.push(m.pos[c[k] as usize].distance(m.pos[c[(k + 1) % c.len()] as usize]));
+            }
+        }
+    }
+    lengths.sort_by(f32::total_cmp);
+    if !lengths.is_empty() {
+        let at = |q: f32| lengths[((lengths.len() - 1) as f32 * q) as usize] * 1000.0;
+        eprintln!("front torso edge length mm: p10 {:.1} median {:.1} p90 {:.1}", at(0.1), at(0.5), at(0.9));
+    }
+}
+
+/// Diagnostic (wave 10, the axillary folds): the left arm socket, the first arm rings and the
+/// grid around the socket, as designed (before the fit).
+#[test]
+#[ignore = "diagnostic"]
+fn diag_arm_socket() {
+    let anatomy = super::anatomy::Anatomy::neutral();
+    let body = super::body::build_with(&anatomy, super::genitals::Variant::default()).unwrap();
+    let p = |v: u32| body.cage.pos[v as usize];
+    eprintln!("shoulder {:?} dir {:?}", anatomy.shoulder, anatomy.upper_arm_dir);
+    for (k, ring) in body.loops.arms[0].rings.iter().take(4).enumerate() {
+        let pts: Vec<String> = ring.iter().map(|&v| format!("({:.3} {:.3} {:.3})", p(v).x, p(v).y, p(v).z)).collect();
+        eprintln!("arm ring {k}: {}", pts.join(" "));
+    }
+    for r in 5..12 {
+        let pts: Vec<String> = (2..9)
+            .map(|c| {
+                let v = body.loops.grid[r][c];
+                if v == u32::MAX {
+                    return format!("c{c}(-)");
+                }
+                let q = p(v);
+                format!("c{c}({:.3} {:.3} {:.3})", q.x, q.y, q.z)
+            })
+            .collect();
+        eprintln!("row {r}: {}", pts.join(" "));
+    }
+}
+
+/// Diagnostic (wave 10, the bump in the shoulder's outline in the three-quarter portrait): the
+/// top outline of the left shoulder as the three-quarter camera sees it (azimuth 40 degrees
+/// toward +X): per 4 mm of screen x, the highest point and where it lies.
+#[test]
+#[ignore = "diagnostic"]
+fn diag_shoulder_outline() {
+    let s = super::body_surface().unwrap();
+    let m = s.mesh();
+    let a = 0.698_f32;
+    let (right, toward) = (Vec3::new(a.cos(), 0.0, -a.sin()), Vec3::new(a.sin(), 0.07, a.cos()).normalize());
+    let up = toward.cross(right).normalize();
+    let mut bins: Vec<Option<(f32, Vec3)>> = vec![None; 60];
+    for &p in &m.pos {
+        if p.y < 1.25 || p.y > 1.50 || p.x < 0.0 {
+            continue;
+        }
+        let x = p.dot(right);
+        let k = ((x - 0.02) / 0.004).floor();
+        if !(0.0..60.0).contains(&k) {
+            continue;
+        }
+        let y = p.dot(up);
+        let slot = &mut bins[k as usize];
+        if slot.is_none_or(|(best, _)| y > best) {
+            *slot = Some((y, p));
+        }
+    }
+    for (k, b) in bins.iter().enumerate() {
+        if let Some((y, p)) = b {
+            eprintln!("x' {:.3}: top {:.4} at ({:.3} {:.3} {:.3})", 0.02 + 0.004 * k as f32, y, p.x, p.y, p.z);
+        }
+    }
+}
+
+/// Diagnostic (wave 10): faces whose UV area `Mesh::face_uv_area` calls mirrored or collapsed,
+/// where they are and their area recomputed in f64 relative to the first corner.
+#[test]
+#[ignore = "diagnostic"]
+fn diag_uv_flipped_faces() {
+    let options = super::build::Options { lods: false, ..super::build::Options::default() };
+    let generated = super::build::template(&options).unwrap();
+    let mesh = generated.template.mesh();
+    let (pos, uvs) = (mesh.positions(), mesh.uvs());
+    let mut n = 0;
+    for f in 0..mesh.face_count() {
+        let area = mesh.face_uv_area(f);
+        if area > 1e-12 {
+            continue;
+        }
+        let c = mesh.face(f);
+        let o = uvs[c[0] as usize];
+        let mut twice = 0.0_f64;
+        for i in 0..c.len() {
+            let (a, b) = (uvs[c[i] as usize] - o, uvs[c[(i + 1) % c.len()] as usize] - o);
+            twice += f64::from(a.x) * f64::from(b.y) - f64::from(b.x) * f64::from(a.y);
+        }
+        let centre = c.iter().fold(Vec3::ZERO, |s, &v| s + pos[v as usize]) / c.len() as f32;
+        n += 1;
+        if n <= 30 {
+            eprintln!(
+                "face {f} tile {} at ({:.4} {:.4} {:.4}) uv {:?} area f32 {area:.3e} f64-relative {:.3e}",
+                mesh.face_tiles()[f],
+                centre.x,
+                centre.y,
+                centre.z,
+                o,
+                -0.5 * twice
+            );
+        }
+    }
+    eprintln!("{n} faces with UV area <= 1e-12");
 }

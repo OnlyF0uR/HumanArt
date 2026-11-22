@@ -10,7 +10,7 @@ use humanart_math::{Mat4, Vec2, Vec3, ndc_to_screen};
 use humanart_render::camera::{Camera, Exposure, ViewMatrices};
 use humanart_render::capture;
 use humanart_render::ibl::EnvironmentSource;
-use humanart_render::light::{Background, BuiltinRig, Light, LightRig, ProceduralEnvironment};
+use humanart_render::light::{Background, BuiltinRig, Light, LightRig, OVERCAST_VERTICAL_SHARE, ProceduralEnvironment};
 use humanart_render::renderer::{DebugView, FrameInput, RenderConfig};
 use humanart_render::scene::{Material, Mesh, Scene};
 
@@ -115,6 +115,16 @@ fn ac_wp11_1_ibl_white_furnace_and_overcast_sky() {
     println!("overcast: ground {:.4}, sphere top {:.4}, expected {expected:.4}", up[1], top[1]);
     assert!((up[1] - expected).abs() / expected < 0.04, "ground under the overcast sky: {up:?}");
     assert!((top[1] - expected).abs() / expected < 0.04, "sphere top under the overcast sky: {top:?}");
+    // A vertical surface (the sphere's side facing +Z) under that sky and its ground gets
+    // `OVERCAST_VERTICAL_SHARE` of the horizontal illuminance: what the overcast rig's exposure is
+    // set by (the face is vertical).
+    let front = texel(&diffuse, w, pixel_of(&camera, w, hgt, Vec3::new(-0.4, 0.4, 0.3)));
+    let vertical = expected * OVERCAST_VERTICAL_SHARE;
+    println!(
+        "overcast: vertical surface {:.4}, expected {vertical:.4} ({OVERCAST_VERTICAL_SHARE:.3} of the ground)",
+        front[1]
+    );
+    assert!((front[1] - vertical).abs() / vertical < 0.06, "a vertical surface under the overcast sky: {front:?}");
 }
 
 /// `[AC-WP11-1]` a hard directional light at 45 degrees: the sphere's shadow lies where the light

@@ -385,6 +385,32 @@ impl Backdrop {
     }
 }
 
+/// Horizontal illuminance under the sky of the overcast rig, lux: a heavy overcast day. The ANSI
+/// exposure guide (PH2.7-1986, the daylight rows of its table as reproduced in Wikipedia,
+/// "Exposure value", table 2) gives EV 12 at ISO 100 for a "typical scene, heavy overcast" (13 for
+/// "cloudy bright, no shadows"), and the incident-light exposure equation `E = C · 2^EV / S` with
+/// the flat-receptor constant `C = 250` (ISO 2720) turns EV 12 into 2.5 · 2¹² lux.
+pub const OVERCAST_HORIZONTAL_LUX: f32 = 10_240.0;
+
+/// Zenith luminance of the overcast rig's sky, cd/m²: the CIE standard overcast sky
+/// (Moon & Spencer 1942; ISO 15469:2004 / CIE S 011/E:2003), `L(γ) = Lz (1 + 2 sin γ) / 3` at
+/// elevation `γ`, lights a horizontal surface with `E = 7π Lz / 9`, so `Lz = 9 E / 7π` for
+/// [`OVERCAST_HORIZONTAL_LUX`] (the mean sky luminance is `E / π`, 3260 cd/m²).
+pub const OVERCAST_ZENITH_NITS: f32 = 9.0 * OVERCAST_HORIZONTAL_LUX / (7.0 * std::f32::consts::PI);
+
+/// The share of the horizontal illuminance a vertical surface (a face) gets under the overcast
+/// environment (`KIND_OVERCAST` of `render/ibl.wgsl`): from the half of the sky it sees
+/// `Lz (π/6 + 4/9)` = 0.396 of `7π Lz / 9`, and from the ground of albedo 0.2 under it (radiance
+/// `0.2 · 7 Lz / 9` over a quarter sphere, `π/2` projected) 0.1.
+pub const OVERCAST_VERTICAL_SHARE: f32 =
+    (std::f32::consts::PI / 6.0 + 4.0 / 9.0) * 9.0 / (7.0 * std::f32::consts::PI) + 0.1;
+
+/// The exposure the overcast rig is balanced for: the incident-light reading at the face, a
+/// vertical surface that gets [`OVERCAST_VERTICAL_SHARE`] of [`OVERCAST_HORIZONTAL_LUX`] (5080
+/// lux): `EV = log2(E · S / C)` = 10.99 at ISO 100 with `C = 250`, a stop below the guide's value
+/// for the whole scene, which is metered for the light on the ground.
+pub const OVERCAST_FACE_EV100: f32 = 11.0;
+
 /// A lighting rig `[LIT-02]`: lights, the environment light and the backdrop.
 #[derive(Debug, Clone, PartialEq)]
 pub struct LightRig {
@@ -557,9 +583,9 @@ impl LightRig {
                 "overcast_outdoor",
                 Vec::new(),
                 ProceduralEnvironment::Overcast,
-                2500.0,
+                OVERCAST_ZENITH_NITS,
                 Background::Environment,
-                12.0,
+                OVERCAST_FACE_EV100,
             ),
             BuiltinRig::GoldenHour => {
                 let sun_direction = Vec3::new(0.8, 0.18, 0.55).normalize_or(Vec3::Y);
@@ -857,6 +883,60 @@ mod tests {
         let key = studio.lights[0].illuminance_at(center);
         assert!((key - 1800.0).abs() / 1800.0 < 0.01, "the key gives its design illuminance: {key}");
         assert_eq!(studio.background, Background::Gray(0.18), "[LIT-04] grey backdrop by default");
+    }
+
+    /// The overcast rig is a heavy overcast day and is exposed for the face: its sky gives the
+    /// horizontal illuminance of the exposure guide's EV 12 (the CIE overcast sky's `7π Lz / 9`),
+    /// a vertical surface gets half of it (integrated here over the sky and the ground as
+    /// `render/ibl.wgsl` paints them), and the rig's EV is the incident-light reading of that
+    /// half. The face then gets within a stop of the light per unit of exposure the studio rig's
+    /// key gives (the rig was two stops under it).
+    #[test]
+    fn lit_02_overcast_rig_is_a_heavy_overcast_day_exposed_for_the_face() {
+        let rig = LightRig::builtin(BuiltinRig::OvercastOutdoor, Vec3::new(0.0, 1.6, 0.0), 0.12);
+        assert!(rig.lights.is_empty() && rig.environment == ProceduralEnvironment::Overcast);
+        assert_eq!(rig.background, Background::Environment);
+        let zenith = f64::from(rig.environment_nits);
+        let horizontal = 7.0 * std::f64::consts::PI * zenith / 9.0;
+        assert!((horizontal - 2.5 * 4096.0).abs() < 1.0, "EV 12 on the ground: {horizontal} lux");
+        // The environment of ibl.wgsl integrated over the hemisphere a surface facing +Z sees.
+        let (n_polar, n_around) = (720, 1440);
+        let mut vertical = 0.0_f64;
+        for i in 0..n_polar {
+            let polar = (f64::from(i) + 0.5) / f64::from(n_polar) * std::f64::consts::PI;
+            for j in 0..n_around {
+                let around = (f64::from(j) + 0.5) / f64::from(n_around) * std::f64::consts::TAU;
+                let d = [polar.sin() * around.cos(), polar.cos(), polar.sin() * around.sin()];
+                if d[2] <= 0.0 {
+                    continue;
+                }
+                let radiance = if d[1] >= 0.0 { (1.0 + 2.0 * d[1]) / 3.0 } else { 0.2 * 7.0 / 9.0 };
+                let solid_angle = polar.sin()
+                    * (std::f64::consts::PI / f64::from(n_polar))
+                    * (std::f64::consts::TAU / f64::from(n_around));
+                vertical += zenith * radiance * d[2] * solid_angle;
+            }
+        }
+        let share = vertical / horizontal;
+        assert!((share - f64::from(OVERCAST_VERTICAL_SHARE)).abs() < 2e-3, "vertical share {share}");
+        assert!((share - 0.496).abs() < 2e-3, "{share}");
+        let metered = (vertical / 2.5).log2();
+        println!(
+            "overcast rig: zenith {zenith:.0} cd/m2, ground {horizontal:.0} lux, face {vertical:.0} lux, incident EV100 {metered:.2}"
+        );
+        assert!(
+            (metered - f64::from(rig.ev100)).abs() < 0.05,
+            "the rig's EV {} against the reading {metered}",
+            rig.ev100
+        );
+        // Against the studio rig: lux at the face per unit of exposure (2^EV), key alone.
+        let studio = LightRig::builtin(BuiltinRig::NeutralStudio, Vec3::new(0.0, 1.6, 0.0), 0.12);
+        let studio_ratio = f64::from(studio.lights[0].illuminance_at(Vec3::new(0.0, 1.6, 0.0)))
+            / 2.0_f64.powf(f64::from(studio.ev100));
+        let overcast_ratio = vertical / 2.0_f64.powf(f64::from(rig.ev100));
+        let stops = (overcast_ratio / studio_ratio).log2();
+        println!("overcast face against the studio key at their EVs: {stops:+.2} stops");
+        assert!(stops.abs() < 1.0, "{stops} stops from the studio key");
     }
 
     /// todo 1.9: the portrait rigs put their key where their name says (the character faces +Z,

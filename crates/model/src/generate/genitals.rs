@@ -471,6 +471,220 @@ fn penis_and_scrotum(cage: &mut Cage, ring: &[u32], first: &[Vec3]) -> Result<Ve
     Ok(rings)
 }
 
+/// The regions of the male piece ([`male_piece`]): the faces of the penis, the glans and the
+/// scrotum, and the base that closes the piece.
+pub const MALE_REGIONS: [R; 3] = [R::Penis, R::Glans, R::Scrotum];
+/// The regions of the vulva.
+pub const FEMALE_REGIONS: [R; 5] = [R::Genitals, R::LabiaMajora, R::LabiaMinora, R::Clitoris, R::Vestibule];
+
+/// The point of the male site that [`stow`] maps to [`STOW_CENTRE`] (about the middle of the
+/// attachment loop), metres.
+pub const STOW_ORIGIN: Vec3 = Vec3::new(0.0, 0.84, 0.05);
+/// Where the stowed male piece sits: inside the pelvis, 6.5 cm above and 5 cm behind the middle
+/// of the loop, metres; the shrunk piece (under 3 cm across) stays at least 4 cm inside the skin.
+pub const STOW_CENTRE: Vec3 = Vec3::new(0.0, 0.905, 0.0);
+/// The scale of the stowed male piece.
+pub const STOW_SCALE: f32 = 0.25;
+
+/// Where a point of the male piece is kept while the female variant shows (ADR-039: both variants
+/// ship, `identity.sex` picks one): shrunk by [`STOW_SCALE`] about [`STOW_ORIGIN`] and moved to
+/// [`STOW_CENTRE`], inside the pelvis, where nothing of it can be seen. Linear and mirror-exact.
+#[must_use]
+pub fn stow(p: Vec3) -> Vec3 {
+    STOW_CENTRE + (p - STOW_ORIGIN) * STOW_SCALE
+}
+
+/// The template's rest position of a point of the male piece: halfway between where it is kept
+/// ([`stow`], `identity.sex` −1, female) and where it belongs (+1, male). The sex component moves
+/// it by half that distance per unit, so both settings are exact; the rest shape (weight 0) is no
+/// character of its own.
+#[must_use]
+pub fn male_rest(real: Vec3) -> Vec3 {
+    (stow(real) + real) * 0.5
+}
+
+/// The inverse of [`male_rest`]: where a point of the male piece belongs.
+#[must_use]
+pub fn male_real(rest: Vec3) -> Vec3 {
+    (rest * 2.0 - STOW_CENTRE + STOW_ORIGIN * STOW_SCALE) * (1.0 / (1.0 + STOW_SCALE))
+}
+
+/// The site coordinates `(s, x, h)` of `p` ([`site`] inverted by Gauss-Newton from the nearest
+/// point of the midline; exact to well under a micrometre inside the loop).
+#[must_use]
+pub fn site_coords(p: Vec3) -> (f32, f32, f32) {
+    let (mut s, mut x, mut h) = (0.5_f32, p.x, 0.0_f32);
+    let mut best = f32::INFINITY;
+    for i in 0..=32 {
+        let t = i as f32 / 32.0;
+        let d = midline(t).distance(Vec3::new(0.0, p.y, p.z));
+        if d < best {
+            best = d;
+            s = t;
+        }
+    }
+    let e = 1.0e-4;
+    for _ in 0..12 {
+        let r = p - site(s, x, h);
+        let js = (site(s + e, x, h) - site(s - e, x, h)) * (0.5 / e);
+        let jx = (site(s, x + e, h) - site(s, x - e, h)) * (0.5 / e);
+        let jh = (site(s, x, h + e) - site(s, x, h - e)) * (0.5 / e);
+        let m = [[js.x, jx.x, jh.x], [js.y, jx.y, jh.y], [js.z, jx.z, jh.z]];
+        let Some(d) = solve3(m, r) else { break };
+        s += d[0];
+        x += d[1];
+        h += d[2];
+    }
+    (s, x, h)
+}
+
+/// Solves the 3x3 system `m d = r` (Cramer's rule); `None` when singular.
+fn solve3(m: [[f32; 3]; 3], r: Vec3) -> Option<[f32; 3]> {
+    let det = |a: [[f32; 3]; 3]| {
+        a[0][0] * (a[1][1] * a[2][2] - a[1][2] * a[2][1]) - a[0][1] * (a[1][0] * a[2][2] - a[1][2] * a[2][0])
+            + a[0][2] * (a[1][0] * a[2][1] - a[1][1] * a[2][0])
+    };
+    let d = det(m);
+    if d.abs() < 1.0e-12 {
+        return None;
+    }
+    let rhs = [r.x, r.y, r.z];
+    let mut out = [0.0; 3];
+    for (c, o) in out.iter_mut().enumerate() {
+        let mut a = m;
+        for (row, v) in a.iter_mut().zip(rhs) {
+            row[c] = v;
+        }
+        *o = det(a) / d;
+    }
+    Some(out)
+}
+
+/// How far under the site surface the folded vulva lies at site point `(s, x)`, metres: 0.6 mm
+/// next to the attachment loop (so the body's normals at the loop barely tilt), 4 mm in the middle
+/// (under the root of the penis, which lies 1 mm under the surface).
+fn fold_depth(s: f32, x: f32) -> f32 {
+    let rho = ((s - 0.5) / 0.5).hypot(x / LOOP_HALF_WIDTH);
+    let t = ((0.9 - rho) / 0.4).clamp(0.0, 1.0);
+    0.0006 + 0.0034 * t * t * (3.0 - 2.0 * t)
+}
+
+/// The unit site normal at `(s, x)`.
+fn site_normal(s: f32, x: f32) -> Vec3 {
+    (site(s, x, 0.001) - site(s, x, 0.0)).normalize_or(normal(s))
+}
+
+/// The template's rest position of a point of the vulva (inside the attachment loop): halfway
+/// between where it is (`identity.sex` −1, female) and where it lies folded away under the male
+/// piece (+1, male: no point higher than [`fold_depth`] under the site surface). Moves along the
+/// site normal only.
+#[must_use]
+pub fn vulva_rest(real: Vec3) -> Vec3 {
+    let (s, x, h) = site_coords(real);
+    let folded = h.min(-fold_depth(s, x));
+    real + site_normal(s, x) * ((folded - h) * 0.5)
+}
+
+/// The female (−1) and male (+1) positions of a vulva point from its rest position (the inverses
+/// of [`vulva_rest`]).
+#[must_use]
+pub fn vulva_states(rest: Vec3) -> (Vec3, Vec3) {
+    let (s, x, hr) = site_coords(rest);
+    let d = fold_depth(s, x);
+    let h = if hr <= -d { hr } else { 2.0 * hr + d };
+    let folded = h.min(-d);
+    let n = site_normal(s, x);
+    (rest + n * (h - hr), rest + n * (folded - hr))
+}
+
+/// Rings of the base that closes the male piece, between its loop and its centre.
+const BASE_RINGS: usize = 3;
+/// How far the base's centre lies inside the plane of the loop, metres: the base stays behind the
+/// penis root and the scrotum, which rise from the loop outward.
+const BASE_DEPTH: f32 = 0.004;
+
+/// The male external genitalia as one closed piece (ADR-039: both variants ship in the template).
+/// `surface` is a body surface built with [`Variant::Male`]; the piece is its faces with a genital
+/// region (penis, glans, scrotum; their outer ring is the attachment loop, which the body built
+/// with either variant shares bit for bit) plus a base over the loop (chart `genital-base`,
+/// region scrotum): [`BASE_RINGS`] rings toward the loop's centre, sinking to [`BASE_DEPTH`] behind
+/// the loop, and a fan. The piece is counter-clockwise from outside, closed and mirror-exact; its
+/// positions are the real ones (the caller stows it).
+///
+/// # Errors
+/// [`ModelError::Invalid`] when the genital faces' border is not one simple loop.
+pub fn male_piece(surface: &Cage) -> Result<Cage> {
+    let mut map = vec![u32::MAX; surface.pos.len()];
+    let mut piece = Cage::new();
+    for f in 0..surface.face_count() {
+        if !R::from_id(surface.tags[f].region).is_some_and(R::is_genital) {
+            continue;
+        }
+        let mut corners = Vec::with_capacity(4);
+        for &v in surface.corners_of(f) {
+            let slot = &mut map[v as usize];
+            if *slot == u32::MAX {
+                *slot = piece.add(surface.pos[v as usize]);
+            }
+            corners.push(*slot);
+        }
+        piece.face(&corners, surface.tags[f]);
+    }
+    // The border: directed edges whose reverse no face uses, walked into one loop in the
+    // direction the faces use it.
+    let mut directed = std::collections::HashSet::new();
+    for f in 0..piece.face_count() {
+        let c = piece.corners_of(f);
+        for k in 0..c.len() {
+            directed.insert((c[k], c[(k + 1) % c.len()]));
+        }
+    }
+    let mut next = std::collections::HashMap::new();
+    for &(a, b) in &directed {
+        if !directed.contains(&(b, a)) && next.insert(a, b).is_some() {
+            return Err(ModelError::invalid("male piece", a as usize, "the genital border touches itself"));
+        }
+    }
+    let start = next.keys().copied().min().ok_or(ModelError::invalid("male piece", 0, "no genital faces"))?;
+    let mut border = vec![start];
+    let mut cur = next.get(&start).copied().unwrap_or(start);
+    while cur != start {
+        if border.len() > next.len() {
+            return Err(ModelError::invalid("male piece", cur as usize, "the genital border is not a loop"));
+        }
+        border.push(cur);
+        cur = next.get(&cur).copied().ok_or(ModelError::invalid("male piece", cur as usize, "open border"))?;
+    }
+    if border.len() != next.len() {
+        return Err(ModelError::invalid("male piece", border.len(), "the genital border is more than one loop"));
+    }
+    // The base, from the border to its centre (x exactly 0, so mirrored border points give
+    // mirrored ring points), sinking along the site's inward normal.
+    let pts: Vec<Vec3> = border.iter().map(|&v| piece.pos[v as usize]).collect();
+    let mean = pts.iter().fold(Vec3::ZERO, |a, &p| a + p) / pts.len() as f32;
+    let centre = Vec3::new(0.0, mean.y, mean.z);
+    let n = normal(0.5);
+    let depth = |t: f32| BASE_DEPTH * (1.0 - (1.0 - t) * (1.0 - t));
+    let base = tag(R::Scrotum, C::GenitalBase);
+    let mut prev = border.clone();
+    for j in 1..=BASE_RINGS {
+        let t = j as f32 / (BASE_RINGS + 1) as f32;
+        let ring: Vec<u32> = pts.iter().map(|&p| piece.add(p + (centre - p) * t - n * depth(t))).collect();
+        let m = ring.len();
+        for k in 0..m {
+            let k1 = (k + 1) % m;
+            piece.face(&[prev[k1], prev[k], ring[k], ring[k1]], base);
+        }
+        prev = ring;
+    }
+    let c = piece.add(centre - n * BASE_DEPTH);
+    let m = prev.len();
+    for k in 0..m {
+        piece.face(&[prev[(k + 1) % m], prev[k], c], base);
+    }
+    Ok(piece)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

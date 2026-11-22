@@ -7,7 +7,11 @@
 //! ([`Model::coverage`] reports both). [`Model::sync`] reads the document's values into the input
 //! vectors, compares them with what was last evaluated and re-evaluates only when they differ,
 //! without allocating `[PERF-R1]`. It also reads the document's `skin.*` material values
-//! ([`Model::skin`], todo 1.4), which the views hand to the skin compositor.
+//! ([`Model::skin`], todo 1.4), which the views hand to the skin compositor, the eye, mouth and
+//! hair-colour materials ([`Model::materials`], todo 2.3), which the views hand to the eye and
+//! mouth feature table and the hair renderer, the editor's gaze preview (`eyes.gaze.*`), which
+//! turns the eye joints, and the document's procedural skin layers with the global
+//! `skin.features.*` values ([`Model::feature_layers`]), which the views generate into the skin.
 //!
 //! [`Model::pick`] is the CPU fallback picking of `[VP-01]`: a ray cast against the evaluated
 //! triangles, reporting triangle, barycentrics, point and region. [`Model::region_outline`] gives
@@ -16,12 +20,17 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use humanart_doc::document::Document;
+use humanart_doc::document::{Document, SkinLayer, SkinSource};
 use humanart_doc::expression_drive::ExpressionDrive;
 use humanart_doc::registry::{Evaluation, ParamValue, Registry};
 use humanart_math::{Quat, Vec3};
 use humanart_model::Template;
 use humanart_model::eval::{EvalInput, Evaluator, SkinningMode};
+use humanart_model::eye::{EyeParams, Gaze};
+use humanart_model::hair::settings::{GroomSettings, GroomTarget};
+use humanart_model::skin_appearance::feature_layers::{FeatureGlobals, FeatureLayer, generator_of};
+use humanart_model::skin_appearance::features::{GeneratorKind, GeneratorParams};
+use humanart_model::skin_appearance::materials::{MaterialTarget, MaterialValues};
 use humanart_model::skin_appearance::values::{SkinTarget, SkinValues};
 
 use super::error::EngineError;
@@ -89,6 +98,35 @@ pub struct Model {
     skin: SkinValues,
     /// Counts up every time [`Model::skin`] changes.
     skin_revision: u64,
+    /// Registry index and destination of every eye, mouth and hair-colour material parameter.
+    material_bindings: Vec<(usize, MaterialTarget)>,
+    /// The document's eye, mouth and hair-colour values (registry defaults until a document is
+    /// read).
+    materials: MaterialValues,
+    /// Counts up every time [`Model::materials`] changes.
+    materials_revision: u64,
+    /// Whether the document sets a hair colour value itself (not only the registry default).
+    hair_color_set: bool,
+    /// Registry index and destination of every groom setting.
+    groom_bindings: Vec<(usize, GroomTarget)>,
+    /// The document's groom settings (registry defaults until a document is read).
+    grooms: GroomSettings,
+    /// Whether the document sets the body hair density itself.
+    body_hair_set: bool,
+    /// Counts up every time [`Model::grooms`] or [`Model::body_hair_set`] changes.
+    grooms_revision: u64,
+    /// Registry index and generator slot of every `skin.features.*` parameter.
+    feature_slots: Vec<(usize, (usize, usize))>,
+    /// The document's global generator settings.
+    features: FeatureGlobals,
+    /// The document's procedural skin layers, resolved.
+    feature_layers: Vec<FeatureLayer>,
+    /// Counts up every time [`Model::feature_layers`] changes.
+    features_revision: u64,
+    /// Registry indices of the gaze preview's yaw and pitch (`eyes.gaze.*`, degrees).
+    gaze_params: [Option<usize>; 2],
+    /// The eye joints and their rest world rotations.
+    eye_joints: Vec<(usize, Quat)>,
 }
 
 fn scalar(value: &ParamValue) -> Option<f32> {
@@ -99,6 +137,60 @@ fn scalar(value: &ParamValue) -> Option<f32> {
         _ => None,
     }
 }
+
+/// Writes one document value into the skin values (scalars and the lip colour).
+pub fn set_skin(values: &mut SkinValues, target: SkinTarget, value: &ParamValue) {
+    match value {
+        #[allow(clippy::cast_possible_truncation)] // Colour channels are 0..1.
+        ParamValue::Color(c) => {
+            values.set_color(target, [c[0] as f32, c[1] as f32, c[2] as f32]);
+        }
+        other => {
+            if let Some(v) = scalar(other) {
+                values.set(target, v);
+            }
+        }
+    }
+}
+
+/// Writes one document value into the materials (scalars, colours and choices).
+pub fn set_material(values: &mut MaterialValues, target: MaterialTarget, value: &ParamValue) {
+    match value {
+        #[allow(clippy::cast_possible_truncation)] // Colour channels are 0..1.
+        ParamValue::Color(c) => {
+            values.set_color(target, [c[0] as f32, c[1] as f32, c[2] as f32]);
+        }
+        ParamValue::Enum(choice) => {
+            values.set_choice(target, choice);
+        }
+        other => {
+            if let Some(v) = scalar(other) {
+                values.set_scalar(target, v);
+            }
+        }
+    }
+}
+
+/// A document skin layer a view generates: visible, procedural, of a known generator that needs
+/// no image (the tattoo stamps the user's picture, which a procedural layer does not carry).
+fn procedural(layer: &SkinLayer) -> Option<(GeneratorKind, &SkinSource, u64)> {
+    let SkinSource::Procedural { generator, seed, .. } = &layer.source else { return None };
+    let kind = generator_of(generator).filter(|k| *k != GeneratorKind::Tattoo)?;
+    layer.visible.then_some((kind, &layer.source, *seed))
+}
+
+/// The resolved settings of a procedural `source` of generator `kind` under `globals`.
+fn layer_params(globals: &FeatureGlobals, kind: GeneratorKind, source: &SkinSource) -> GeneratorParams {
+    match source {
+        SkinSource::Procedural { params, .. } => {
+            globals.layer_params(kind, params.iter().map(|(k, v)| (k.as_str(), *v)))
+        }
+        _ => *globals.of(kind),
+    }
+}
+
+/// The joints the gaze preview turns.
+pub const EYE_JOINTS: [&str; 2] = ["L.eye", "R.eye"];
 
 impl Model {
     /// Binds `registry` to `template` and evaluates the neutral state.
@@ -147,10 +239,62 @@ impl Model {
             .collect();
         let mut skin = SkinValues::default();
         for &(i, target) in &skin_bindings {
-            if let Some(v) = registry.params().get(i).and_then(|p| scalar(&p.default)) {
-                skin.set(target, v);
+            if let Some(p) = registry.params().get(i) {
+                set_skin(&mut skin, target, &p.default);
             }
         }
+        let material_bindings: Vec<(usize, MaterialTarget)> = registry
+            .params()
+            .iter()
+            .enumerate()
+            .filter_map(|(i, p)| match &p.evaluation {
+                Evaluation::Material(target) => MaterialTarget::from_target(target).map(|t| (i, t)),
+                _ => None,
+            })
+            .collect();
+        let mut materials = MaterialValues::default();
+        for &(i, target) in &material_bindings {
+            if let Some(p) = registry.params().get(i) {
+                set_material(&mut materials, target, &p.default);
+            }
+        }
+        let groom_bindings: Vec<(usize, GroomTarget)> = registry
+            .params()
+            .iter()
+            .enumerate()
+            .filter_map(|(i, p)| match &p.evaluation {
+                Evaluation::Groom(target) => GroomTarget::from_target(target).map(|t| (i, t)),
+                _ => None,
+            })
+            .collect();
+        let mut grooms = GroomSettings::default();
+        for &(i, target) in &groom_bindings {
+            if let Some(v) = registry.params().get(i).and_then(|p| scalar(&p.default)) {
+                grooms.set(target, v);
+            }
+        }
+        let feature_slots: Vec<(usize, (usize, usize))> = registry
+            .params()
+            .iter()
+            .enumerate()
+            .filter_map(|(i, p)| FeatureGlobals::slot_of(&p.id).map(|s| (i, s)))
+            .collect();
+        let mut features = FeatureGlobals::default();
+        for &(i, slot) in &feature_slots {
+            if let Some(v) = registry.params().get(i).and_then(|p| scalar(&p.default)) {
+                features.set(slot, v);
+            }
+        }
+        let editor = |name: &str| {
+            registry.params().iter().position(|p| matches!(&p.evaluation, Evaluation::Editor(t) if t == name))
+        };
+        let gaze_params = [editor("gaze.yaw"), editor("gaze.pitch")];
+        let rest_world = t.skeleton().rest_world();
+        let eye_joints = EYE_JOINTS
+            .iter()
+            .filter_map(|name| t.skeleton().find(name))
+            .filter_map(|j| rest_world.get(usize::from(j)).map(|r| (usize::from(j), r.rotation)))
+            .collect();
         // Expression parameters go through the template's control rig (jaw and tongue rotate).
         let drive = ExpressionDrive::new(t, registry).ok();
         let components = t.deltas().len();
@@ -173,6 +317,20 @@ impl Model {
             skin_bindings,
             skin,
             skin_revision: 1,
+            material_bindings,
+            materials,
+            materials_revision: 1,
+            hair_color_set: false,
+            groom_bindings,
+            grooms,
+            body_hair_set: false,
+            grooms_revision: 1,
+            feature_slots,
+            features,
+            feature_layers: Vec::new(),
+            features_revision: 1,
+            gaze_params,
+            eye_joints,
             template,
         }
     }
@@ -201,6 +359,105 @@ impl Model {
     /// Counts up every time [`Model::skin`] changes.
     pub fn skin_revision(&self) -> u64 {
         self.skin_revision
+    }
+
+    /// The document's eye, mouth and hair-colour materials (registry defaults before the first
+    /// [`Model::sync`]).
+    pub fn materials(&self) -> &MaterialValues {
+        &self.materials
+    }
+
+    /// Counts up every time [`Model::materials`] or [`Model::hair_color_set`] changes.
+    pub fn materials_revision(&self) -> u64 {
+        self.materials_revision
+    }
+
+    /// Whether the document sets a `hair.color.*` value itself; when it does not, a view keeps
+    /// the hair colour of its own options (`HairOptions::shade`).
+    pub fn hair_color_set(&self) -> bool {
+        self.hair_color_set
+    }
+
+    /// The document's brow, lash, facial and body hair settings (`groom` parameters; registry
+    /// defaults before the first [`Model::sync`]).
+    pub fn grooms(&self) -> &GroomSettings {
+        &self.grooms
+    }
+
+    /// Whether the document sets `hair.body.density` itself; a view then grows body hair even
+    /// when its options do not ask for it.
+    pub fn body_hair_set(&self) -> bool {
+        self.body_hair_set
+    }
+
+    /// Counts up every time [`Model::grooms`] or [`Model::body_hair_set`] changes.
+    pub fn grooms_revision(&self) -> u64 {
+        self.grooms_revision
+    }
+
+    /// The document's global generator settings (`skin.features.*`).
+    pub fn feature_globals(&self) -> &FeatureGlobals {
+        &self.features
+    }
+
+    /// The document's visible procedural skin layers with their resolved settings (each
+    /// parameter the layer does not set takes the global value), in document order.
+    pub fn feature_layers(&self) -> &[FeatureLayer] {
+        &self.feature_layers
+    }
+
+    /// Counts up every time [`Model::feature_layers`] changes.
+    pub fn features_revision(&self) -> u64 {
+        self.features_revision
+    }
+
+    /// Reads the global generator settings and the procedural skin layers of `doc`; rebuilds the
+    /// layer list (allocating) only when something changed.
+    fn sync_features(&mut self, doc: &Document, registry: &Registry) {
+        let mut globals = self.features;
+        for &(i, slot) in &self.feature_slots {
+            let Some(param) = registry.params().get(i) else { continue };
+            if let Some(v) = scalar(doc.params.get(&param.id).unwrap_or(&param.default)) {
+                globals.set(slot, v);
+            }
+        }
+        let mut same = globals == self.features;
+        let mut n = 0;
+        for layer in &doc.skin_layers {
+            let Some((kind, source, seed)) = procedural(layer) else { continue };
+            #[allow(clippy::cast_possible_truncation)] // Opacity is 0..1.
+            let opacity = layer.opacity as f32;
+            let params = layer_params(&globals, kind, source);
+            same &= self.feature_layers.get(n).is_some_and(|f| {
+                f.id == layer.id
+                    && f.params == params
+                    && f.seed == seed
+                    && f.region.as_deref() == layer.region.as_deref()
+                    && f.opacity.to_bits() == opacity.to_bits()
+            });
+            n += 1;
+        }
+        if same && n == self.feature_layers.len() {
+            return;
+        }
+        self.features = globals;
+        self.feature_layers = doc
+            .skin_layers
+            .iter()
+            .filter_map(|layer| {
+                let (kind, source, seed) = procedural(layer)?;
+                #[allow(clippy::cast_possible_truncation)] // Opacity is 0..1.
+                let opacity = layer.opacity as f32;
+                Some(FeatureLayer {
+                    id: layer.id,
+                    params: layer_params(&globals, kind, source),
+                    seed,
+                    region: layer.region.clone(),
+                    opacity,
+                })
+            })
+            .collect();
+        self.features_revision += 1;
     }
 
     /// Counts up every time the evaluated surface changes.
@@ -249,13 +506,40 @@ impl Model {
         let mut skin = self.skin;
         for &(i, target) in &self.skin_bindings {
             let Some(param) = registry.params().get(i) else { continue };
-            if let Some(v) = scalar(doc.params.get(&param.id).unwrap_or(&param.default)) {
-                skin.set(target, v);
-            }
+            set_skin(&mut skin, target, doc.params.get(&param.id).unwrap_or(&param.default));
         }
         if skin != self.skin {
             self.skin = skin;
             self.skin_revision += 1;
+        }
+        let mut materials = self.materials;
+        let mut hair_color_set = false;
+        for &(i, target) in &self.material_bindings {
+            let Some(param) = registry.params().get(i) else { continue };
+            let own = doc.params.get(&param.id);
+            hair_color_set |= own.is_some() && matches!(target, MaterialTarget::Hair(_));
+            set_material(&mut materials, target, own.unwrap_or(&param.default));
+        }
+        if materials != self.materials || hair_color_set != self.hair_color_set {
+            self.materials = materials;
+            self.hair_color_set = hair_color_set;
+            self.materials_revision += 1;
+        }
+        self.sync_features(doc, registry);
+        let mut grooms = self.grooms;
+        let mut body_hair_set = false;
+        for &(i, target) in &self.groom_bindings {
+            let Some(param) = registry.params().get(i) else { continue };
+            let own = doc.params.get(&param.id);
+            body_hair_set |= own.is_some() && target == GroomTarget::BodyDensity;
+            if let Some(v) = scalar(own.unwrap_or(&param.default)) {
+                grooms.set(target, v);
+            }
+        }
+        if grooms != self.grooms || body_hair_set != self.body_hair_set {
+            self.grooms = grooms;
+            self.body_hair_set = body_hair_set;
+            self.grooms_revision += 1;
         }
         self.shape.fill(0.0);
         self.expressions.fill(0.0);
@@ -288,6 +572,7 @@ impl Model {
                 .map_err(|_| EngineError::Invalid { what: "the expression rig could not be evaluated" })?;
             drive.write(&mut self.expressions, &mut self.pose);
         }
+        self.apply_gaze(doc, registry);
         if self.shape == self.applied_shape
             && self.expressions == self.applied_expressions
             && self.pose == self.applied_pose
@@ -307,6 +592,25 @@ impl Model {
         self.applied_pose.copy_from_slice(&self.pose);
         self.revision += 1;
         Ok(true)
+    }
+
+    /// Turns the eye joints to the document's gaze preview (`eyes.gaze.yaw` / `pitch`, degrees,
+    /// clamped to the eye's limits) after the pose and the rig's rotations.
+    fn apply_gaze(&mut self, doc: &Document, registry: &Registry) {
+        let angle = |slot: Option<usize>| {
+            let p = registry.params().get(slot?)?;
+            scalar(doc.params.get(&p.id).unwrap_or(&p.default))
+        };
+        let (yaw, pitch) = (angle(self.gaze_params[0]).unwrap_or(0.0), angle(self.gaze_params[1]).unwrap_or(0.0));
+        if yaw == 0.0 && pitch == 0.0 {
+            return;
+        }
+        let gaze = Gaze { yaw: yaw.to_radians(), pitch: pitch.to_radians() }.clamped(&EyeParams::default());
+        for &(j, rest) in &self.eye_joints {
+            if let Some(slot) = self.pose.get_mut(j) {
+                *slot = gaze.joint_rotation(rest) * *slot;
+            }
+        }
     }
 
     /// The bounding sphere of the evaluated surface (centre, radius).
@@ -520,6 +824,59 @@ mod tests {
             let _ = model.sync(&d, &reg);
         });
         assert_eq!(counts.allocations, 0, "[PERF-R1] a sync without change does not allocate");
+    }
+
+    /// todo 2.3: the document's eye, mouth and hair-colour materials, groom settings and gaze
+    /// preview reach the model; an unchanged document is synced without allocating.
+    #[test]
+    fn todo_2_3_materials_grooms_and_gaze_follow_the_document() {
+        use humanart_model::eval::penetration::part_vertices;
+        use humanart_model::skin_appearance::materials::Side;
+        let reg = super::super::tests::registry();
+        let template = Arc::new(super::super::tests::template().clone());
+        let mut model = Model::new(Arc::clone(&template), reg);
+        let mut d = doc();
+        model.sync(&d, reg).unwrap();
+        assert!(!model.sync(&d, reg).unwrap(), "an unchanged document changes nothing");
+        let (m0, g0) = (model.materials_revision(), model.grooms_revision());
+        assert!(!model.hair_color_set() && !model.body_hair_set());
+        let right = model.materials().eye_params(Side::Right);
+        d.params.insert("eyes.iris.color.l".into(), ParamValue::Color([0.05, 0.2, 0.5]));
+        d.params.insert("mouth.teeth.stain".into(), ParamValue::Scalar(0.9));
+        d.params.insert("brows_lashes.brows.density".into(), ParamValue::Scalar(0.9));
+        d.params.insert("hair.color.eumelanin".into(), ParamValue::Scalar(0.2));
+        model.sync(&d, reg).unwrap();
+        assert!(model.materials_revision() > m0 && model.grooms_revision() > g0);
+        assert_eq!(model.materials().eye_params(Side::Left).iris.outer_color, [0.05, 0.2, 0.5]);
+        assert_eq!(model.materials().eye_params(Side::Right), right, "the right eye keeps its colour");
+        assert_eq!(model.materials().mouth_params().teeth.stain, 0.9);
+        assert!(model.hair_color_set());
+        assert!((model.grooms().get(GroomTarget::BrowDensity) - 0.9).abs() < 1e-6);
+        let before = model.positions().to_vec();
+        d.params.insert("eyes.gaze.yaw".into(), ParamValue::Scalar(20.0));
+        assert!(model.sync(&d, reg).unwrap(), "the gaze turns the eyes");
+        let moved = |v: u32| (model.positions()[v as usize] - before[v as usize]).length();
+        let eye = part_vertices(&template, "eyeball-L").iter().map(|&v| moved(v)).fold(0.0_f32, f32::max);
+        let (far, at) =
+            (0..before.len() as u32).map(|v| (moved(v), v)).fold((0.0_f32, 0), |a, b| if b.0 > a.0 { b } else { a });
+        let region = template
+            .regions()
+            .vertex_regions
+            .get(at as usize)
+            .and_then(|&r| template.regions().regions.get(usize::from(r)))
+            .map(|r| r.name.as_str());
+        println!(
+            "[todo 2.3] gaze yaw 20 deg: eyeball moves {:.2} mm, farthest vertex {:.2} mm ({region:?})",
+            eye * 1e3,
+            far * 1e3
+        );
+        assert!(eye > 1e-3, "the eyeball turns: {eye}");
+        let rev = (model.revision(), model.materials_revision(), model.grooms_revision());
+        let counts = humanart_core::alloc::count_in(|| {
+            let _ = model.sync(&d, reg);
+        });
+        assert_eq!(counts.allocations, 0, "[PERF-R1] an unchanged document syncs without allocating");
+        assert_eq!(rev, (model.revision(), model.materials_revision(), model.grooms_revision()));
     }
 
     #[test]

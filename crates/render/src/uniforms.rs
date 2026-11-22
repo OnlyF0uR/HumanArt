@@ -14,7 +14,7 @@ pub const RING_BINDING_SIZE: u32 = 1792;
 pod_struct! {
     /// The per-frame constants (`struct Frame`).
     #[derive(Debug, PartialEq)]
-    pub struct FrameUniforms(size = 1568, align = 4) {
+    pub struct FrameUniforms(size = 1632, align = 4) {
         /// World to clip with the TAA jitter.
         pub view_proj: [f32; 16],
         /// World to clip without jitter.
@@ -63,6 +63,11 @@ pod_struct! {
         pub counters: [u32; 4],
         /// The lights.
         pub lights: [GpuLight; MAX_LIGHTS],
+        /// World to clip of the whole image with the TAA jitter: `view_proj` before a still's
+        /// tile is cropped from it, `view_proj` itself otherwise. The geometry pass snaps its
+        /// vertices to this image's sub-pixel grid, so a tile rasterises like the untiled image
+        /// `[QUAL-04]`.
+        pub image_view_proj: [f32; 16],
     }
 }
 
@@ -90,6 +95,7 @@ impl FrameUniforms {
         taa: [0.0; 4],
         counters: [0; 4],
         lights: [GpuLight::NONE; MAX_LIGHTS],
+        image_view_proj: [0.0; 16],
     };
 }
 
@@ -135,7 +141,7 @@ mod tests {
     /// The sizes the WGSL structs have (uniform layout: 16-byte aligned members).
     #[test]
     fn blocks_match_their_wgsl_sizes() {
-        assert_eq!(std::mem::size_of::<FrameUniforms>(), 4 * 64 + 4 * 64 + 4 * 16 + 14 * 16 + 8 * 96);
+        assert_eq!(std::mem::size_of::<FrameUniforms>(), 4 * 64 + 4 * 64 + 4 * 16 + 14 * 16 + 8 * 96 + 64);
         assert!(std::mem::size_of::<FrameUniforms>() as u32 <= RING_BINDING_SIZE);
         assert_eq!(RING_BINDING_SIZE % 256, 0);
         assert_eq!(std::mem::size_of::<IblUniforms>(), 48);
@@ -177,6 +183,7 @@ mod tests {
                 "taa",
                 "counters",
                 "lights",
+                "image_view_proj",
             ]
         );
     }

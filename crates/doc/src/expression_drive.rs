@@ -9,8 +9,12 @@
 //! the rig, and hands out the expression weights and the driven joints' rotations for the
 //! evaluator's input (the engine's `Model::sync`, the CLI and the editor all go through it).
 //!
-//! Controls that have no registry parameter (the `viseme.*` controls) keep the value last given
-//! with [`ExpressionDrive::set_control`], so presets can drive them.
+//! A parameter drives the control whose name is its id (`expression.au12_lip_corner_puller.l`) or,
+//! when no control has its id, the control its expression target names: the viseme parameters
+//! (`expression.viseme.lip_closure` -> `viseme.lip-closure`, `todo.md` 2.3) reach the rig's
+//! `viseme.*` controls that way, whose names are not valid parameter ids ([`control_of`]).
+//! Controls that have no registry parameter keep the value last given with
+//! [`ExpressionDrive::set_control`].
 //!
 //! [`ExpressionDrive::evaluate`] does no heap allocation `[PERF-R1]`.
 
@@ -22,7 +26,7 @@ use humanart_model::expression::controls::ControlRig;
 use humanart_model::expression::error::ExprError;
 
 use crate::document::Document;
-use crate::registry::{ParamValue, Range, Registry};
+use crate::registry::{Evaluation, Param, ParamValue, Range, Registry};
 
 /// What can go wrong driving the expression rig.
 #[derive(Debug)]
@@ -62,6 +66,15 @@ impl From<ExprError> for DriveError {
     fn from(e: ExprError) -> Self {
         Self::Rig(e)
     }
+}
+
+/// The index of the control parameter `param` drives in `controls`: the control named like its id,
+/// else the control its expression target names.
+fn control_of(controls: &[String], param: &Param) -> Option<usize> {
+    controls.iter().position(|c| *c == param.id).or_else(|| match &param.evaluation {
+        Evaluation::Expression(t) => controls.iter().position(|c| c == t),
+        _ => None,
+    })
 }
 
 /// The document → control rig → evaluator glue (see the module documentation).
@@ -112,7 +125,7 @@ impl ExpressionDrive {
         let mut bound = Vec::new();
         let mut drives = vec![false; registry.len()];
         for (i, p) in registry.params().iter().enumerate() {
-            if let Some(c) = rig.controls().iter().position(|c| *c == p.id)
+            if let Some(c) = control_of(rig.controls(), p)
                 && let (Ok(i32_), Ok(c32)) = (u32::try_from(i), u32::try_from(c))
             {
                 bound.push((i32_, c32));
@@ -133,6 +146,19 @@ impl ExpressionDrive {
             drives,
             joints,
             rig,
+        })
+    }
+
+    /// The registry parameter that drives control `control` (see the module documentation), if
+    /// one does: the parameter named like the control, else the one whose expression target is the
+    /// control. Presets name controls; this turns them into document values.
+    #[must_use]
+    pub fn param_of_control<'r>(registry: &'r Registry, control: &str) -> Option<&'r Param> {
+        registry.get(control).or_else(|| {
+            registry
+                .params()
+                .iter()
+                .find(|p| matches!(&p.evaluation, Evaluation::Expression(t) if t == control) && !p.read_only)
         })
     }
 

@@ -10,10 +10,12 @@ use humanart_agent::engine::features::{CloseUp, close_up_camera};
 use humanart_agent::engine::{EngineError, Framing, HairOptions, HairShade, Model, Viewer, ViewerOptions};
 use humanart_core::id::Id128;
 use humanart_doc::document::{Author, AuthorKind, Document};
+use humanart_doc::expression_drive::ExpressionDrive;
 use humanart_doc::registry::{ParamValue, Registry, RegistryLimits};
 use humanart_gpu::resources::{Budget, Resources};
 use humanart_gpu::{DeviceRequest, Gpu};
 use humanart_math::Vec3;
+use humanart_model::expression::presets::Presets;
 use humanart_model::generate::build::{Options, template};
 use humanart_model::hair::ScalpStyle;
 use humanart_model::{PackageLimits, Template, read_package};
@@ -74,7 +76,7 @@ pub const CLOSE_UPS: [&str; 3] = ["none", "eye", "mouth"];
 /// Most `--set` values on one command line.
 pub const MAX_SET_VALUES: usize = 64;
 
-const OPTIONS: [OptSpec; 21] = [
+const OPTIONS: [OptSpec; 22] = [
     OptSpec {
         name: "camera",
         value: Some("NAME"),
@@ -116,6 +118,12 @@ const OPTIONS: [OptSpec; 21] = [
         value: Some("ID=V,..."),
         default: None,
         help: "Scalar parameter values before the render (e.g. expression.au26_jaw_drop=0.6).",
+    },
+    OptSpec {
+        name: "preset",
+        value: Some("NAME"),
+        default: Some("none"),
+        help: "Expression preset before --set: none, neutral, {happiness,sadness,surprise,fear,anger,disgust,contempt}.{low,medium,high} or viseme.{sil,PP,FF,TH,DD,kk,CH,SS,nn,RR,aa,E,ih,oh,ou}.",
     },
     OptSpec {
         name: "view",
@@ -200,6 +208,9 @@ pub struct RenderJob {
     /// Scalar parameter values set before the render: registry id and the value's text (checked
     /// to be a finite number).
     pub params: Vec<(String, String)>,
+    /// A built-in expression preset (emotion or viseme, `presets.json`) applied before
+    /// [`RenderJob::params`].
+    pub preset: Option<String>,
     /// A portrait camera instead of the framing's own.
     pub camera: Option<PortraitPreset>,
     /// Depth of field: the f-number in hundredths (280 is f/2.8); `None`: everything sharp.
@@ -232,6 +243,7 @@ impl RenderJob {
             hair: hair_options(p)?,
             close_up: [None, Some(CloseUp::Eye), Some(CloseUp::Mouth)][pick("close-up", &CLOSE_UPS)?],
             params: set_values(p.get("set").unwrap_or(""))?,
+            preset: preset_name(p.get("preset").unwrap_or("none"))?,
             camera: match pick("camera", &CAMERAS)? {
                 0 => None,
                 i => PortraitPreset::ALL.get(i - 1).copied(),
@@ -296,6 +308,43 @@ fn eye_focus(model: &Model, camera: &Camera, aspect: f32) -> f32 {
     along(nearer).max(0.01)
 }
 
+/// `--preset`: `none`, or the name of a built-in expression preset.
+fn preset_name(text: &str) -> Result<Option<String>, CliError> {
+    if text == "none" {
+        return Ok(None);
+    }
+    if builtin_presets()?.find(text).is_none() {
+        return Err(CliError::Usage(crate::args::UsageError(format!(
+            "--preset: `{text}` is not none or an expression preset (neutral, happiness.high, viseme.PP, ...)"
+        ))));
+    }
+    Ok(Some(text.to_owned()))
+}
+
+fn builtin_presets() -> Result<Presets, CliError> {
+    Presets::builtin().map_err(|e| CliError::Data(format!("expression presets: {e}")))
+}
+
+/// The document values of expression preset `name`: for every control of the preset, the registry
+/// parameter that drives it and the control's value. The viseme controls are driven by the
+/// `expression.viseme.*` parameters (todo 1.8).
+///
+/// # Errors
+/// [`CliError::Data`] when there is no such preset or a control has no parameter.
+pub fn preset_values(registry: &Registry, name: &str) -> Result<Vec<(String, f64)>, CliError> {
+    let presets = builtin_presets()?;
+    let preset = presets.find(name).ok_or_else(|| CliError::Data(format!("no expression preset `{name}`")))?;
+    preset
+        .controls
+        .iter()
+        .map(|(control, value)| {
+            ExpressionDrive::param_of_control(registry, control)
+                .map(|p| (p.id.clone(), f64::from(*value)))
+                .ok_or_else(|| CliError::Data(format!("preset `{name}`: no parameter drives the control `{control}`")))
+        })
+        .collect()
+}
+
 /// The `--set` list: `id=value` pairs separated by commas.
 fn set_values(list: &str) -> Result<Vec<(String, String)>, CliError> {
     let mut out = Vec::new();
@@ -344,6 +393,18 @@ pub struct RenderSummary {
     pub hair_strands: u64,
 }
 
+/// An empty document: every parameter at its registry default when a model syncs to it.
+pub(crate) fn default_document() -> Document {
+    Document::new(
+        Id128::from_u128(1),
+        "render",
+        "template",
+        1,
+        0,
+        Author { id: "human.cli".into(), kind: AuthorKind::Human, name: "humanart-cli".into() },
+    )
+}
+
 /// Loads every `*.json` registry file under `<data>/template/params`.
 pub(crate) fn load_registry(data: &Path) -> Result<Registry, CliError> {
     let dir = data.join("template").join("params");
@@ -389,15 +450,15 @@ pub fn run(job: &RenderJob) -> Result<RenderSummary, CliError> {
     let registry = load_registry(&job.data)?;
     let (template, source) = load_template(&job.data)?;
     let mut model = Model::new(Arc::new(template), &registry);
-    if !job.params.is_empty() {
-        let mut doc = Document::new(
-            Id128::from_u128(1),
-            "render",
-            "template",
-            1,
-            0,
-            Author { id: "human.cli".into(), kind: AuthorKind::Human, name: "humanart-cli".into() },
-        );
+    // Always through a document, so the registry defaults apply (`identity.sex` -1: the template's
+    // rest shape is no character, todo 1.3).
+    {
+        let mut doc = default_document();
+        if let Some(name) = &job.preset {
+            for (id, value) in preset_values(&registry, name)? {
+                doc.params.insert(id, ParamValue::Scalar(value));
+            }
+        }
         for (id, value) in &job.params {
             if !registry.params().iter().any(|p| p.id == *id) {
                 return Err(CliError::Data(format!("--set: no parameter `{id}` in the registry")));
@@ -544,9 +605,34 @@ mod tests {
             &["--focus", "1000"],
             &["--background", "beach"],
             &["--occlusion", "maybe"],
+            &["--preset", "smirk"],
+            &["--preset", "viseme.pp"],
         ] {
             assert!(matches!(job(bad), Err(CliError::Usage(_))), "{bad:?}");
         }
+    }
+
+    /// todo 1.8: expression presets, visemes included, are set from the command line; every
+    /// control of every built-in preset reaches a registry parameter of the repository's data.
+    #[test]
+    fn todo_1_8_presets_and_visemes_from_the_command_line() {
+        assert_eq!(job(&[]).unwrap().preset, None);
+        assert_eq!(job(&["--preset", "viseme.PP"]).unwrap().preset.as_deref(), Some("viseme.PP"));
+        assert_eq!(job(&["--preset", "contempt.high"]).unwrap().preset.as_deref(), Some("contempt.high"));
+        let data = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../data");
+        let registry = load_registry(&data).unwrap();
+        let presets = Presets::builtin().unwrap();
+        for p in &presets.presets {
+            let values = preset_values(&registry, &p.name).unwrap();
+            assert_eq!(values.len(), p.controls.len(), "{}", p.name);
+            for (id, v) in &values {
+                let param = registry.get(id).unwrap();
+                assert!(param.check_value(&ParamValue::Scalar(*v)).is_ok(), "{}: {id} = {v}", p.name);
+            }
+        }
+        let aa = preset_values(&registry, "viseme.aa").unwrap();
+        assert!(aa.iter().any(|(id, v)| id == "expression.viseme.jaw_open_wide" && *v > 0.0), "{aa:?}");
+        assert!(matches!(preset_values(&registry, "viseme.zz"), Err(CliError::Data(_))));
     }
 
     /// todo 1.9: the light and camera options of the command line.

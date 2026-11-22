@@ -12,6 +12,12 @@
 //! [`SkinLook::sync`] re-resolves when they change (editor-time work, only on a change). A frame
 //! reads the bound textures and allocates nothing for the skin `[PERF-R1]`.
 //!
+//! The document's procedural skin layers (todo 2.3, `Model::feature_layers`: freckles, moles, scars,
+//! acne, stretch marks, veins, wrinkles, under-eye darkness, sun spots, lip lines, each parameter the
+//! layer does not set taken from the global `skin.features.*` value) are generated into the
+//! compositor's layer stack over the layer's region ([`SkinLook::sync`]), as are the neck's resting
+//! lines (`skin.wrinkles.neck`, level lines of the rest height around the neck) and the age spots.
+//!
 //! The expression wrinkles `[SKN-30]` ([`SkinWrinkles`]): the template's procedurally authored
 //! maps for the brow, forehead, crow's feet and nasolabial folds, folded every frame by the wrinkle
 //! drivers from the evaluated expressions, the deformer's region strain and the document's resting
@@ -24,6 +30,9 @@ use humanart_model::Template;
 use humanart_model::expression::controls::wrinkle_drivers;
 use humanart_model::skin_appearance::baked::baked_inputs;
 use humanart_model::skin_appearance::dirty::Rect;
+use humanart_model::skin_appearance::feature_layers::{
+    FeatureLayer, RegionMask, generate_layer, level_lines, region_masks,
+};
 use humanart_model::skin_appearance::features::{GeneratorKind, GeneratorParams, Target, generate};
 use humanart_model::skin_appearance::layers::{LayerId, LayerStack};
 use humanart_model::skin_appearance::microdetail::ExemplarPlan;
@@ -54,9 +63,10 @@ use super::model::Model;
 pub const SKIN_PART: &str = "body";
 /// Texels per side of one compositor tile (eight template tiles: 8 x 512² texels per layer).
 pub const SKIN_TILE_SIZE: u32 = 512;
-/// Content atlas side of the compositor (generated layers: the age spots over the sun-exposed
-/// face zones of one 512² tile).
-pub const SKIN_ATLAS_SIZE: u32 = 512;
+/// Content atlas side of the compositor (generated layers: the age spots, the neck lines and the
+/// document's feature layers, up to about two whole-skin layers at [`SKIN_TILE_SIZE`]; 40 MB of
+/// half floats).
+pub const SKIN_ATLAS_SIZE: u32 = 2048;
 /// Texels the zone masks are dilated past the UV islands.
 pub const ZONE_DILATE: u32 = 8;
 
@@ -313,6 +323,51 @@ pub struct SkinLook {
     spot_area: Option<SpotArea>,
     /// The age-spot layer, when there is one.
     spots: Option<LayerId>,
+    /// The template (for the region masks).
+    template: Arc<Template>,
+    /// Texels per side of a tile.
+    tile_size: u32,
+    /// Region masks by region (`None`: the whole skin), made once per region.
+    masks: Vec<(Option<String>, Vec<RegionMask>)>,
+    /// The layers generated for the document's feature layers.
+    feature_ids: Vec<LayerId>,
+    /// The `Model::features_revision` they show (0: none yet).
+    features_seen: u64,
+    /// The layers of the neck's resting lines.
+    neck: Vec<LayerId>,
+}
+
+/// The region whose skin takes the neck's resting lines.
+pub const NECK_REGION: &str = "neck";
+/// Seed of the neck lines (their heights, waves and depths).
+const NECK_SEED: u64 = 0x4e_ec00;
+
+/// The wrinkle generator's settings for the neck's resting lines at depth `amount` (0..1):
+/// 3 to 7 lines around the neck, 0.1 to 0.7 mm deep, 0.6 to 1.8 mm wide, older with the amount
+/// (artistic).
+fn neck_params(amount: f32) -> GeneratorParams {
+    let a = amount.clamp(0.0, 1.0);
+    let mut p = GeneratorParams::new(GeneratorKind::Wrinkles);
+    p.set("skin.features.wrinkles.depth", 0.1 + 0.6 * a);
+    p.set("skin.features.wrinkles.count", (3.0 + 4.0 * a).round());
+    p.set("skin.features.wrinkles.width", 0.6 + 1.2 * a);
+    p.set("skin.features.wrinkles.age", a);
+    p
+}
+
+/// Generates `params` over `masks` into `stack` (one layer, a rectangle per tile) and returns its
+/// id, `None` when the masks cover nothing.
+fn generate_into(
+    stack: &mut LayerStack,
+    masks: &[RegionMask],
+    params: &GeneratorParams,
+    seed: u64,
+    opacity: f32,
+) -> Result<Option<LayerId>, EngineError> {
+    let id = stack.allocate_id();
+    let Some(layer) = generate_layer(params, masks, seed, opacity, id)? else { return Ok(None) };
+    stack.push(layer)?;
+    Ok(Some(id))
 }
 
 /// The sun-exposed part of the face tile, where solar lentigines appear.
@@ -343,10 +398,25 @@ fn skin_gpu(e: SkinGpuError) -> EngineError {
 }
 
 /// The layer settings of the template's surfaced skin: [`SurfaceSettings::for_tiles`] with the
-/// document's flush; the lips' roughness comes from the measured zone table
-/// (`skin_appearance::regional`), so the shader's extra lip smoothing is off.
+/// document's flush, vellus sheen and lip coat (todo 2.3, [`with_values`]); the lips' roughness
+/// comes from the measured zone table (`skin_appearance::regional`), so the shader's extra lip
+/// smoothing is off.
 fn surface_settings(template: &Template, values: &SkinValues) -> SurfaceSettings {
-    SurfaceSettings { flush: values.flush, lip_roughness_scale: 1.0, ..SurfaceSettings::for_tiles(template.tiles()) }
+    with_values(SurfaceSettings { lip_roughness_scale: 1.0, ..SurfaceSettings::for_tiles(template.tiles()) }, values)
+}
+
+/// `settings` with the document's flush, vellus sheen ([`SkinValues::fuzz_scale`] times the
+/// surface's default) and lip coat ([`SkinValues::lip_coat`] of the surface's defaults).
+fn with_values(settings: SurfaceSettings, values: &SkinValues) -> SurfaceSettings {
+    let d = SurfaceSettings::default();
+    let (lip_coat, lip_coat_roughness) = values.lip_coat(d.lip_coat, d.lip_coat_roughness);
+    SurfaceSettings {
+        flush: values.flush,
+        fuzz: d.fuzz * values.fuzz_scale(),
+        lip_coat,
+        lip_coat_roughness,
+        ..settings
+    }
 }
 
 impl SkinLook {
@@ -414,8 +484,15 @@ impl SkinLook {
             revision: 0,
             spot_area,
             spots: None,
+            template: Arc::clone(template),
+            tile_size,
+            masks: Vec::new(),
+            feature_ids: Vec::new(),
+            features_seen: 0,
+            neck: Vec::new(),
         };
         look.set_age_spots(values.age_spots)?;
+        look.set_neck(values.neck_wrinkles)?;
         look.compositor.sync_layers(gpu, &look.stack).map_err(skin_gpu)?;
         Self::resolve(gpu, &mut look.compositor, &mut look.stack, values)?;
         Ok(look)
@@ -444,6 +521,52 @@ impl SkinLook {
         } else {
             self.stack.push(layer)?;
             self.spots = Some(id);
+        }
+        Ok(())
+    }
+
+    /// The index in the mask cache of `region`'s masks, made on the first request.
+    fn masks_of(&mut self, region: Option<&str>) -> Result<usize, EngineError> {
+        if let Some(i) = self.masks.iter().position(|(r, _)| r.as_deref() == region) {
+            return Ok(i);
+        }
+        let masks = region_masks(&self.template, region, self.tile_size)?;
+        self.masks.push((region.map(str::to_owned), masks));
+        Ok(self.masks.len() - 1)
+    }
+
+    /// Puts the neck's resting lines for `amount` (0..1) into the layer stack, or takes them out
+    /// at 0. Sync and resolve afterwards.
+    fn set_neck(&mut self, amount: f32) -> Result<(), EngineError> {
+        for id in self.neck.drain(..) {
+            self.stack.remove(id);
+        }
+        if amount <= 0.0 || !amount.is_finite() {
+            return Ok(());
+        }
+        let i = self.masks_of(Some(NECK_REGION))?;
+        let masks = self.masks.get(i).map_or(&[][..], |(_, m)| m.as_slice());
+        // Around the neck whatever its UV island looks like (it is an arc on the face tile).
+        let id = self.stack.allocate_id();
+        let lines = level_lines(&self.template, masks, self.tile_size, &neck_params(amount), NECK_SEED, 1.0, id)?;
+        if let Some(layer) = lines {
+            self.stack.push(layer)?;
+            self.neck.push(id);
+        }
+        Ok(())
+    }
+
+    /// Replaces the layers generated for the document's feature layers by those of `layers`.
+    /// Sync and resolve afterwards.
+    fn set_features(&mut self, layers: &[FeatureLayer]) -> Result<(), EngineError> {
+        for id in self.feature_ids.drain(..) {
+            self.stack.remove(id);
+        }
+        for layer in layers {
+            let i = self.masks_of(layer.region.as_deref())?;
+            let masks = self.masks.get(i).map_or(&[][..], |(_, m)| m.as_slice());
+            let id = generate_into(&mut self.stack, masks, &layer.params, layer.seed, layer.opacity)?;
+            self.feature_ids.extend(id);
         }
         Ok(())
     }
@@ -483,44 +606,56 @@ impl SkinLook {
         Ok(())
     }
 
-    /// Brings the look up to date with `model`'s skin values (todo 1.4): a change of the base
-    /// values re-resolves the compositor, a change of the pore and fine-line inputs regenerates
-    /// the micro-detail, a change of the flush rewrites the surface settings. Returns whether
-    /// anything changed; nothing is done (and nothing allocated) while [`Model::skin_revision`]
-    /// stays the same.
+    /// Brings the look up to date with `model`'s skin values and feature layers (todo 1.4, 2.3):
+    /// changed feature layers, age spots or neck lines are generated anew; a change of the base
+    /// values (with the moisture and the lip colour) re-resolves the compositor, a change of the
+    /// pore and fine-line inputs regenerates the micro-detail, a change of the flush, the vellus
+    /// density or the lip moisture rewrites the surface settings. Returns whether
+    /// anything changed; nothing is done (and nothing allocated) while [`Model::skin_revision`] and
+    /// `Model::features_revision` stay the same.
     ///
     /// # Errors
     /// The compositor's, the micro-detail generator's and the surface's errors.
     pub fn sync(&mut self, gpu: &Gpu, renderer: &mut Renderer, model: &Model) -> Result<bool, EngineError> {
-        if self.revision == model.skin_revision() {
-            return Ok(false);
+        let mut layers = false;
+        if self.features_seen != model.features_revision() {
+            self.features_seen = model.features_revision();
+            layers = !(self.feature_ids.is_empty() && model.feature_layers().is_empty());
+            self.set_features(model.feature_layers())?;
         }
+        let next = if self.revision == model.skin_revision() { self.values } else { *model.skin() };
         self.revision = model.skin_revision();
-        let next = *model.skin();
-        if next == self.values {
+        if next == self.values && !layers {
             return Ok(false);
         }
-        let spots = next.age_spots.to_bits() != self.values.age_spots.to_bits();
-        if spots {
+        if next.age_spots.to_bits() != self.values.age_spots.to_bits() {
             self.set_age_spots(next.age_spots)?;
+            layers = true;
+        }
+        if next.neck_wrinkles.to_bits() != self.values.neck_wrinkles.to_bits() {
+            self.set_neck(next.neck_wrinkles)?;
+            layers = true;
+        }
+        if layers {
             self.compositor.sync_layers(gpu, &self.stack).map_err(skin_gpu)?;
         }
-        if spots || next.base_differs(&self.values) {
+        if layers || next.base_differs(&self.values) {
             Self::resolve(gpu, &mut self.compositor, &mut self.stack, &next)?;
         }
         if next.detail_differs(&self.values) {
             self.plan = ExemplarPlan::new(&next.micro_detail())?;
             renderer.skin_surface_mut().set_micro_detail(gpu, &self.plan)?;
         }
-        if next.flush.to_bits() != self.values.flush.to_bits() {
-            self.settings.flush = next.flush;
+        if next.surface_differs(&self.values) {
+            self.settings = with_values(self.settings, &next);
             renderer.skin_surface_mut().set_settings(gpu, self.settings)?;
         }
         self.values = next;
         Ok(true)
     }
 
-    /// The generated layers in the compositor's stack (the age spots, when there are any).
+    /// The generated layers in the compositor's stack (the age spots, the neck lines and the
+    /// document's feature layers, one per UV tile they touch).
     pub fn layer_count(&self) -> usize {
         self.stack.layers().len()
     }
@@ -869,5 +1004,131 @@ mod tests {
             }
             viewer.destroy(&mut res);
         }
+    }
+
+    /// todo 2.3: the document's procedural skin layers are generated into the skin, and the
+    /// global `skin.features.*` value reaches a layer that does not set it (freckle density 40 ->
+    /// 200 on a cheek layer); the neck lines and the lip colour change the image too. Pictures:
+    /// target/review/params/skin-freckles-{40,200}.png, skin-lips-red.png, skin-neck-{0,1}.png.
+    #[test]
+    fn todo_2_3_document_feature_layers_neck_lines_and_lips_reach_the_skin() {
+        use std::collections::BTreeMap;
+
+        use humanart_doc::document::{SkinBlend, SkinLayer, SkinSource};
+
+        use super::super::view::ViewerOptions;
+        let reg = super::super::tests::registry();
+        let mut model = Model::new(Arc::new(super::super::tests::template().clone()), reg);
+        let mut d = doc(&[]);
+        d.skin_layers.push(SkinLayer {
+            id: humanart_core::id::Id128::from_u128(0xF7),
+            name: "freckles".into(),
+            channels: Vec::new(),
+            blend: SkinBlend::Add,
+            opacity: 1.0,
+            region: Some("face".into()),
+            source: SkinSource::Procedural { generator: "freckles".into(), params: BTreeMap::new(), seed: 4 },
+            locked: false,
+            visible: true,
+            author: "human.test".into(),
+        });
+        model.sync(&d, reg).unwrap();
+        assert_eq!(model.feature_layers().len(), 1);
+        let gpu = humanart_gpu::shared_headless().unwrap();
+        let mut res = Resources::new(gpu, Budget::UNLIMITED);
+        let options = ViewerOptions { hair: None, ..ViewerOptions::default() };
+        let mut viewer = Viewer::with_options(gpu, &mut res, &model, 400, 500, options).unwrap();
+        assert!(viewer.skin_error().is_none(), "{:?}", viewer.skin_error());
+        let layers = viewer.skin().unwrap().layer_count();
+        assert!(layers >= 1, "the face layer is generated when the viewer is made: {layers}");
+        viewer.frame_model(&model, Framing::Head);
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/review/params");
+        std::fs::create_dir_all(&dir).unwrap();
+        let shoot = |model: &mut Model, viewer: &mut Viewer, res: &mut Resources, name: &str| {
+            frames(gpu, res, viewer, model);
+            frames(gpu, res, viewer, model);
+            let (tw, th, rgba) =
+                humanart_render::capture::read_texture(res, viewer.display_texture().unwrap(), 0).unwrap();
+            std::fs::write(dir.join(name), humanart_render::capture::encode_png_rgba8(tw, th, &rgba).unwrap()).unwrap();
+            rgba
+        };
+        // Mean absolute 8-bit difference per channel; the temporal jitter alone gives `noise`.
+        // Over the middle of the picture (the face in the head shot, the neck in the close-up).
+        let mad = |a: &[u8], b: &[u8]| -> f64 {
+            let (mut sum, mut n) = (0.0, 0.0);
+            for y in 150..400 {
+                for x in 120..280 {
+                    for c in 0..3 {
+                        let i = (y * 400 + x) * 4 + c;
+                        sum += f64::from(a[i].abs_diff(b[i]));
+                        n += 1.0;
+                    }
+                }
+            }
+            sum / n
+        };
+        let few = shoot(&mut model, &mut viewer, &mut res, "skin-freckles-40.png");
+        assert!(!viewer.sync_skin(gpu, &model).unwrap(), "nothing changed");
+        let again = shoot(&mut model, &mut viewer, &mut res, "skin-freckles-40-again.png");
+        let noise = mad(&few, &again);
+        d.params.insert("skin.features.freckles.density".into(), ParamValue::Scalar(200.0));
+        d.params.insert("skin.features.freckles.amount".into(), ParamValue::Scalar(0.8));
+        model.sync(&d, reg).unwrap();
+        assert_eq!(model.feature_layers()[0].params.values[0], 200.0, "the global density reaches the layer");
+        assert!(viewer.sync_skin(gpu, &model).unwrap());
+        let many = shoot(&mut model, &mut viewer, &mut res, "skin-freckles-200.png");
+        let freckles = mad(&few, &many);
+        d.params.insert("mouth.lips.color".into(), ParamValue::Color([0.6, 0.06, 0.08]));
+        d.params.insert("mouth.lips.moisture".into(), ParamValue::Scalar(1.0));
+        model.sync(&d, reg).unwrap();
+        assert!(viewer.sync_skin(gpu, &model).unwrap());
+        let lips = shoot(&mut model, &mut viewer, &mut res, "skin-lips-red.png");
+        let lip = mad(&many, &lips);
+        // The neck lines in a close-up of the front of the neck.
+        let t = model.template();
+        let front = t.regions().find("neck-front").unwrap();
+        let (sum, n) = t
+            .regions()
+            .vertex_regions
+            .iter()
+            .zip(model.positions())
+            .filter(|(r, _)| t.regions().is_within(**r, front))
+            .fold((humanart_math::Vec3::ZERO, 0.0_f32), |(s, n), (_, p)| (s + *p, n + 1.0));
+        let centre = sum * (1.0 / n.max(1.0));
+        viewer.set_camera(humanart_render::camera::Camera::review(
+            humanart_render::camera::ReviewCamera::Front,
+            centre,
+            0.05,
+            0.8,
+        ));
+        let smooth = shoot(&mut model, &mut viewer, &mut res, "skin-neck-0.png");
+        let smooth_again = shoot(&mut model, &mut viewer, &mut res, "skin-neck-0-again.png");
+        let neck_noise = mad(&smooth, &smooth_again);
+        d.params.insert("skin.wrinkles.neck".into(), ParamValue::Scalar(1.0));
+        model.sync(&d, reg).unwrap();
+        assert!(viewer.sync_skin(gpu, &model).unwrap());
+        let lined = shoot(&mut model, &mut viewer, &mut res, "skin-neck-1.png");
+        let lines = mad(&smooth, &lined);
+        // The lines are thin: the picture rows (over the middle of the neck) whose green they
+        // change by two 8-bit steps on average, against the rows the jitter alone changes so.
+        let rows = |a: &[u8], b: &[u8]| -> usize {
+            (100..300_usize)
+                .filter(|y| {
+                    let green = |x: usize| (y * 400 + x) * 4 + 1;
+                    (150..250).map(|x| u32::from(a[green(x)].abs_diff(b[green(x)]))).sum::<u32>() >= 200
+                })
+                .count()
+        };
+        let (noise_rows, line_rows) = (rows(&smooth, &smooth_again), rows(&smooth, &lined));
+        println!(
+            "[todo 2.3] mean |diff| (8-bit): jitter {noise:.3}; freckles 40 -> 200 {freckles:.3}; red wet lips {lip:.3}; \
+             neck close-up jitter {neck_noise:.3}, neck lines {lines:.3}; picture rows changed by 2 steps: jitter \
+             {noise_rows}, neck lines {line_rows}"
+        );
+        viewer.destroy(&mut res);
+        assert!(freckles > 1.5 * noise.max(0.01), "{freckles} vs {noise}");
+        assert!(lip > 1.5 * noise.max(0.01), "{lip} vs {noise}");
+        assert!(lines > 1.5 * neck_noise.max(0.01), "{lines} vs {neck_noise}");
+        assert!(line_rows >= noise_rows + 12, "{line_rows} vs {noise_rows}");
     }
 }

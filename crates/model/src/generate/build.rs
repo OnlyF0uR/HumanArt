@@ -6,7 +6,7 @@
 
 use super::anatomy::Anatomy;
 use super::assemble::{Assembled, assemble};
-use super::genitals::Variant;
+use super::genitals::{self, Variant};
 use super::landmarks::{self, Described};
 use super::regions::TILES;
 use super::{Surface, parts, rig, uv};
@@ -42,7 +42,10 @@ pub struct Options {
     pub lods: bool,
     /// The LOD settings.
     pub lod_settings: LodSettings,
-    /// The external genitalia (ADR-039).
+    /// The external genitalia in the body (ADR-039). With [`Variant::Female`] (the default) the
+    /// male piece ships as well, stowed inside the pelvis ([`genitals::male_piece`],
+    /// [`genitals::stow`]); the `sex.male` component brings it out. With [`Variant::Male`] only the
+    /// male variant is built (review packages, tests).
     pub genitals: Variant,
     /// Whether the head is finished: the scanned mean face ([`super::scan_face`]) and the steps
     /// after it (the cranium). Off only for the fitting base ([`BASE_VERSION`]) that `fit-scan` and
@@ -119,6 +122,39 @@ fn first_copies(asm: &Assembled) -> Vec<u32> {
     first
 }
 
+/// The vertices of `cage` inside the genital attachment loop: on genital faces only.
+fn vulva_vertices(cage: &super::cage::Cage) -> Vec<bool> {
+    let mut genital = vec![false; cage.pos.len()];
+    let mut other = vec![false; cage.pos.len()];
+    for f in 0..cage.face_count() {
+        let is = super::regions::R::from_id(cage.tags[f].region).is_some_and(super::regions::R::is_genital);
+        for &v in cage.corners_of(f) {
+            if let Some(slot) = if is { genital.get_mut(v as usize) } else { other.get_mut(v as usize) } {
+                *slot = true;
+            }
+        }
+    }
+    genital.iter().zip(&other).map(|(&g, &o)| g && !o).collect()
+}
+
+/// The assembled mesh with both genital variants where they belong: the vulva (body cage vertices
+/// flagged in `vulva`) as `identity.sex` −1 shows it and the male piece (body cage vertices from
+/// `body_vertices` on) as +1 shows it, so their skin weights are those of the real groin.
+fn real_state(asm: &Assembled, body_vertices: usize, vulva: &[bool]) -> Result<crate::mesh::Mesh> {
+    let mut data = asm.mesh.data().clone();
+    for (p, &(piece, v)) in data.positions.iter_mut().zip(&asm.source) {
+        if piece != 0 {
+            continue;
+        }
+        if v as usize >= body_vertices {
+            *p = genitals::male_real(*p);
+        } else if vulva.get(v as usize).copied().unwrap_or(false) {
+            *p = genitals::vulva_states(*p).0;
+        }
+    }
+    crate::mesh::Mesh::new(data)
+}
+
 /// The template's info: name, version, generator, licence and provenance `[LIC-02]` of the procedural
 /// template; [`template`] adds the scanned face's licence and entry when it applies the face.
 pub fn info() -> TemplateInfo {
@@ -169,13 +205,31 @@ fn expression_error(e: ExprError) -> ModelError {
 /// Builds the whole template.
 pub fn template(options: &Options) -> Result<Generated> {
     let auricle = if options.scan_face { super::anatomy::Auricle::Finished } else { super::anatomy::Auricle::Base };
-    let surface = super::body_surface_for(options.genitals, auricle)?;
+    let mut surface = super::body_surface_for(options.genitals, auricle)?;
+    // ADR-039, todo 1.3: with the female variant in the body, the male piece ships too. Both sit
+    // halfway between their two states (`genitals::male_rest`, `genitals::vulva_rest`): the `sex`
+    // component (`identity.sex`, −1 female, +1 male) shows one and hides the other, no rebuild.
+    let body_vertices = surface.mesh().pos.len();
+    let mut vulva = vec![false; body_vertices];
+    if options.genitals == Variant::Female {
+        let male = super::body_surface_for(Variant::Male, auricle)?;
+        let mut piece = genitals::male_piece(male.mesh())?;
+        for p in &mut piece.pos {
+            *p = genitals::male_rest(*p);
+        }
+        let last = surface.levels.last_mut().ok_or(ModelError::invalid("body surface", 0, "no subdivision level"))?;
+        vulva = vulva_vertices(&last.cage);
+        for (p, _) in last.cage.pos.iter_mut().zip(&vulva).filter(|(_, v)| **v) {
+            *p = genitals::vulva_rest(*p);
+        }
+        last.cage.append(&piece);
+    }
     let parts = parts::build(&surface.anatomy, &surface.body, &surface.targets)?;
     let pieces: Vec<&super::cage::Cage> =
         std::iter::once(surface.mesh()).chain(parts.iter().map(|p| &p.mesh)).collect();
     let layout = uv::layout(&pieces)?;
     let mut asm = assemble(&surface, &parts, &layout)?;
-    let described = landmarks::build(&surface, &asm)?;
+    let mut described = landmarks::build(&surface, &asm)?;
     // The scanned face moves the eyes; the eye joints and lid helpers move with them.
     let mut anatomy: Anatomy = surface.anatomy.clone();
     let mut scan_components = Vec::new();
@@ -185,6 +239,8 @@ pub fn template(options: &Options) -> Result<Generated> {
         scan_components = components;
         super::finish::cranium(&mut asm, &surface.anatomy)?;
         super::finish::fair_nose_root(&mut asm, &surface.anatomy)?;
+        // The midline profile points are found again on the finished face (todo 1.3).
+        landmarks::refit_profile(&surface, &asm, &mut described)?;
     }
     let mut info = info();
     if options.scan_face {
@@ -193,7 +249,7 @@ pub fn template(options: &Options) -> Result<Generated> {
     }
     let anatomy = &anatomy;
     let rig = rig::skeleton(anatomy, 0)?;
-    let skin = rig::skin(&rig, anatomy, &asm.mesh, &asm.regions)?;
+    let skin = rig::skin(&rig, anatomy, &real_state(&asm, body_vertices, &vulva)?, &asm.regions)?;
     let tiles = TILES
         .iter()
         .map(|&(_, name, resolution, target)| UvTile {
@@ -214,6 +270,23 @@ pub fn template(options: &Options) -> Result<Generated> {
         expressions: ExpressionSet::default(),
         lods: Vec::new(),
     })?;
+    // Both genital variants: half the one-sided sex features (breasts, larynx) go into the rest
+    // shape, so the switch (`identity.sex`) gives the female all of them and the male none. Not on
+    // the fitting base (`scan_face` off), which the face model is measured against.
+    let template = if options.genitals == Variant::Female && options.scan_face {
+        let shift = crate::identity::sex::rest_shift(&template)?;
+        let mut parts = template.into_parts();
+        let mut data = parts.mesh.into_data();
+        for (v, d) in shift {
+            if let Some(p) = data.positions.get_mut(v as usize) {
+                *p += d;
+            }
+        }
+        parts.mesh = crate::mesh::Mesh::new(data)?;
+        Template::new(parts)?
+    } else {
+        template
+    };
     // The identity components (shape axes and joint-regressor rows) and the expression targets
     // and correctives are authored on the finished LOD0 template.
     let (template, _) = crate::identity::with_identity(&template)?;

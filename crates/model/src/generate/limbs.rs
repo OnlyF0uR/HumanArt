@@ -584,6 +584,44 @@ pub fn foot_point(a: &Anatomy, side: f32, m: f32, l: f32, h: f32) -> Vec3 {
     base + dir * m + medial * l + Vec3::Y * h
 }
 
+/// The toe base ring's column boundaries (medial offset, medial to lateral), their distance in
+/// front of the ankle, and the height of their dorsal and plantar slots, metres.
+const TOE_COLS: [f32; 6] = [0.047, 0.019, 0.002, -0.013, -0.027, -0.041];
+const TOE_BASE_M: [f32; 6] = [0.166, 0.164, 0.158, 0.150, 0.141, 0.131];
+const TOE_DORSAL_H: [f32; 6] = [0.030, 0.034, 0.029, 0.026, 0.023, 0.018];
+const TOE_PLANTAR_H: [f32; 6] = [0.004, 0.003, 0.002, 0.002, 0.002, 0.003];
+/// Toe lengths beyond the toe base ring, big toe first (metres).
+const TOE_LENGTHS: [f32; 5] = [0.037, 0.032, 0.028, 0.024, 0.020];
+/// Toe half-widths, big toe first (metres).
+pub const TOE_WIDTHS: [f32; 5] = [0.0125, 0.0082, 0.0076, 0.0072, 0.0068];
+
+/// A slot of the toe base ring: the dorsal or plantar end of column boundary `i` (0..6).
+fn toe_slot(a: &Anatomy, side: f32, plantar: bool, i: usize) -> Vec3 {
+    let i = i.min(5);
+    if plantar {
+        foot_point(a, side, TOE_BASE_M[i] + 0.006, TOE_COLS[i], TOE_PLANTAR_H[i])
+    } else {
+        foot_point(a, side, TOE_BASE_M[i] - 0.004, TOE_COLS[i], TOE_DORSAL_H[i])
+    }
+}
+
+/// Toe `t`'s joint polyline (0 = big toe .. 4 = little toe) of the `side` foot: the centre of its
+/// base quad, the interphalangeal bend and the tip.
+pub fn toe_joints(a: &Anatomy, t: usize, side: f32) -> Vec<Vec3> {
+    let t = t.min(4);
+    let base = (toe_slot(a, side, false, t)
+        + toe_slot(a, side, false, t + 1)
+        + toe_slot(a, side, true, t)
+        + toe_slot(a, side, true, t + 1))
+        * 0.25;
+    let dir = sided(a.foot_dir, side);
+    let spread = (2.0 - t as f32) * 0.035 * side;
+    let tdir = rotate(dir, Vec3::Y, spread).normalize();
+    let len = TOE_LENGTHS[t];
+    let droop = rotate(tdir, tdir.cross(Vec3::Y).normalize(), -0.25).normalize();
+    vec![base, base + tdir * (len * 0.45) + Vec3::Y * 0.002, base + tdir * (len * 0.8) + droop * (len * 0.15)]
+}
+
 /// The foot's rings (ankle to toe base) and the rings of each toe.
 type FootLoops = (Vec<Vec<u32>>, Vec<Vec<Vec<u32>>>);
 
@@ -604,11 +642,17 @@ fn foot(
     // Ring points by angle: 0 = top (front of the shin), 90 = medial, 180 = sole/back, 270 = lateral.
     // Each ring: (along, height, half-length of the section along its "up" direction, half-width,
     // tilt of the section from vertical in radians: 0 = horizontal leg ring, PI/2 = upright).
+    //
+    // Round 2 (todo 1.3): the front of each ring lies below and ahead of the one before, so the
+    // dorsal line falls steadily from the shin over the ankle to the toes. The first two rings
+    // used to put the front of the ankle 15 mm above the ring before it, which folded a sharp
+    // crease across the front of the ankle; the forefoot ring stood in front of the lateral toe
+    // bases (the loft to them folded back into a ledge over the toes).
     let specs: [(f32, f32, f32, f32, f32); 4] = [
-        (0.002, 0.058, 0.040, 0.034, 0.25),
-        (0.000, 0.040, 0.060, 0.036, 0.80),
+        (0.002, 0.076, 0.040, 0.034, 0.56),
+        (0.010, 0.042, 0.061, 0.036, 0.67),
         (0.068, 0.033, 0.034, 0.041, 1.48),
-        (0.136, 0.024, 0.024, 0.049, 1.55),
+        (0.120, 0.022, 0.022, 0.048, 1.55),
     ];
     let dir = sided(a.foot_dir, side);
     let mut rings: Vec<Vec<u32>> = vec![leg.last().cloned().unwrap_or_default()];
@@ -648,14 +692,10 @@ fn foot(
         rings.push(ring);
     }
     // Toe base ring: 12 slots, six dorsal and six plantar column boundaries (medial to lateral).
-    let cols: [f32; 6] = [0.047, 0.019, 0.002, -0.013, -0.027, -0.041];
-    let base_m: [f32; 6] = [0.166, 0.164, 0.158, 0.150, 0.141, 0.131];
-    let dorsal_h: [f32; 6] = [0.030, 0.034, 0.029, 0.026, 0.023, 0.018];
-    let plantar_h: [f32; 6] = [0.004, 0.003, 0.002, 0.002, 0.002, 0.003];
     let mut semantic: Vec<(bool, usize, Vec3)> = Vec::with_capacity(12);
     for i in 0..6 {
-        semantic.push((false, i, foot_point(a, side, base_m[i] - 0.004, cols[i], dorsal_h[i])));
-        semantic.push((true, i, foot_point(a, side, base_m[i] + 0.006, cols[i], plantar_h[i])));
+        semantic.push((false, i, toe_slot(a, side, false, i)));
+        semantic.push((true, i, toe_slot(a, side, true, i)));
     }
     let o = foot_point(a, side, BALL, 0.0, 0.018);
     frame = frame.carry(o, dir);
@@ -715,25 +755,15 @@ fn foot(
     let toe_region = R::sided(R::FootLToes, R::FootRToes, side);
     let toe_top = Tag::new(toe_region.id(), top.id());
     let toe_sole = Tag::new(toe_region.id(), sole.id());
-    let lengths: [f32; 5] = [0.037, 0.032, 0.028, 0.024, 0.020];
-    let widths: [f32; 5] = [0.0125, 0.0082, 0.0076, 0.0072, 0.0068];
     let mut toes = Vec::with_capacity(5);
-    for t in 0..5 {
+    for (t, &w) in TOE_WIDTHS.iter().enumerate() {
         let (Some(d0), Some(d1), Some(p1), Some(p0)) =
             (find(false, t), find(false, t + 1), find(true, t + 1), find(true, t))
         else {
             return Err(ModelError::invalid("foot", t, "toe slot missing"));
         };
         let q = [d0, d1, p1, p0];
-        let base =
-            (cage.pos[d0 as usize] + cage.pos[d1 as usize] + cage.pos[p0 as usize] + cage.pos[p1 as usize]) * 0.25;
-        let spread = (2.0 - t as f32) * 0.035 * side;
-        let tdir = rotate(dir, Vec3::Y, spread).normalize();
-        let len = lengths[t];
-        let droop = rotate(tdir, tdir.cross(Vec3::Y).normalize(), -0.25).normalize();
-        let joints =
-            vec![base, base + tdir * (len * 0.45) + Vec3::Y * 0.002, base + tdir * (len * 0.8) + droop * (len * 0.15)];
-        let w = widths[t];
+        let joints = toe_joints(a, t, side);
         let radii = [
             (0.25, w * 0.95, w * 0.80),
             (0.55, w * 0.92, w * 0.78),

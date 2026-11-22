@@ -29,7 +29,10 @@ use crate::scanfit::nearest::TriangleTree;
 
 /// The skull surface in the head frame (millimetres from the tragion midpoint): centre height, the
 /// half breadth, the height of the vertex above the centre, the front and back half lengths, and
-/// the exponent of the horizontal cross-section (2 is an ellipse, larger is squarer).
+/// the exponents of the horizontal cross-section behind and in front of the ears (2 is an ellipse,
+/// larger is squarer). In front it is nearly an ellipse (round 4): the frontal bone curves on from
+/// the forehead into the temples, where a squarer section left a near-vertical edge in
+/// three-quarter view.
 pub const VAULT: Vault = Vault {
     centre_y: 30.0,
     half_breadth: 77.0,
@@ -37,6 +40,7 @@ pub const VAULT: Vault = Vault {
     front: 103.0,
     back: 96.0,
     exponent: 3.0,
+    front_exponent: 2.3,
     side_exponent: 2.9,
 };
 /// Height of the vault's lower edge above the tragion (millimetres) in front (above the brows), at
@@ -70,8 +74,11 @@ pub struct Vault {
     pub front: f32,
     /// Back half length (to the occiput), mm.
     pub back: f32,
-    /// Exponent of the horizontal cross-section.
+    /// Exponent of the horizontal cross-section behind the ears.
     pub exponent: f32,
+    /// Exponent of the horizontal cross-section in front of the ears (the two halves meet with the
+    /// same radius and tangent at the side, whatever the exponents).
+    pub front_exponent: f32,
     /// Exponent of the vertical cross-section across the head (the mid-sagittal profile is an
     /// ellipse, exponent 2; across, the parietal bones keep the breadth up to a broad crown).
     pub side_exponent: f32,
@@ -86,8 +93,7 @@ impl Vault {
             return 0.0;
         }
         let u = d / len;
-        let depth = if u.z >= 0.0 { self.front } else { self.back };
-        let p = self.exponent;
+        let (depth, p) = if u.z >= 0.0 { (self.front, self.front_exponent) } else { (self.back, self.exponent) };
         let horizontal = ((u.x / self.half_breadth).abs().powf(p) + (u.z / depth).abs().powf(p)).powf(2.0 / p);
         let across = u.x * u.x / (u.x * u.x + u.z * u.z).max(1.0e-12);
         let q = 2.0 + (self.side_exponent - 2.0) * across;
@@ -465,6 +471,17 @@ mod tests {
         assert!((v.radius(Vec3::Z) - v.front).abs() < 1e-3);
         assert!((v.radius(-Vec3::Z) - v.back).abs() < 1e-3);
         assert_eq!(v.radius(Vec3::ZERO), 0.0);
+        // Round 4: in front the horizontal section is rounder than behind (the forehead's corner
+        // into the temple), and the halves meet without a step at the side.
+        let square = Vault { front_exponent: v.exponent, ..v };
+        let diagonal = Vec3::new(1.0, 0.0, 1.0);
+        assert!(
+            v.radius(diagonal) < square.radius(diagonal) - 3.0,
+            "{} vs {}",
+            v.radius(diagonal),
+            square.radius(diagonal)
+        );
+        assert!((v.radius(Vec3::new(1.0, 0.0, 1.0e-4)) - v.radius(Vec3::new(1.0, 0.0, -1.0e-4))).abs() < 1.0e-2);
         // The weight: none on the face and below the ears, full on the vault.
         assert_eq!(vault_weight(Vec3::new(0.0, 40.0, 100.0)), 0.0);
         assert_eq!(vault_weight(Vec3::new(75.0, 30.0, 0.0)), 0.0);

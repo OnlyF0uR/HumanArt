@@ -484,7 +484,12 @@ fn rule(r: R) -> Rule {
         R::FootL | R::FootR | R::FootLDorsum | R::FootRDorsum | R::FootLSole | R::FootRSole | R::Foot => {
             seg(&["#.shin", "#.foot", "#.toes"])
         }
-        R::FootLToes | R::FootRToes => seg(&["#.foot", "#.toes"]),
+        R::FootLToes | R::FootRToes | R::FootLNail | R::FootRNail => seg(&["#.foot", "#.toes"]),
+        // The nails (todo 1.3) follow the distal phalanx they lie on: the nearest of the five.
+        R::HandLNail | R::HandRNail | R::HandLLunula | R::HandRLunula => {
+            seg(&["#.thumb.03", "#.index.03", "#.middle.03", "#.ring.03", "#.little.03"])
+        }
+        R::FootLArch | R::FootRArch => seg(&["#.shin", "#.foot", "#.toes"]),
         R::Tongue => seg(&["tongue.01", "tongue.02", "tongue.03", "tongue.04"]),
         R::EyeballL | R::EyeballR => Rule::Joint(format!("{side}.eye")),
         R::UpperLidL | R::UpperLidR => Rule::Lid { helper: format!("{side}.eyelid.upper"), scale: 1.0 },

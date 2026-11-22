@@ -11,8 +11,9 @@
 //!
 //! **Areas.** A triangle belongs to a region list when at least two of its corners' vertex regions
 //! lie in (the subtree of) one of the listed regions: [`SCALP_REGIONS`] for the scalp,
-//! [`FUZZ_REGIONS`] for the face's vellus hair, [`BODY_HAIR_REGIONS`] for sparse body hair. Names
-//! the template does not have are skipped, so a template without, say, `malar-L` still grows hair.
+//! [`FUZZ_REGIONS`] for the face's vellus hair, [`BODY_HAIR_REGIONS`] for sparse body hair,
+//! [`BEARD_REGIONS`] below [`BEARD_TOP`] above the mouth for facial hair. Names the template does
+//! not have are skipped, so a template without, say, `malar-L` still grows hair.
 //!
 //! **Lines.** The brows follow the landmarks `L.brow.01..` / `R.brow.01..` (medial to lateral);
 //! the lid margins run from `X.eye.canthus.medial` through `X.eye.upper.NN` (or `lower`) to
@@ -27,7 +28,7 @@ use humanart_math::Vec3;
 
 use super::collide::{MAX_GRID_AXIS, SdfGrid, TriangleGrid};
 use super::error::{HairError, HairResult};
-use super::facial::{BodyHairSpec, FaceAnchors, body_hair, body_region};
+use super::facial::{BodyHairSpec, FaceAnchors, body_hair, body_region, facial_groom};
 use super::features::{BROW_SHAPES, BrowSpec, Eyeball, FeatureGroom, LashSpec, brow_groom, lash_groom};
 use super::params::{GroomMaps, GroomParams};
 use super::placement::{GroomLayout, ScalpMask, place, place_parted};
@@ -45,6 +46,14 @@ pub const FUZZ_REGIONS: &[&str] = &[
     "forehead", "temple-L", "temple-R", "cheek-L", "cheek-R", "malar-L", "malar-R", "jaw-L", "jaw-R", "chin",
     "philtrum",
 ];
+/// The regions facial hair (stubble, beard, moustache) grows on, below [`BEARD_TOP`].
+pub const BEARD_REGIONS: &[&str] = &["cheek-L", "cheek-R", "jaw-L", "jaw-R", "chin", "philtrum"];
+/// The region of the upper lip (vermilion and the skin above it); facial hair grows on the part
+/// above the vermilion border.
+pub const UPPER_LIP_REGION: &str = "upper-lip";
+/// How far above the mouth's centre (along the face's up direction) the beard area reaches,
+/// metres: the lower cheeks, not the cheekbones (a styling choice).
+pub const BEARD_TOP: f32 = 0.03;
 /// The regions with sparse body hair: the arms and legs.
 pub const BODY_HAIR_REGIONS: &[&str] =
     &["forearm-L", "forearm-R", "upper-arm-L", "upper-arm-R", "shin-L", "shin-R", "thigh-L", "thigh-R"];
@@ -77,6 +86,7 @@ pub struct TemplateHair {
     sdf: SdfGrid,
     scalp: ScalpMask,
     fuzz: Vec<u32>,
+    beard: Vec<u32>,
     body: Vec<u32>,
     lines: FeatureLines,
     anchors: FaceAnchors,
@@ -126,8 +136,26 @@ impl TemplateHair {
         };
         let lines = feature_lines(&landmark);
         let anchors = face_anchors(&landmark, head.0);
+        // Height of a triangle's centroid above the mouth's centre.
+        let height =
+            |t: u32| surface.corners(t).map(|[a, b, c]| ((a + b + c) * (1.0 / 3.0) - anchors.mouth).dot(anchors.up));
+        // The skin of the upper lip above the vermilion (its border's highest landmark + 1 mm)
+        // takes a moustache too; the red lip does not.
+        let vermilion = (1..=MAX_LINE_POINTS)
+            .map_while(|k| landmark(&format!("lip.upper.outer.{k:02}")))
+            .map(|p| (p - anchors.mouth).dot(anchors.up))
+            .fold(f32::NAN, f32::max);
+        let mut beard: Vec<u32> = area(BEARD_REGIONS);
+        if vermilion.is_finite() {
+            beard.extend(
+                area(&[UPPER_LIP_REGION]).into_iter().filter(|&t| height(t).is_some_and(|h| h > vermilion + 0.001)),
+            );
+        }
+        beard.retain(|&t| height(t).is_some_and(|h| h < BEARD_TOP));
+        beard.sort_unstable();
+        beard.dedup();
         let eyeballs = EYEBALL_PARTS.map(|name| eyeball(template, name, positions));
-        Ok(Self { surface, grid, sdf, scalp, fuzz, body, lines, anchors, head, eyeballs })
+        Ok(Self { surface, grid, sdf, scalp, fuzz, beard, body, lines, anchors, head, eyeballs })
     }
 
     /// [`TemplateHair::new`] on the template's rest shape, with area-weighted vertex normals
@@ -170,6 +198,12 @@ impl TemplateHair {
     #[must_use]
     pub fn fuzz_triangles(&self) -> &[u32] {
         &self.fuzz
+    }
+
+    /// The lower-face triangles facial hair grows on.
+    #[must_use]
+    pub fn beard_triangles(&self) -> &[u32] {
+        &self.beard
     }
 
     /// The arm and leg triangles with body hair.
@@ -445,6 +479,28 @@ pub struct GroomSetSpec {
     pub pheomelanin: f32,
     /// The seed every random choice derives from.
     pub seed: u64,
+    /// Brow hairs relative to the default brow (1 = 520 hairs per brow, 0 = none).
+    pub brow_density: f32,
+    /// Brow hair length relative to the default (1 = 8 mm).
+    pub brow_length: f32,
+    /// Lashes relative to the default lids (1 = 150 upper, 75 lower, 0 = none).
+    pub lash_density: f32,
+    /// Lash length relative to the default.
+    pub lash_length: f32,
+    /// Lash curl relative to the default.
+    pub lash_curl: f32,
+    /// Body hair density relative to the default (1 = a third of the arm preset's).
+    pub body_density: f32,
+    /// Share of unpigmented (grey) strands in the scalp, brow, facial and body hair, 0..1.
+    pub grey_fraction: f32,
+    /// Stubble over the beard area, 0 (none) to 1 (60 hairs per cm²).
+    pub stubble: f32,
+    /// Stubble length relative to the default 1 mm.
+    pub stubble_length: f32,
+    /// A trimmed beard (8 mm) over the beard area, 0 (none) to 1 (60 hairs per cm²).
+    pub beard: f32,
+    /// A moustache (12 mm) above the mouth, 0 (none) to 1 (70 hairs per cm²).
+    pub moustache: f32,
 }
 
 impl Default for GroomSetSpec {
@@ -460,6 +516,17 @@ impl Default for GroomSetSpec {
             eumelanin: 2.5,
             pheomelanin: 0.1,
             seed: 1,
+            brow_density: 1.0,
+            brow_length: 1.0,
+            lash_density: 1.0,
+            lash_length: 1.0,
+            lash_curl: 1.0,
+            body_density: 1.0,
+            grey_fraction: 0.0,
+            stubble: 0.0,
+            stubble_length: 1.0,
+            beard: 0.0,
+            moustache: 0.0,
         }
     }
 }
@@ -477,6 +544,8 @@ pub enum GroomKind {
     PeachFuzz,
     /// Hair on the arms and legs.
     Body,
+    /// Stubble, beard or moustache.
+    Facial,
 }
 
 impl GroomKind {
@@ -489,6 +558,7 @@ impl GroomKind {
             Self::Lashes => "lashes",
             Self::PeachFuzz => "peach-fuzz",
             Self::Body => "body",
+            Self::Facial => "facial",
         }
     }
 }
@@ -509,22 +579,31 @@ pub struct CharacterGroom {
     pub length: f32,
 }
 
+/// Guides of each facial hair groom.
+const FACIAL_GUIDES: usize = 400;
+
 /// Feature hairs: eyebrows and lashes, hair per guide.
 const FEATURE_SALTS: [u64; 4] = [0xB10, 0xB11, 0x1A5, 0x1A6];
 
 /// Grows the groom set `spec` on `hair` (see the module documentation): the scalp preset on the
 /// scalp mask, both brows along the brow lines, upper and lower lashes along the lid margins (one
-/// groom each kind, both sides), peach fuzz on the face and sparse body hair. Deterministic for a
-/// seed; a feature whose landmarks are missing is left out.
+/// groom each kind, both sides), peach fuzz on the face, sparse body hair and the facial hair
+/// (stubble, beard, moustache: one groom each over the beard area) the spec asks for; the brow,
+/// lash and body settings scale the generators' defaults (todo 2.3). Deterministic for a seed; a
+/// feature whose landmarks are missing is left out.
 ///
 /// # Errors
 /// [`HairError::Limit`] for a scalp strand count above [`MAX_SCALP_STRANDS`]; the generators'
 /// errors otherwise.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, clippy::cast_precision_loss)] // Hair counts are far below 2^24.
 pub fn character_grooms(hair: &TemplateHair, spec: &GroomSetSpec) -> HairResult<Vec<CharacterGroom>> {
     if spec.scalp_strands > MAX_SCALP_STRANDS {
         return Err(HairError::limit("scalp strands", u64::from(MAX_SCALP_STRANDS), u64::from(spec.scalp_strands)));
     }
-    let (eu, pheo) = (spec.eumelanin.clamp(0.0, 16.0), spec.pheomelanin.clamp(0.0, 16.0));
+    let colour = |kind: GroomKind| pigments(kind, spec);
+    let (eu, pheo, grey) = colour(GroomKind::Scalp);
+    // A relative factor: finite, 0..4.
+    let factor = |v: f32| if v.is_finite() { v.clamp(0.0, 4.0) } else { 1.0 };
     let surface = hair.surface();
     let maps = GroomMaps::default();
     let mut out = Vec::new();
@@ -540,6 +619,7 @@ pub fn character_grooms(hair: &TemplateHair, spec: &GroomSetSpec) -> HairResult<
             hairline_softness: p.params.hairline_softness.max(0.02),
             eumelanin: eu,
             pheomelanin: pheo,
+            grey_fraction: grey,
             ..p.params
         };
         let layout =
@@ -547,7 +627,7 @@ pub fn character_grooms(hair: &TemplateHair, spec: &GroomSetSpec) -> HairResult<
         out.push(groom(GroomKind::Scalp, p.guides, params, layout));
     }
     let lines = hair.lines();
-    let feature = |kind: GroomKind, parts: Vec<FeatureGroom>, eumelanin: f32| -> HairResult<Option<CharacterGroom>> {
+    let feature = |kind: GroomKind, parts: Vec<FeatureGroom>| -> HairResult<Option<CharacterGroom>> {
         let Some(first) = parts.first() else { return Ok(None) };
         let mut guides = Guides::new(first.guides.points())?;
         for part in &parts {
@@ -559,36 +639,48 @@ pub fn character_grooms(hair: &TemplateHair, spec: &GroomSetSpec) -> HairResult<
         }
         let params = GroomParams {
             strand_count: guides.len() as f32,
-            eumelanin,
-            pheomelanin: pheo,
+            eumelanin: colour(kind).0,
+            pheomelanin: colour(kind).1,
             color_variation: 0.05,
+            grey_fraction: colour(kind).2,
             ..first.params
         };
         let layout = GroomLayout::one_per_guide(&guides, surface, &maps, spec.seed ^ kind as u64)?;
         Ok(Some(groom(kind, guides, params, layout)))
     };
-    if spec.brows {
+    let brow = BrowSpec { shape: BROW_SHAPES[1], ..BrowSpec::default() };
+    let brow = BrowSpec {
+        count: (brow.count as f32 * factor(spec.brow_density)).round() as usize,
+        length: brow.length * factor(spec.brow_length).max(0.1),
+        ..brow
+    };
+    if spec.brows && brow.count > 0 {
         let mut parts = Vec::new();
         for (i, line) in lines.brows.iter().enumerate() {
             if line.len() < 2 {
                 continue;
             }
-            let brow = BrowSpec { shape: BROW_SHAPES[1], ..BrowSpec::default() };
             let up = hair.anchors().up;
             parts.push(brow_groom(surface, hair.grid(), line, up, &brow, spec.seed ^ FEATURE_SALTS[i])?);
         }
         // Brows and lashes are a little darker than the scalp hair.
-        out.extend(feature(GroomKind::Brows, parts, (eu * 1.3).clamp(0.5, 16.0))?);
+        out.extend(feature(GroomKind::Brows, parts)?);
     }
-    if spec.lashes {
+    let lash = |l: LashSpec| LashSpec {
+        count: (l.count as f32 * factor(spec.lash_density)).round() as usize,
+        length: l.length * factor(spec.lash_length).max(0.1),
+        curl: l.curl * factor(spec.lash_curl),
+        ..l
+    };
+    let (upper, lower) = (lash(LashSpec::upper()), lash(LashSpec::lower()));
+    if spec.lashes && upper.count + lower.count > 0 {
         let mut parts = Vec::new();
         for i in 0..2 {
             let opening = lines.openings[i];
-            for (margin, lash, salt) in [
-                (&lines.upper_lids[i], LashSpec::upper(), FEATURE_SALTS[2]),
-                (&lines.lower_lids[i], LashSpec::lower(), FEATURE_SALTS[3]),
-            ] {
-                if margin.len() < 2 {
+            for (margin, lash, salt) in
+                [(&lines.upper_lids[i], upper, FEATURE_SALTS[2]), (&lines.lower_lids[i], lower, FEATURE_SALTS[3])]
+            {
+                if margin.len() < 2 || lash.count == 0 {
                     continue;
                 }
                 let into = if lash.upper { opening } else { -opening };
@@ -598,7 +690,7 @@ pub fn character_grooms(hair: &TemplateHair, spec: &GroomSetSpec) -> HairResult<
         }
         // Lashes are darker than the scalp hair of nearly everyone (a styling choice, not a
         // measurement): dark brown hair (2.5) gets near-black lashes (7), blonde (0.3) brown ones.
-        out.extend(feature(GroomKind::Lashes, parts, (eu * 2.0 + 2.0).clamp(4.0, 16.0))?);
+        out.extend(feature(GroomKind::Lashes, parts)?);
     }
     if spec.peach_fuzz && !hair.fuzz_triangles().is_empty() {
         // Vellus hair: about 2.5 mm, 12 micrometres, lightly pigmented, lying down the face, dense
@@ -614,11 +706,12 @@ pub fn character_grooms(hair: &TemplateHair, spec: &GroomSetSpec) -> HairResult<
         };
         let mask = ScalpMask::new(surface, hair.fuzz_triangles().to_vec())?;
         let p = body_hair(surface, &mask, &fuzz, 600, spec.seed ^ 0xF422)?;
-        let params = GroomParams { eumelanin: 0.3, pheomelanin: 0.12, tip_ratio: 0.4, ..p.params };
+        let (eumelanin, pheomelanin, grey_fraction) = colour(GroomKind::PeachFuzz);
+        let params = GroomParams { eumelanin, pheomelanin, grey_fraction, tip_ratio: 0.4, ..p.params };
         let layout = place(surface, &mask, &p.guides, &params, &maps, spec.seed ^ 0xF423)?;
         out.push(groom(GroomKind::PeachFuzz, p.guides, params, layout));
     }
-    if spec.body_hair && !hair.body_triangles().is_empty() {
+    if spec.body_hair && factor(spec.body_density) > 0.0 && !hair.body_triangles().is_empty() {
         let base = body_region("arm").unwrap_or(BodyHairSpec {
             length: 0.01,
             density: 10.0,
@@ -628,14 +721,61 @@ pub fn character_grooms(hair: &TemplateHair, spec: &GroomSetSpec) -> HairResult<
             thickness: 0.000_04,
         });
         // Sparse: a third of the arm preset's density.
-        let sparse = BodyHairSpec { density: base.density / 3.0, ..base };
+        let sparse = BodyHairSpec { density: base.density / 3.0 * factor(spec.body_density), ..base };
         let mask = ScalpMask::new(surface, hair.body_triangles().to_vec())?;
         let p = body_hair(surface, &mask, &sparse, 1500, spec.seed ^ 0xB0D7)?;
-        let params = GroomParams { eumelanin: (eu * 0.8).clamp(0.0, 16.0), pheomelanin: pheo, ..p.params };
+        let (eumelanin, pheomelanin, grey_fraction) = colour(GroomKind::Body);
+        let params = GroomParams { eumelanin, pheomelanin, grey_fraction, ..p.params };
         let layout = place(surface, &mask, &p.guides, &params, &maps, spec.seed ^ 0xB0D8)?;
         out.push(groom(GroomKind::Body, p.guides, params, layout));
     }
+    let facial = [
+        ("stubble", spec.stubble, factor(spec.stubble_length).max(0.1), 0xFAC1_u64),
+        ("short_beard", spec.beard, 1.0, 0xFAC2),
+        ("moustache", spec.moustache, 1.0, 0xFAC3),
+    ];
+    if !hair.beard_triangles().is_empty() {
+        let area = ScalpMask::new(surface, hair.beard_triangles().to_vec())?;
+        for (style, amount, length, salt) in facial {
+            let amount = if amount.is_finite() { amount.clamp(0.0, 1.0) } else { 0.0 };
+            if amount <= 0.0 {
+                continue;
+            }
+            let p =
+                facial_groom(style, surface, &area, hair.anchors(), FACIAL_GUIDES, Some(hair.sdf()), spec.seed ^ salt)?;
+            let params = GroomParams {
+                strand_count: (p.params.strand_count * amount).floor().max(1.0),
+                length_scale: p.params.length_scale * length,
+                eumelanin: colour(GroomKind::Facial).0,
+                pheomelanin: colour(GroomKind::Facial).1,
+                grey_fraction: colour(GroomKind::Facial).2,
+                ..p.params
+            };
+            let mask = ScalpMask::new(surface, p.area)?;
+            let layout = place(surface, &mask, &p.guides, &params, &maps, spec.seed ^ salt ^ 0x1)?;
+            out.push(groom(GroomKind::Facial, p.guides, params, layout));
+        }
+    }
     Ok(out)
+}
+
+/// The eumelanin, pheomelanin (pbrt scale) and grey share [`character_grooms`] gives a groom of
+/// `kind` for `spec`: the scalp and facial hair take the spec's colour; brows are a little darker
+/// and lashes darker still (a styling choice, not a measurement: dark brown hair (2.5) gets
+/// near-black lashes (7), blonde (0.3) brown ones), neither greys as fast (lashes not at all);
+/// body hair is a little lighter; peach fuzz is lightly pigmented whatever the hair colour.
+#[must_use]
+pub fn pigments(kind: GroomKind, spec: &GroomSetSpec) -> (f32, f32, f32) {
+    let finite = |v: f32, lo: f32, hi: f32, or: f32| if v.is_finite() { v.clamp(lo, hi) } else { or };
+    let (eu, pheo) = (finite(spec.eumelanin, 0.0, 16.0, 2.5), finite(spec.pheomelanin, 0.0, 16.0, 0.1));
+    let grey = finite(spec.grey_fraction, 0.0, 1.0, 0.0);
+    match kind {
+        GroomKind::Scalp | GroomKind::Facial => (eu, pheo, grey),
+        GroomKind::Brows => ((eu * 1.3).clamp(0.5, 16.0), pheo, grey * 0.7),
+        GroomKind::Lashes => ((eu * 2.0 + 2.0).clamp(4.0, 16.0), pheo, 0.0),
+        GroomKind::PeachFuzz => (0.3, 0.12, 0.0),
+        GroomKind::Body => ((eu * 0.8).clamp(0.0, 16.0), pheo, grey),
+    }
 }
 
 fn groom(kind: GroomKind, guides: Guides, params: GroomParams, layout: GroomLayout) -> CharacterGroom {
@@ -986,5 +1126,60 @@ mod tests {
         assert_eq!(crumpled, 0, "crumpled lashes");
         assert_eq!(inside_eye, 0, "lash points touch or pierce an eyeball");
         assert_eq!(inside_skin, 0, "lash points run inside the lid skin");
+    }
+
+    /// todo 2.3: the document's groom settings change the groom set: brow and lash densities and
+    /// lengths scale the features, stubble, beard and moustache grow facial grooms on the beard
+    /// area (below the cheekbones), grey reaches every greying groom.
+    #[test]
+    fn todo_2_3_groom_settings_scale_the_features_and_grow_facial_hair() {
+        let (_, hair) = fixture();
+        let base = GroomSetSpec { scalp: ScalpStyle::Bald, peach_fuzz: false, ..GroomSetSpec::default() };
+        let strands = |set: &[CharacterGroom], kind: GroomKind| -> usize {
+            set.iter().filter(|g| g.kind == kind).map(|g| g.layout.len()).sum()
+        };
+        let length = |set: &[CharacterGroom], kind: GroomKind| -> f32 {
+            set.iter().filter(|g| g.kind == kind).map(|g| g.length).sum()
+        };
+        let plain = character_grooms(hair, &base).unwrap();
+        assert_eq!(strands(&plain, GroomKind::Facial), 0, "no facial hair by default");
+        let sparse = character_grooms(hair, &GroomSetSpec { brow_density: 0.5, lash_density: 0.5, ..base }).unwrap();
+        let none = character_grooms(hair, &GroomSetSpec { brow_density: 0.0, lash_density: 0.0, ..base }).unwrap();
+        let long = character_grooms(hair, &GroomSetSpec { brow_length: 1.5, lash_length: 1.5, ..base }).unwrap();
+        for kind in [GroomKind::Brows, GroomKind::Lashes] {
+            let (a, b) = (strands(&plain, kind), strands(&sparse, kind));
+            println!(
+                "[todo 2.3] {kind:?}: {a} hairs, at half density {b}, lengths {} -> {}",
+                length(&plain, kind),
+                length(&long, kind)
+            );
+            assert!(b * 10 < a * 6 && b * 10 > a * 4, "{kind:?} {a} -> {b}");
+            assert_eq!(strands(&none, kind), 0);
+            assert!(length(&long, kind) > 1.3 * length(&plain, kind));
+        }
+        assert!(!hair.beard_triangles().is_empty());
+        let a = hair.anchors();
+        for &t in hair.beard_triangles() {
+            let [p, q, r] = hair.surface().corners(t).unwrap();
+            assert!(((p + q + r) * (1.0 / 3.0) - a.mouth).dot(a.up) < BEARD_TOP);
+        }
+        let faced = GroomSetSpec { stubble: 1.0, beard: 0.5, moustache: 1.0, grey_fraction: 0.4, ..base };
+        let set = character_grooms(hair, &faced).unwrap();
+        let facial: Vec<&CharacterGroom> = set.iter().filter(|g| g.kind == GroomKind::Facial).collect();
+        println!(
+            "[todo 2.3] facial grooms: {:?}",
+            facial.iter().map(|g| (g.layout.len(), g.length)).collect::<Vec<_>>()
+        );
+        assert_eq!(facial.len(), 3, "stubble, beard and moustache");
+        assert!(facial.iter().all(|g| g.layout.len() > 100 && g.params.grey_fraction == 0.4));
+        let half = character_grooms(hair, &GroomSetSpec { stubble: 0.5, ..base }).unwrap();
+        let full = character_grooms(hair, &GroomSetSpec { stubble: 1.0, ..base }).unwrap();
+        let (h, f) = (strands(&half, GroomKind::Facial), strands(&full, GroomKind::Facial));
+        assert!(h * 10 < f * 6, "stubble density: {h} vs {f}");
+        let longer = character_grooms(hair, &GroomSetSpec { stubble: 1.0, stubble_length: 1.8, ..base }).unwrap();
+        assert!(length(&longer, GroomKind::Facial) > 1.5 * length(&full, GroomKind::Facial));
+        let brows = set.iter().find(|g| g.kind == GroomKind::Brows).unwrap();
+        assert_eq!(brows.params.grey_fraction, pigments(GroomKind::Brows, &faced).2);
+        assert!(set.iter().find(|g| g.kind == GroomKind::Lashes).unwrap().params.grey_fraction == 0.0);
     }
 }

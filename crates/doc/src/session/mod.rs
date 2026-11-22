@@ -32,6 +32,8 @@
 //! session's seed (the host draws a random seed per session) and a counter, so a scripted session
 //! is deterministic.
 
+use std::fmt::Write as _;
+
 use humanart_core::hash::{Hash128, hash128};
 use humanart_core::id::Id128;
 use humanart_core::platform::{Clock, FileSystem, join_path};
@@ -45,6 +47,7 @@ use crate::history::{Entry, History, Scope, UndoPlan, compose};
 use crate::journal::{Journal, JournalHeader, JournalLimits, JournalRecord, encode_header, encode_record};
 use crate::lock::{self, Mode};
 use crate::notify::{EventKind, EventLog};
+use crate::plausibility::{RegistryPrior, WARNING_THRESHOLD, largest_deviations};
 use crate::project::{JournalState, LoadLimits, Project};
 use crate::proposal::{LoadedProposals, PROPOSALS_DIR, Proposal, ProposalLimits, ProposalStore, SelectError};
 use crate::registry::Registry;
@@ -99,8 +102,10 @@ impl Default for SessionConfig {
     }
 }
 
-/// A plausibility scorer (WP-25 provides the real one); with one installed, outcomes carry the
-/// score before and after `[CMD-06]` and a drop raises a warning.
+/// A plausibility scorer; outcomes carry the score before and after `[CMD-06]`, a drop raises a
+/// warning and a score below [`crate::plausibility::WARNING_THRESHOLD`] is reported as an
+/// implausible combination. Sessions use [`crate::plausibility::RegistryPrior`] unless
+/// [`Session::with_scorer`] installs another (a fitted identity prior, WP-25).
 pub trait Plausibility {
     /// The score of `doc`, higher is more plausible.
     fn score(&self, doc: &Document, registry: &Registry) -> f64;
@@ -212,6 +217,27 @@ fn storage_or_invalid(e: DocError) -> CommandError {
 
 fn no_project() -> CommandError {
     CommandError::Invalid(DocError::field("session", "project", "the session has no project directory"))
+}
+
+/// The score of `doc`: the installed scorer's, or the [`RegistryPrior`]'s.
+fn score_with(scorer: Option<&dyn Plausibility>, doc: &Document, registry: &Registry) -> f64 {
+    scorer.map_or_else(|| RegistryPrior.score(doc, registry), |s| s.score(doc, registry))
+}
+
+/// Warns about an implausible combination `[ID-04]`: the score `after` lies below
+/// [`WARNING_THRESHOLD`] and the command did not raise it. Names the values that deviate most.
+fn combination_warning(before: f64, after: f64, doc: &Document, registry: &Registry, warnings: &mut Vec<Warning>) {
+    if after >= WARNING_THRESHOLD || after > before {
+        return;
+    }
+    let mut message =
+        format!("implausible combination: plausibility {after:.3} is below {WARNING_THRESHOLD} (allowed)");
+    let largest = largest_deviations(doc, registry, 3);
+    for (i, (id, z)) in largest.iter().enumerate() {
+        let lead = if i == 0 { "; furthest out:" } else { "," };
+        let _ = write!(message, "{lead} {id} {z:.1} sd");
+    }
+    warnings.push(Warning { code: WarningCode::Implausible, target: "document".to_owned(), message });
 }
 
 impl<'a> Session<'a> {
@@ -332,7 +358,8 @@ impl<'a> Session<'a> {
         ))
     }
 
-    /// The same session with a plausibility scorer.
+    /// The same session with another plausibility scorer (the default is
+    /// [`crate::plausibility::RegistryPrior`]).
     #[must_use]
     pub fn with_scorer(mut self, scorer: &'a dyn Plausibility) -> Self {
         self.scorer = Some(scorer);
@@ -408,13 +435,12 @@ impl<'a> Session<'a> {
         self.since_autosave = self.since_autosave.saturating_add(1);
     }
 
-    fn score(&self, doc: &Document) -> Option<f64> {
-        self.scorer.map(|s| s.score(doc, self.registry))
+    fn score(&self, doc: &Document) -> f64 {
+        score_with(self.scorer, doc, self.registry)
     }
 
-    fn scored(&self, before: Option<f64>, warnings: &mut Vec<Warning>) -> Option<[f64; 2]> {
-        let before = before?;
-        let after = self.score(&self.doc)?;
+    fn scored(&self, before: f64, warnings: &mut Vec<Warning>) -> [f64; 2] {
+        let after = self.score(&self.doc);
         if after < before - self.config.plausibility_drop {
             warnings.push(Warning {
                 code: WarningCode::PlausibilityDrop,
@@ -422,7 +448,8 @@ impl<'a> Session<'a> {
                 message: format!("plausibility dropped from {before:.3} to {after:.3}"),
             });
         }
-        Some([before, after])
+        combination_warning(before, after, &self.doc, self.registry, warnings);
+        [before, after]
     }
 
     fn outcome(&self, entry: &Entry, edits: &[Edit], proposal: Option<Id128>) -> Outcome {
@@ -605,7 +632,7 @@ impl<'a> Session<'a> {
         )?);
         let before = self.score(&self.doc);
         apply_edits(&mut self.doc, self.registry, &edits)?;
-        let plausibility = self.scored(before, &mut warnings);
+        let plausibility = Some(self.scored(before, &mut warnings));
         let now = self.mono_ms();
         if extending {
             if self.history.extend_open(&edits, cmd.time_ms, resolved.elements) {
@@ -711,7 +738,7 @@ impl<'a> Session<'a> {
         let mut warnings = lock::check(&self.doc, self.registry, &edits, &who, &[], &self.history, Mode::Main)?;
         let before = self.score(&self.doc);
         apply_edits(&mut self.doc, self.registry, &edits)?;
-        let plausibility = self.scored(before, &mut warnings);
+        let plausibility = Some(self.scored(before, &mut warnings));
         let label = format!("undo {}", target.label);
         let mut outcome = match plan {
             UndoPlan::Top => {
@@ -769,7 +796,7 @@ impl<'a> Session<'a> {
         let mut warnings = lock::check(&self.doc, self.registry, &entry.edits, &who, &[], &self.history, Mode::Main)?;
         let before = self.score(&self.doc);
         apply_edits(&mut self.doc, self.registry, &entry.edits)?;
-        let plausibility = self.scored(before, &mut warnings);
+        let plausibility = Some(self.scored(before, &mut warnings));
         if let Err(e) = self.append(&Record::Redo(entry.clone())) {
             self.revert(&entry.edits);
             return Err(CommandError::Storage(e));
@@ -866,9 +893,9 @@ impl<'a> Session<'a> {
                 warnings.push(w);
             }
         }
-        let before = self.scorer.map(|s| s.score(&p.doc, self.registry));
+        let before = Some(score_with(self.scorer, &p.doc, self.registry));
         apply_edits(&mut p.doc, self.registry, &resolved.edits)?;
-        let after = self.scorer.map(|s| s.score(&p.doc, self.registry));
+        let after = Some(score_with(self.scorer, &p.doc, self.registry));
         let entry = Entry {
             id: cmd.id,
             author: cmd.author.clone(),
@@ -901,6 +928,9 @@ impl<'a> Session<'a> {
                     target: "document".to_owned(),
                     message: format!("plausibility dropped from {b:.3} to {a:.3}"),
                 });
+            }
+            if let Some(p) = self.proposals.get(index) {
+                combination_warning(b, a, &p.doc, self.registry, &mut warnings);
             }
             outcome.plausibility = Some([b, a]);
         }
@@ -998,7 +1028,7 @@ impl<'a> Session<'a> {
         self.closed.push(proposal);
         // A file that cannot be removed now is retried by every save and tick.
         let _ = self.remove_closed();
-        let plausibility = self.scored(before, &mut warnings);
+        let plausibility = Some(self.scored(before, &mut warnings));
         let outcome = Outcome {
             command: proposal,
             author: who.id,

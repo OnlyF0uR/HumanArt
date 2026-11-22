@@ -33,6 +33,7 @@ use super::features::{FeatureParts, Features, add_parts};
 use super::hair::{CharacterHair, HairOptions};
 use super::model::Model;
 use super::skin::{SKIN_TILE_SIZE, SURFACED_SKIN_MATERIAL, SkinLook, SkinWrinkles, character_meshes};
+use humanart_model::hair::settings::GroomTarget;
 
 /// The material of the character's non-skin parts, and of the whole character when the skin
 /// surface is off (a medium skin albedo, linear Rec.709).
@@ -128,6 +129,12 @@ pub struct Viewer {
     hair_error: Option<EngineError>,
     features: Option<Features>,
     features_error: Option<EngineError>,
+    /// The hair the viewer was asked to draw.
+    hair_options: Option<HairOptions>,
+    /// The model's material revision the feature table shows.
+    materials_seen: u64,
+    /// The model's material and groom revisions the hair shows.
+    hair_seen: (u64, u64),
     attached: bool,
     uploaded: u64,
     settings: ViewSettings,
@@ -209,8 +216,13 @@ impl Viewer {
         }
         let config = RenderConfig { overlays: true, quality: Quality::Interactive, ..RenderConfig::new(width, height) };
         let mut renderer = Renderer::new(gpu, resources, config)?;
-        if let Some(look) = &skin {
+        if let Some(look) = &mut skin {
             look.bind(gpu, &mut renderer)?;
+            // The document's feature layers (todo 2.3): generated before the first frame; a
+            // failure (layers beyond the content atlas) leaves the skin without them.
+            if let Err(e) = look.sync(gpu, &mut renderer, model) {
+                skin_error = Some(e);
+            }
         }
         let scene = GpuScene::new(resources, &scene)?;
         let deformer = GpuDeformer::new(
@@ -252,6 +264,9 @@ impl Viewer {
             hair_error,
             features,
             features_error,
+            hair_options: options.hair,
+            materials_seen: 0,
+            hair_seen: (0, 0),
             attached: false,
             uploaded: 0,
             settings,
@@ -324,6 +339,44 @@ impl Viewer {
     /// template has none).
     pub fn wrinkles(&self) -> Option<&SkinWrinkles> {
         self.wrinkles.as_ref()
+    }
+
+    /// Brings the hair up to the document (todo 2.3, `hair::sync_view`): the brow, lash, facial
+    /// and body hair settings and the hair colour of `model`. Does nothing (and allocates
+    /// nothing) while the model's material and groom revisions stay the same; a colour change
+    /// recolours the grown grooms, a change of a setting that shapes the strands grows the set
+    /// anew (editor-time work). Returns whether the hair changed. Call it before
+    /// [`Viewer::record`], like [`Viewer::sync_skin`].
+    ///
+    /// # Errors
+    /// [`EngineError::Render`] when the recolour or the renderer's hair pass fail; a set that
+    /// cannot be grown leaves the viewer without hair and the reason in [`Viewer::hair_error`].
+    pub fn sync_hair(&mut self, gpu: &Gpu, resources: &mut Resources, model: &Model) -> Result<bool, EngineError> {
+        let seen = (model.materials_revision(), model.grooms_revision());
+        let Some(options) = self.hair_options else { return Ok(false) };
+        if self.hair_seen == seen {
+            return Ok(false);
+        }
+        self.hair_seen = seen;
+        let had = self.hair.is_some();
+        let (changed, error) = super::hair::sync_view(
+            gpu,
+            resources,
+            model,
+            &options,
+            &mut self.hair,
+            &mut self.renderer,
+            &self.deformer,
+        )?;
+        if changed && (had || self.hair.is_some()) {
+            self.hair_error = error;
+            let lashes = self.hair.is_some() && options.lashes && model.grooms().get(GroomTarget::LashDensity) > 0.0;
+            if let Some(f) = &mut self.features {
+                f.set_lashes(if lashes { 1.0 } else { 0.0 });
+            }
+            self.reset = true;
+        }
+        Ok(changed)
     }
 
     /// The hair the viewer draws (`None` when off or when it could not be built).
@@ -419,6 +472,11 @@ impl Viewer {
             super::hair::sync_bounds(self.hair.as_ref(), model, &mut self.renderer)?;
         }
         if let Some(features) = &mut self.features {
+            // The document's eye and mouth materials (todo 2.3); allocation-free.
+            if self.materials_seen != model.materials_revision() {
+                features.set_materials(model.materials());
+                self.materials_seen = model.materials_revision();
+            }
             features.sync(resources, &mut self.renderer, model)?;
         }
         if let Some(w) = &mut self.wrinkles {

@@ -18,6 +18,16 @@ use crate::light::{Background, LightRig, ProceduralEnvironment};
 use crate::renderer::{FrameInput, RenderConfig, Renderer};
 use crate::scene::{GpuScene, Material, Mesh, Scene};
 
+/// Held by the unit tests that time GPU work against a bound (`skin::tests::ac_wp13_3_*`) and by
+/// the heaviest GPU tests beside them (`deform::tests::ac_wp10_2_*`), so two of them never share the
+/// device: with two test threads a ratio bound of 2.0x read 2.05x and 2.39x (todo section 6).
+static GPU_TIMING: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+/// The lock of [`GPU_TIMING`] (a test that panicked while holding it leaves it usable).
+pub(crate) fn gpu_timing_lock() -> std::sync::MutexGuard<'static, ()> {
+    GPU_TIMING.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 fn gpu() -> &'static Gpu {
     // The process's shared device (ADR-040).
     humanart_gpu::shared_headless().expect("this machine has a GPU")

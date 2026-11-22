@@ -252,6 +252,25 @@ impl ZoneWeights {
         self.feathers.get(slot).copied().unwrap_or(0.0)
     }
 
+    /// Sets plain weights (no feather, no distances) for zone slot `slot`, one per vertex
+    /// (clamped to 0..1; non-finite values become 0). False when the slot is out of range or
+    /// `values` does not hold one weight per vertex.
+    pub fn set_plain(&mut self, slot: usize, values: &[f32]) -> bool {
+        if slot >= ZONE_SLOTS || values.len() != self.vertex_count {
+            return false;
+        }
+        let range = slot * self.vertex_count..(slot + 1) * self.vertex_count;
+        let (Some(w), Some(d)) = (self.weights.get_mut(range.clone()), self.distances.get_mut(range)) else {
+            return false;
+        };
+        for (out, &v) in w.iter_mut().zip(values) {
+            *out = if v.is_finite() { v.clamp(0.0, 1.0) } else { 0.0 };
+        }
+        d.fill(0.0);
+        self.feathers[slot] = 0.0;
+        true
+    }
+
     /// How many vertices there are.
     pub const fn vertex_count(&self) -> usize {
         self.vertex_count

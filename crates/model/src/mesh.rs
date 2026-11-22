@@ -201,10 +201,14 @@ impl Mesh {
     #[must_use]
     pub fn face_uv_area(&self, f: usize) -> f32 {
         let corners = self.face(f);
+        let Some(&first) = corners.first() else { return 0.0 };
+        // Relative to the first corner: on absolute coordinates the products of a one-texel face
+        // far from the tile origin cancel in f32 and can flip the sign.
+        let o = self.data.uvs[first as usize];
         let mut twice = 0.0_f32;
         for (i, &a) in corners.iter().enumerate() {
             let b = corners[(i + 1) % corners.len()];
-            let (pa, pb) = (self.data.uvs[a as usize], self.data.uvs[b as usize]);
+            let (pa, pb) = (self.data.uvs[a as usize] - o, self.data.uvs[b as usize] - o);
             twice += pa.x * pb.y - pb.x * pa.y;
         }
         // V points down, so a counter-clockwise outward face maps to a negative shoelace sum.
@@ -638,6 +642,23 @@ mod tests {
         let g = grid(4);
         let total: f32 = (0..g.face_count()).map(|f| g.face_uv_area(f)).sum();
         assert!((total - 1.0).abs() < 1e-5, "{total}");
+    }
+
+    /// A one-texel face of a 4096 tile far from the tile origin keeps its positive area (the
+    /// absolute f32 shoelace read such faces as flipped: the navel and genital charts).
+    #[test]
+    fn one_texel_uv_area_far_from_the_origin_is_exact() {
+        let t = 1.0 / 4096.0;
+        let (u0, v0) = (0.83_f32, 0.93_f32);
+        let mut b = MeshBuilder::new();
+        let w: Vec<u32> = [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)]
+            .iter()
+            .map(|&(x, y): &(f32, f32)| b.vertex(Vec3::new(x, y, 0.0), Vec2::new(u0 + x * t, v0 - y * t)))
+            .collect();
+        b.face(&w, 0).unwrap();
+        let m = b.finish().unwrap();
+        let area = m.face_uv_area(0);
+        assert!((area - t * t).abs() < 0.01 * t * t, "{area} vs {}", t * t);
     }
 
     #[test]

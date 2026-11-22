@@ -298,18 +298,34 @@ const TORSO: [Section; 14] = [
 ];
 
 /// The arm-socket points of the left side, which replace the section points around the arm block.
+/// The front (column 5) and back (column 7) points above the armpit lie lateral of the torso's
+/// columns 4 and 8 and no further forward or back than them, so the anterior and posterior
+/// axillary folds are rounded: the first table had them medial of and in front of (behind) those
+/// columns, which folded the skin into a blade from the armpit to the front of the shoulder and
+/// a kink in the back of the shoulder's outline (wave 10: 26 folded faces per side, test
+/// `axillary_folds_are_rounded`).
 const ARM_SOCKET: [((usize, usize), [f32; 3]); 10] = [
-    ((7, 5), [0.127, 1.295, 0.045]),
+    ((7, 5), [0.134, 1.296, 0.040]),
     ((7, 6), [0.120, 1.300, -0.010]),
-    ((7, 7), [0.122, 1.295, -0.060]),
-    ((8, 7), [0.141, 1.334, -0.076]),
-    ((9, 7), [0.165, 1.372, -0.070]),
+    ((7, 7), [0.130, 1.296, -0.056]),
+    ((8, 7), [0.160, 1.334, -0.064]),
+    ((9, 7), [0.172, 1.372, -0.060]),
     ((10, 7), [0.180, 1.405, -0.045]),
     ((10, 6), [0.192, 1.413, -0.008]),
     ((10, 5), [0.182, 1.401, 0.030]),
-    ((9, 5), [0.168, 1.368, 0.055]),
-    ((8, 5), [0.146, 1.330, 0.066]),
+    ((9, 5), [0.174, 1.368, 0.044]),
+    ((8, 5), [0.161, 1.332, 0.048]),
 ];
+
+/// Back-of-the-shoulder points of the left side (row T10, columns 8 and 9), lower than the
+/// section's: T10's side height (1.412 m) carried behind the socket left the back of the shoulder
+/// as high as the acromion, so the trapezius line ended in a corner over the shoulder and fell
+/// steeply to the arm (wave 10: the bump in the shoulder's outline in the three-quarter
+/// portrait; the outline's slope went -0.38, -2.6, -1.3, now -0.58, -1.4, -1.3, ignored diagnostic
+/// `diag_shoulder_outline`). The section itself stays: lowering T10's side point moves the front
+/// of the neck through the cage fit, which the scanned face's fitting base must not see.
+const SHOULDER_BACK: [((usize, usize), [f32; 3]); 2] =
+    [((10, 8), [0.166, 1.403, -0.067]), ((10, 9), [0.139, 1.406, -0.089])];
 
 /// The head table: per head row H0..H12, the left-side points of columns 0..=6 and the back
 /// midline (column 12) as `(y, z)`; millimetres in the head frame (origin between the tragions).
@@ -587,7 +603,7 @@ pub fn grid_point(a: &Anatomy, r: usize, c: usize) -> Vec3 {
     if r >= ROW_H0 {
         return head_row_point(a, r - ROW_H0, c);
     }
-    for &((rr, cc), p) in &ARM_SOCKET {
+    for &((rr, cc), p) in ARM_SOCKET.iter().chain(&SHOULDER_BACK) {
         if rr == r && cc == c {
             return Vec3::new(p[0], p[1], p[2]);
         }
@@ -796,5 +812,40 @@ mod tests {
             let (p, q) = (section_point(s, c), section_point(s, COLS - c));
             assert!((p.x + q.x).abs() < 1e-6 && (p.y - q.y).abs() < 1e-6 && (p.z - q.z).abs() < 1e-6);
         }
+    }
+
+    /// Wave 10: the subdivided surface around both armpits (|x| 0.11 to 0.21 m, 1.27 to 1.43 m)
+    /// has no folded face (a face whose normal points against one of its corners' mean normals);
+    /// the first socket table folded 26 faces per side there.
+    #[test]
+    fn axillary_folds_are_rounded() {
+        let surface = crate::generate::body_surface().unwrap_or_else(|e| panic!("{e}"));
+        let m = surface.mesh();
+        let face_normal = |f: usize| {
+            let c = m.corners_of(f);
+            let o = m.pos[c[0] as usize];
+            (1..c.len() - 1)
+                .map(|k| (m.pos[c[k] as usize] - o).cross(m.pos[c[k + 1] as usize] - o))
+                .fold(Vec3::ZERO, |a, b| a + b)
+        };
+        let mut normals = vec![Vec3::ZERO; m.pos.len()];
+        for f in 0..m.face_count() {
+            let n = face_normal(f);
+            for &v in m.corners_of(f) {
+                normals[v as usize] += n;
+            }
+        }
+        let folded: Vec<Vec3> = (0..m.face_count())
+            .filter(|&f| {
+                let c = m.centroid(f);
+                (0.11..0.21).contains(&c.x.abs()) && (1.27..1.43).contains(&c.y)
+            })
+            .filter(|&f| {
+                let n = face_normal(f).normalize_or_zero();
+                m.corners_of(f).iter().any(|&v| n.dot(normals[v as usize].normalize_or_zero()) < 0.0)
+            })
+            .map(|f| m.centroid(f))
+            .collect();
+        assert!(folded.is_empty(), "{} folded faces at the armpits, first {:?}", folded.len(), folded.first());
     }
 }

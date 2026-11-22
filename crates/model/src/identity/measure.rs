@@ -21,7 +21,7 @@
 //! |---|---|---|
 //! | `global.height` | top of the head above the soles | `stature` |
 //! | `global.mass` | least-squares fit of waist, chest, buttock and thigh circumference to their expected change per SD of weight at fixed stature ([`mass_targets`]) | `weightkg`, `stature`, `waistcircumference`, `chestcircumference`, `buttockcircumference`, `thighcircumference` and their correlations |
-//! | `global.sex` | the shoulder, hip, waist and neck terms: weight ±1 reaches the male / female mean of the measurement relative to stature ([`Variable::sex_half_difference`]) | `biacromialbreadth`, `hipbreadth`, `waistbreadth`, `neckcircumference`, `stature` |
+//! | `global.sex` | the shoulder, hip, waist and neck terms: one within-sex SD per unit ([`Variable::sd`]) in the direction of [`Variable::sex_half_difference`]; the sexes themselves are the switch (`identity::sex`) | `biacromialbreadth`, `hipbreadth`, `waistbreadth`, `neckcircumference`, `stature` |
 //! | the rest of [`CALIBRATIONS`] | see the table entries | one variable each (two for arm length) |
 
 use humanart_math::Vec3;

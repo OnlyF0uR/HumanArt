@@ -232,6 +232,8 @@ fn components(mesh: &Cage, piece: usize, chart: C, faces: &[usize]) -> Vec<Islan
 struct Flat {
     piece: usize,
     tile: T,
+    /// Packed first, at the tile's corner (the navel and nipple charts, see [`fine_chart`]).
+    first: bool,
     verts: Vec<(u32, Vec2)>,
     faces: Vec<(usize, Vec<u32>)>,
 }
@@ -825,7 +827,7 @@ fn flatten(mesh: &Cage, island: &Island, may_split: bool) -> Result<Option<Flat>
     let s = if a2 > 0.0 { (a3 / a2).sqrt() as f32 } else { 1.0 };
     let verts = sources.iter().zip(&uv).map(|(&v, &q)| (v, q * s)).collect();
     let faces = island.faces.iter().copied().zip(faces).collect();
-    Ok(Some(Flat { piece: island.piece, tile: island.chart.tile(), verts, faces }))
+    Ok(Some(Flat { piece: island.piece, tile: island.chart.tile(), first: fine_chart(island.chart), verts, faces }))
 }
 
 /// Rotates an island to its smallest bounding box; returns (rotated points, width, height).
@@ -864,10 +866,21 @@ fn orient(points: &[Vec2]) -> (Vec<Vec2>, f32, f32) {
     (out, w, h)
 }
 
+/// The charts of millimetre-sized faces (the navel pit, the nipples), which the packer puts at the
+/// start of the first shelf, where one UV coordinate is near zero: placed far from the tile's
+/// corner (wave 10: the navel at u 0.83, v 0.33 after the arm sockets changed the torso charts)
+/// their one-texel faces lose their area to cancellation in `Mesh::face_uv_area` (shoelace on
+/// absolute f32 UVs) and the validator calls them collapsed.
+fn fine_chart(chart: C) -> bool {
+    matches!(chart, C::Navel | C::NippleL | C::NippleR)
+}
+
 /// Shelf packing of boxes `(w, h)` with padding `pad`, row width `limit`: offsets and total size.
-fn shelf(boxes: &[(f32, f32)], pad: f32, limit: f32) -> Shelves {
+/// Boxes marked `first` lead the first shelf; the others follow by decreasing height.
+fn shelf(boxes: &[(f32, f32)], first: &[bool], pad: f32, limit: f32) -> Shelves {
     let mut order: Vec<usize> = (0..boxes.len()).collect();
-    order.sort_by(|&a, &b| boxes[b].1.total_cmp(&boxes[a].1).then(a.cmp(&b)));
+    let lead = |i: usize| first.get(i).copied().unwrap_or(false);
+    order.sort_by(|&a, &b| lead(b).cmp(&lead(a)).then(boxes[b].1.total_cmp(&boxes[a].1)).then(a.cmp(&b)));
     let mut out = vec![Vec2::ZERO; boxes.len()];
     let (mut x, mut y, mut row_h, mut width) = (0.0_f32, 0.0_f32, 0.0_f32, 0.0_f32);
     for i in order {
@@ -917,15 +930,16 @@ pub fn layout(pieces: &[&Cage]) -> Result<Layout> {
         let oriented: Vec<(Vec<Vec2>, f32, f32)> =
             members.iter().map(|&i| orient(&flats[i].verts.iter().map(|v| v.1).collect::<Vec<_>>())).collect();
         let boxes: Vec<(f32, f32)> = oriented.iter().map(|o| (o.1, o.2)).collect();
+        let first: Vec<bool> = members.iter().map(|&i| flats[i].first).collect();
         let area: f32 = boxes.iter().map(|b| b.0 * b.1).sum();
         let widest = boxes.iter().map(|b| b.0).fold(0.0, f32::max);
         // Face tile: shelf widths from 0.6 to 2.0 times the side of the islands' total area, the
         // one that gives the largest scale wins (the single width left more than half of the tile
         // empty and the nostrils under 1000 texels at 1024², `ac_wp15_2`). The other tiles keep
-        // the single width 1.08 for now: repacked, the navel's one-texel faces land far from the
-        // tile origin, where `Mesh::face_uv_area` (shoelace on absolute f32 UVs) loses them to
-        // cancellation and the validator calls them collapsed. Three passes per width: the
-        // padding depends on the final scale.
+        // the single width 1.08 for now (the navel's one-texel faces, which `Mesh::face_uv_area`
+        // loses to f32 cancellation far from the tile's corner, now lead the first shelf:
+        // [`fine_chart`]; the search on every tile is left for a round that re-checks their
+        // bakes). Three passes per width: the padding depends on the final scale.
         let margin = PADDING_TEXELS / resolution as f32;
         let mut best: Option<(f32, Shelves)> = None;
         let widths = if tile == T::Face { PACK_WIDTHS } else { 0 };
@@ -936,7 +950,7 @@ pub fn layout(pieces: &[&Cage]) -> Result<Layout> {
             let mut placed = (Vec::new(), 0.0, 0.0);
             for _ in 0..3 {
                 let pad = PADDING_TEXELS / (resolution as f32 * scale);
-                placed = shelf(&boxes, pad, limit);
+                placed = shelf(&boxes, &first, pad, limit);
                 let extent = placed.1.max(placed.2);
                 scale = (1.0 - 2.0 * margin) / extent;
             }
@@ -1042,7 +1056,7 @@ mod tests {
         let mut rng = humanart_core::rng::Rng::new(7);
         let boxes: Vec<(f32, f32)> = (0..60).map(|_| (rng.range_f32(0.01, 0.21), rng.range_f32(0.01, 0.21))).collect();
         let pad = 0.01;
-        let (at, w, h) = shelf(&boxes, pad, 1.0);
+        let (at, w, h) = shelf(&boxes, &[], pad, 1.0);
         for i in 0..boxes.len() {
             assert!(at[i].x + boxes[i].0 <= w + 1e-6 && at[i].y + boxes[i].1 <= h + 1e-6);
             for j in i + 1..boxes.len() {

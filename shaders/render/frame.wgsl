@@ -73,12 +73,47 @@ struct Frame {
     // Frame index, debug view, shadow map size, flags.
     counters: vec4<u32>,
     lights: array<Light, 8>,
+    // World to clip of the whole image with the TAA jitter (a still's, before its tile is cropped
+    // from it; `view_proj` otherwise): `image_clip` snaps to its sub-pixel grid.
+    image_view_proj: mat4x4<f32>,
 }
 
 // The pixel position in the full image (tiles add their origin): what per-pixel noise is seeded
 // with, so a tiled still has the same noise as the untiled one [QUAL-04].
 fn global_pixel(position: vec2<f32>) -> vec2<f32> {
     return floor(position) + frame.tile.xy;
+}
+
+// Sub-pixel steps of the rasteriser's vertex grid (8 bits: Direct3D and the Vulkan drivers of the
+// supported GPUs).
+const RASTER_SUBPIXELS: f32 = 256.0;
+// Beyond this distance from the image (pixels) a grid step is not representable in f32.
+const RASTER_SNAP_REACH: f32 = 32768.0;
+
+// The clip position of `world` for this frame's target, its x and y snapped to the rasteriser's
+// sub-pixel grid of the WHOLE image [QUAL-04]. A still's tile projects through a cropped matrix,
+// whose rounding differs in the last bits from the untiled image's: the rasteriser then snaps a
+// vertex to a neighbouring grid point now and then, and a sample on a triangle edge changes sides
+// (a silhouette pixel takes the other surface's colour). Snapped here in full-image pixels, the
+// vertex lands on the same grid point in every tile: the tile's offset is a whole number of
+// pixels, and what the rasteriser computes from the result is within a small fraction of a step of
+// a grid point, which it rounds to. Depth and w come from the image matrix, whose z and w rows the
+// crop leaves alone. Vertices behind the eye or far outside the image are left as they are.
+fn image_clip(world: vec3<f32>) -> vec4<f32> {
+    let p = vec4<f32>(world, 1.0);
+    let tile_clip = frame.view_proj * p;
+    let c = frame.image_view_proj * p;
+    if (c.w <= 0.0) {
+        return tile_clip;
+    }
+    let ndc = c.xy / c.w;
+    let pixel = vec2<f32>(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5) * frame.tile.zw;
+    if (any(abs(pixel) > vec2<f32>(RASTER_SNAP_REACH))) {
+        return tile_clip;
+    }
+    let local = round(pixel * RASTER_SUBPIXELS) / RASTER_SUBPIXELS - frame.tile.xy;
+    let t = local / frame.viewport.xy;
+    return vec4<f32>(vec2<f32>(t.x * 2.0 - 1.0, 1.0 - t.y * 2.0) * c.w, c.z, c.w);
 }
 
 // One triangle covering the viewport: vertices (-1, -1), (3, -1), (-1, 3).

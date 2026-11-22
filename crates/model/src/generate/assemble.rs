@@ -7,7 +7,7 @@ use super::Surface;
 use super::anatomy::{Anatomy, sided};
 use super::cage::Cage;
 use super::parts::Part;
-use super::regions::{R, region_table};
+use super::regions::{C, R, region_table};
 use super::uv::Layout;
 use crate::error::{ModelError, Result};
 use crate::mesh::{Mesh, MeshBuilder};
@@ -90,22 +90,44 @@ pub fn assemble(surface: &Surface, parts: &[Part], layout: &Layout) -> Result<As
         piece_vertex_regions.push(vec![p.region; p.mesh.pos.len()]);
     }
     let mut b = MeshBuilder::new();
+    // The copies on the base of the male piece (chart `genital-base`, ADR-039) meet its outer
+    // surface at a hard edge: the base faces into the body, so a shared normal would darken the
+    // rim of the penis root and the scrotum.
+    let mut hard = vec![false; layout.copies.len()];
+    for (pi, mesh) in pieces.iter().enumerate() {
+        for f in 0..mesh.face_count() {
+            if mesh.tags[f].chart != C::GenitalBase.id() {
+                continue;
+            }
+            for k in mesh.offsets[f] as usize..mesh.offsets[f + 1] as usize {
+                if let Some(h) = layout.corner_copies[pi].get(k).and_then(|&c| hard.get_mut(c as usize)) {
+                    *h = true;
+                }
+            }
+        }
+    }
     // One builder vertex per layout copy, in copy order: the first copy of a piece vertex is a
-    // vertex, later ones are UV-seam duplicates of it.
-    let mut first: Vec<Vec<u32>> = pieces.iter().map(|m| vec![u32::MAX; m.pos.len()]).collect();
+    // vertex, later ones are UV-seam duplicates of the first copy on the same side of a hard edge
+    // (hard-edge duplicates of the other side's first copy when their side has none yet).
+    let mut first: [Vec<Vec<u32>>; 2] =
+        [0, 1].map(|_| pieces.iter().map(|m| vec![u32::MAX; m.pos.len()]).collect());
     let mut source = Vec::with_capacity(layout.copies.len());
     let mut vertex_regions = Vec::with_capacity(layout.copies.len());
-    for c in &layout.copies {
+    for (i, c) in layout.copies.iter().enumerate() {
         let (pi, v) = (c.piece as usize, c.vertex as usize);
         let p = pieces[pi].pos[v];
-        let slot = &mut first[pi][v];
-        let id = if *slot == u32::MAX {
-            let id = b.vertex(p, c.uv);
-            *slot = id;
-            id
+        let side = usize::from(hard[i]);
+        let (own, other) = (first[side][pi][v], first[1 - side][pi][v]);
+        let id = if own != u32::MAX {
+            b.duplicate(own, c.uv, true)?
+        } else if other != u32::MAX {
+            b.duplicate(other, c.uv, false)?
         } else {
-            b.duplicate(*slot, c.uv, true)?
+            b.vertex(p, c.uv)
         };
+        if own == u32::MAX {
+            first[side][pi][v] = id;
+        }
         debug_assert_eq!(id as usize, source.len());
         source.push((c.piece, c.vertex));
         vertex_regions.push(piece_vertex_regions[pi][v].id());

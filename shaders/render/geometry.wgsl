@@ -96,7 +96,7 @@ fn vs_geometry(@builtin(vertex_index) vertex: u32, @builtin(instance_index) obje
     let object = objects[object_index];
     let world = world_position(object, vertex);
     var out: VertexOut;
-    out.clip = frame.view_proj * vec4<f32>(world, 1.0);
+    out.clip = image_clip(world);
     out.world = world;
     out.normal = world_normal(object, vertex);
     out.uv = fetch_uv(vertex);

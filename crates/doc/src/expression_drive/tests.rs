@@ -182,3 +182,44 @@ fn perf_r1_evaluate_does_not_allocate() {
     });
     assert_eq!(counts.allocations, 0, "[PERF-R1] the expression drive does not allocate");
 }
+
+/// `todo.md` 2.3 / 1.8: the viseme controls have registry parameters, so every preset (emotions and
+/// visemes) can be set as document values, and the document drives the same face as the controls.
+#[test]
+fn exp_07_every_preset_control_has_a_parameter_and_visemes_drive_the_rig() {
+    let (t, reg) = (generated(), real_registry());
+    let presets = humanart_model::expression::presets::Presets::builtin().unwrap();
+    let mut drive = ExpressionDrive::new(&t, &reg).unwrap();
+    for name in drive.rig().controls().iter().filter(|c| c.starts_with("viseme.")) {
+        let p = ExpressionDrive::param_of_control(&reg, name).unwrap_or_else(|| panic!("{name} has no parameter"));
+        assert!(p.id.starts_with("expression.viseme."), "{name} -> {}", p.id);
+        assert!(drive.drives_param(reg.index_of(&p.id).unwrap()), "{}", p.id);
+    }
+    assert!(ExpressionDrive::param_of_control(&reg, "viseme.no-such-control").is_none());
+    let mut by_controls = ExpressionDrive::new(&t, &reg).unwrap();
+    let mut checked = 0;
+    for preset in &presets.presets {
+        let mut d = doc();
+        for (control, value) in &preset.controls {
+            let p = ExpressionDrive::param_of_control(&reg, control)
+                .unwrap_or_else(|| panic!("{}: control {control} has no parameter", preset.name));
+            d.set_param(&reg, &p.id, ParamValue::Scalar(f64::from(*value)), "human.test").unwrap();
+        }
+        drive.evaluate(&d, &reg).unwrap();
+        // The same values given straight to the rig's controls.
+        for c in by_controls.rig().controls().to_vec() {
+            by_controls.set_control(&c, 0.0);
+        }
+        for (control, value) in &preset.controls {
+            assert!(by_controls.set_control(control, *value));
+        }
+        by_controls.run().unwrap();
+        assert_eq!(drive.expressions(), by_controls.expressions(), "{}", preset.name);
+        assert_eq!(drive.pose(), by_controls.pose(), "{}", preset.name);
+        if preset.name.starts_with("viseme.") && preset.name != "viseme.sil" {
+            assert!(drive.expressions().iter().any(|&w| w > 0.0), "{} moves nothing", preset.name);
+        }
+        checked += 1;
+    }
+    assert!(checked >= 37, "{checked} presets");
+}

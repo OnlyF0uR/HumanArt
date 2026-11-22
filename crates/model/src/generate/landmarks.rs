@@ -26,6 +26,7 @@ use super::Surface;
 use super::anatomy::{Anatomy, CERVICALE_HEIGHT, FINGERS, SUPRASTERNALE_HEIGHT, sided};
 use super::assemble::Assembled;
 use super::body::head_point;
+use super::limbs::{finger_joints, thumb_joints};
 use super::regions::R;
 use crate::error::{ModelError, Result};
 use crate::landmark::{Landmark, LandmarkGroup};
@@ -495,12 +496,14 @@ fn face_sided(f: &Finder<'_>, s: &Surface, list: &mut List, side: f32) -> Result
     let rim = ear.rings.get(3).ok_or(ModelError::invalid("landmark", 3, "ear has no helix rim ring"))?;
     let mut order: Vec<usize> = (0..rim.len().min(ear.params.len())).collect();
     order.sort_by(|&p, &q| ear.params[p].rem_euclid(TAU).total_cmp(&ear.params[q].rem_euclid(TAU)));
+    // The finished auricle's rim has twice the block's slots: slot `j` of the block is `2 j`.
+    let stride = (rim.len() / ear.params.len().max(1)).max(1);
     for (k, &j) in order.iter().enumerate() {
         list.push(
             format!("ear.{l}.helix.{:02}", k + 1),
             g,
             "Helix rim point, from the back over the top to the front and the lobe.",
-            f.piece_vertex(0, slot(rim, j)?)?,
+            f.piece_vertex(0, slot(rim, j * stride)?)?,
         );
     }
     list.push(format!("ear.{l}.concha"), g, "The floor of the concha.", f.piece_vertex(0, ear.concha)?);
@@ -628,19 +631,29 @@ fn body_sided(f: &Finder<'_>, a: &Anatomy, list: &mut List, side: f32) -> Result
         ("ring", R::HandLRing, R::HandRRing, distal),
         ("little", R::HandLLittle, R::HandRLittle, distal),
     ];
-    for (finger, left, right, dir) in hand_regions {
+    // The nail plates (todo 1.3) are their own regions: the tip is searched on the digit and its
+    // nail, within 12 mm of the digit's end joint.
+    let nail = [R::sided(R::HandLNail, R::HandRNail, side), R::sided(R::HandLLunula, R::HandRLunula, side)];
+    for (k, (finger, left, right, dir)) in hand_regions.into_iter().enumerate() {
+        let chain = if k == 0 { thumb_joints(a, side) } else { finger_joints(a, k - 1, side) };
+        let end = chain.last().copied().unwrap_or(Vec3::ZERO);
         list.push(
             format!("{l}.hand.{finger}.tip"),
             g,
             "Fingertip: the farthest point of the digit.",
-            f.extreme("body", &[R::sided(left, right, side)], &|_| true, sided_dir(dir, side))?,
+            f.extreme(
+                "body",
+                &[R::sided(left, right, side), nail[0], nail[1]],
+                &|p| p.distance(end) < 0.012,
+                sided_dir(dir, side),
+            )?,
         );
     }
     let ankle_y = a.ankle.y;
     let foot = if side > 0.0 {
-        [R::FootL, R::FootLDorsum, R::FootLSole, R::FootLToes]
+        [R::FootL, R::FootLDorsum, R::FootLSole, R::FootLArch, R::FootLToes, R::FootLNail]
     } else {
-        [R::FootR, R::FootRDorsum, R::FootRSole, R::FootRToes]
+        [R::FootR, R::FootRDorsum, R::FootRSole, R::FootRArch, R::FootRToes, R::FootRNail]
     };
     let fd = sided_dir(a.foot_dir, side);
     // The metatarsal heads: the widest points of the forefoot (behind the toes).
@@ -651,13 +664,13 @@ fn body_sided(f: &Finder<'_>, a: &Anatomy, list: &mut List, side: f32) -> Result
         format!("{l}.foot.mtp1"),
         g,
         "The head of the first metatarsal: the medial edge of the ball of the foot.",
-        f.extreme("body", &foot[..3], &forefoot, medial - Vec3::Y * 0.5)?,
+        f.extreme("body", &foot[..4], &forefoot, medial - Vec3::Y * 0.5)?,
     );
     list.push(
         format!("{l}.foot.mtp5"),
         g,
         "The head of the fifth metatarsal: the lateral edge of the forefoot.",
-        f.extreme("body", &foot[..3], &forefoot, -medial - Vec3::Y * 0.5)?,
+        f.extreme("body", &foot[..4], &forefoot, -medial - Vec3::Y * 0.5)?,
     );
     list.push(
         format!("{l}.heel"),
@@ -669,7 +682,7 @@ fn body_sided(f: &Finder<'_>, a: &Anatomy, list: &mut List, side: f32) -> Result
         format!("{l}.foot.tip"),
         g,
         "Acropodion: the tip of the longest toe.",
-        f.extreme("body", &foot[3..], &|_| true, fd)?,
+        f.extreme("body", &foot[4..], &|_| true, fd)?,
     );
     Ok(())
 }
@@ -690,6 +703,70 @@ pub fn build(surface: &Surface, asm: &Assembled) -> Result<Vec<Described>> {
     let names: Vec<&str> = list.out.iter().map(|d| d.landmark.name.as_str()).collect();
     crate::names::check_names("landmark", names.into_iter())?;
     Ok(list.out)
+}
+
+/// Finds the midline profile landmarks again on the finished head (todo 1.3).
+///
+/// [`build`] runs on the procedural head, which has no brow prominence and whose chin region
+/// reaches far down the underside: there `forehead.glabella` and `nose.root` both end at the
+/// limit of their search, `chin.menton` lies 47 mm behind the pogonion and `neck.front` sits on
+/// the chin. The scanned face ([`super::scan_face`]) then moves the surface; this function looks
+/// for the same points on the moved mesh `asm`, by the same rules where they hold and by these
+/// where they did not:
+///
+/// - `chin.menton`: the midline vertex within 35 mm below and 25 mm behind the pogonion that lies
+///   farthest along a direction 60 degrees below the horizontal (the lowest point of the chin's
+///   outline; the underside that runs back into the neck does not count);
+/// - `neck.front`: a ray along `+Z` at 40 % of the height from the menton down to the
+///   suprasternale (the laryngeal prominence lies at C4/C5).
+///
+/// The names stay; only the faces and weights of `forehead.glabella`, `nose.root`,
+/// `nose.bridge.01/02`, `chin.supramentale`, `chin.mid`, `chin.menton` and `neck.front` change.
+///
+/// # Errors
+/// A missing landmark name or a search that finds nothing.
+pub fn refit_profile(surface: &Surface, asm: &Assembled, described: &mut [Described]) -> Result<()> {
+    let f = Finder::new(asm);
+    let a = &surface.anatomy;
+    let pos = asm.mesh.positions();
+    let at = |described: &[Described], name: &str| -> Result<Vec3> {
+        described
+            .iter()
+            .find(|d| d.landmark.name == name)
+            .and_then(|d| d.landmark.position(pos))
+            .ok_or(ModelError::invalid("landmark refit", 0, "a profile landmark is missing"))
+    };
+    let mut found: Vec<(&str, Hit)> = Vec::with_capacity(8);
+    let (glabella, gy) = profile_extreme(&f, a, 15.0, 55.0, true)?;
+    found.push(("forehead.glabella", glabella));
+    let (nasion, ny) = profile_extreme(&f, a, 0.0, gy, false)?;
+    found.push(("nose.root", nasion));
+    let tip_y = head_mm(a, at(described, "nose.tip")?).y;
+    for (name, w) in [("nose.bridge.01", 1.0 / 3.0), ("nose.bridge.02", 2.0 / 3.0)] {
+        found.push((name, profile(&f, a, ny + (tip_y - ny) * w)?.0));
+    }
+    let li_y = head_mm(a, at(described, "lip.lower.outer.06")?).y;
+    let (supramentale, sm_y) = profile_extreme(&f, a, li_y - 22.0, li_y - 3.0, false)?;
+    found.push(("chin.supramentale", supramentale));
+    let (pogonion, _) = profile_extreme(&f, a, sm_y - 30.0, sm_y - 3.0, true)?;
+    found.push(("chin.mid", pogonion));
+    let pog = f.position(&pogonion);
+    let keep = |p: Vec3| p.x.abs() < 0.004 && p.y <= pog.y && p.y > pog.y - 0.035 && p.z > pog.z - 0.025;
+    let menton = f.extreme("body", &[], &keep, Vec3::new(0.0, -0.866, 0.5))?;
+    let me_y = f.position(&menton).y;
+    found.push(("chin.menton", menton));
+    let larynx_y = me_y + 0.4 * (SUPRASTERNALE_HEIGHT - me_y);
+    found.push(("neck.front", f.ray("body", Vec3::new(0.0, larynx_y, a.neck[1].z), Vec3::Z)?));
+    for (name, (vertices, weights)) in found {
+        let d = described.iter_mut().find(|d| d.landmark.name == name).ok_or(ModelError::invalid(
+            "landmark refit",
+            0,
+            "a profile landmark is missing",
+        ))?;
+        d.landmark.vertices = vertices;
+        d.landmark.weights = weights;
+    }
+    Ok(())
 }
 
 /// The text of `data/template/landmarks.json`: every landmark with its group, description, face

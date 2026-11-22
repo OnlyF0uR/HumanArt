@@ -155,6 +155,14 @@ region_table! {
     Penis = "penis", Genitals, Center;
     Glans = "glans", Penis, Center;
     Scrotum = "scrotum", Genitals, Center;
+    HandLNail = "hand-L.nail", HandL, Left;
+    HandRNail = "hand-R.nail", HandR, Right;
+    HandLLunula = "hand-L.lunula", HandLNail, Left;
+    HandRLunula = "hand-R.lunula", HandRNail, Right;
+    FootLNail = "foot-L.nail", FootLToes, Left;
+    FootRNail = "foot-R.nail", FootRToes, Right;
+    FootLArch = "foot-L.arch", FootLSole, Left;
+    FootRArch = "foot-R.arch", FootRSole, Right;
 }
 
 impl R {
@@ -303,6 +311,7 @@ chart_table! {
     Vulva = "vulva", Torso;
     Penis = "penis", Torso;
     Scrotum = "scrotum", Torso;
+    GenitalBase = "genital-base", Torso;
 }
 
 impl C {

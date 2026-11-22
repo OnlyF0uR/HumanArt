@@ -19,6 +19,11 @@
 //!
 //! The lash shadow is a hook: [`Features::set_lashes`] (0 = no lashes, the default until the
 //! groom draws lashes) darkens the band of the eyeball under the upper lid.
+//!
+//! The document's eye and mouth materials (todo 2.3) arrive through [`Features::set_materials`]
+//! (`Model::materials`): each eye gets its own parameters (heterochromia, the iris pattern's
+//! seed), the mouth its teeth, gum and tongue values; the entries are rewritten on the next
+//! [`Features::sync`], without allocating.
 
 use humanart_gpu::resources::Resources;
 use humanart_math::{Quat, Vec3};
@@ -26,6 +31,7 @@ use humanart_model::Template;
 use humanart_model::eval::penetration::{PenetrationGuard, part_vertices};
 use humanart_model::eye::{EyeParams, EyeVertices, LidLandmarks};
 use humanart_model::mouth::{LipLandmarks, MouthParams};
+use humanart_model::skin_appearance::materials::{MaterialValues, Side};
 use humanart_render::camera::{Camera, ReviewCamera};
 use humanart_render::deform::GpuDeformer;
 use humanart_render::eye::guard::GuardMirror;
@@ -227,7 +233,7 @@ pub struct Features {
     shading: Vec<EyeShading>,
     mouth: Option<MouthSlot>,
     head: Option<usize>,
-    eye: EyeParams,
+    eye: [EyeParams; 2],
     mouth_params: MouthParams,
     lashes: f32,
     mirror: Option<GuardMirror>,
@@ -323,7 +329,7 @@ impl Features {
             shading,
             mouth,
             head,
-            eye: EyeParams::default(),
+            eye: [EyeParams::default(); 2],
             mouth_params: MouthParams::default(),
             lashes: 0.0,
             mirror,
@@ -347,8 +353,31 @@ impl Features {
 
     /// The eye parameters (shape, iris, sclera) of both eyes.
     pub fn set_eye_params(&mut self, params: EyeParams) {
-        self.eye = params;
+        self.eye = [params; 2];
         self.synced = 0;
+    }
+
+    /// The eye parameters of each eye (left first).
+    pub fn eye_params(&self) -> &[EyeParams; 2] {
+        &self.eye
+    }
+
+    /// The teeth, gums and tongue parameters in use.
+    pub fn mouth_params(&self) -> &MouthParams {
+        &self.mouth_params
+    }
+
+    /// The document's eye and mouth materials (`Model::materials`, todo 2.3): each eye's
+    /// parameters and the mouth's. Marks the entries for rewriting only when something changed.
+    /// No allocation.
+    pub fn set_materials(&mut self, materials: &MaterialValues) {
+        let eyes = Side::BOTH.map(|s| materials.eye_params(s));
+        let mouth = materials.mouth_params();
+        if eyes != self.eye || mouth != self.mouth_params {
+            self.eye = eyes;
+            self.mouth_params = mouth;
+            self.synced = 0;
+        }
     }
 
     /// The teeth, gums and tongue parameters.
@@ -377,10 +406,11 @@ impl Features {
         let positions = model.positions();
         let head =
             self.head.and_then(|h| model.evaluator().joints().skin_rotations.get(h).copied()).unwrap_or(Quat::IDENTITY);
-        for (slot, shading) in self.eyes.iter().zip(self.shading.iter_mut()) {
+        for (i, (slot, shading)) in self.eyes.iter().zip(self.shading.iter_mut()).enumerate() {
             let Some(frame) = slot.vertices.frame(positions) else { continue };
             let Ok(aperture) = slot.lids.aperture(landmarks, positions, frame.centre, head) else { continue };
-            let next = EyeShading { frame, head, params: self.eye, aperture, lashes: self.lashes, ..*shading };
+            let params = self.eye.get(i).copied().unwrap_or_default();
+            let next = EyeShading { frame, head, params, aperture, lashes: self.lashes, ..*shading };
             if let Ok(entry) = next.entry() {
                 self.table.set(slot.entry, &entry)?;
                 *shading = next;
@@ -615,6 +645,66 @@ mod tests {
         viewer.destroy(&mut res);
         assert!(pupil < 40, "the traced pupil is dark (plain eyeball material would be light): {pupil}");
         assert!(sclera > pupil + 40, "the sclera beside the iris is light: {sclera} vs {pupil}");
+    }
+
+    /// todo 2.3: the document's iris colour and mouth values reach the feature table the
+    /// renderer reads: a blue iris (left eye only) shows in the eye close-up, the right eye keeps
+    /// the default; the pictures go to target/review/params/eye-iris-{default,blue}.png.
+    #[test]
+    fn todo_2_3_document_eye_and_mouth_materials_reach_the_feature_table() {
+        use humanart_doc::document::{Author, AuthorKind, Document};
+        use humanart_doc::registry::ParamValue;
+        use humanart_gpu::resources::Budget;
+
+        use super::super::view::{Viewer, ViewerOptions};
+        let reg = super::super::tests::registry();
+        let mut model = Model::new(Arc::new(super::super::tests::template().clone()), reg);
+        let me = Author { id: "human.test".into(), kind: AuthorKind::Human, name: "Test".into() };
+        let mut doc = Document::new(humanart_core::id::Id128::from_u128(23), "t", "generated", 1, 0, me);
+        model.sync(&doc, reg).unwrap();
+        let gpu = humanart_gpu::shared_headless().unwrap();
+        let mut res = Resources::new(gpu, Budget::UNLIMITED);
+        let (w, h) = (192, 128);
+        let options = ViewerOptions { hair: None, ..ViewerOptions::default() };
+        let mut viewer = Viewer::with_options(gpu, &mut res, &model, w, h, options).unwrap();
+        #[allow(clippy::cast_precision_loss)]
+        let camera = close_up_camera(&model, CloseUp::Eye, Framing::Head, w as f32 / h as f32).unwrap();
+        viewer.set_camera(camera);
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/review/params");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut shoot = |viewer: &mut Viewer, model: &mut Model, name: &str| -> Vec<u8> {
+            for _ in 0..6 {
+                let mut enc = gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: Some("t") });
+                viewer.record(&mut res, &mut enc, model, &[]).unwrap();
+                gpu.queue.submit([enc.finish()]);
+                viewer.after_submit();
+            }
+            let (tw, th, rgba) =
+                humanart_render::capture::read_texture(&mut res, viewer.display_texture().unwrap(), 0).unwrap();
+            let png = humanart_render::capture::encode_png_rgba8(tw, th, &rgba).unwrap();
+            std::fs::write(dir.join(name), png).unwrap();
+            rgba
+        };
+        let before = shoot(&mut viewer, &mut model, "eye-iris-default.png");
+        let blue = [0.04, 0.12, 0.42];
+        doc.params.insert("eyes.iris.color.l".into(), ParamValue::Color(blue.map(f64::from)));
+        doc.params.insert("mouth.teeth.stain".into(), ParamValue::Scalar(0.9));
+        model.sync(&doc, reg).unwrap();
+        let after = shoot(&mut viewer, &mut model, "eye-iris-blue.png");
+        let f = viewer.features_mut().unwrap();
+        assert_eq!(f.eye_params()[0].iris.outer_color, blue);
+        assert_ne!(f.eye_params()[1].iris.outer_color, blue, "the right eye keeps the default");
+        assert_eq!(f.mouth_params().teeth.stain, 0.9);
+        let blueness = |img: &[u8]| -> f64 {
+            img.as_chunks::<4>().0.iter().map(|p| f64::from(p[2]) - f64::from(p[0])).sum::<f64>()
+                / (img.len() / 4) as f64
+        };
+        let changed = before.as_chunks::<4>().0.iter().zip(after.as_chunks::<4>().0).filter(|(a, b)| a != b).count();
+        let (b0, b1) = (blueness(&before), blueness(&after));
+        println!("[todo 2.3] eye close-up: {changed} pixels changed, mean blue-red {b0:.2} -> {b1:.2}");
+        viewer.destroy(&mut res);
+        assert!(changed > 200, "{changed}");
+        assert!(b1 > b0 + 1.0, "the iris turns blue: {b0} -> {b1}");
     }
 
     /// The incisor show and the molar clearance with the jaw open `[MTH-04]` (todo 1.6): the

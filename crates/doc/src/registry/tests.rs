@@ -526,3 +526,6 @@ fn rob_01_registry_parser_survives_mutation_fuzz() {
         }
     });
 }
+
+/// `todo.md` 2.3: every registry parameter moves the character.
+mod effect;

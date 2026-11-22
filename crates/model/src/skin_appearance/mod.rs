@@ -23,9 +23,12 @@
 //! - [`antitile`]: histogram-preserving tiling and blending (Heitz & Neyret 2018).
 //! - [`spectrum`]: FFT, power spectra, autocorrelation and the tiling detector `[AC-WP13-2]`.
 //! - [`features`]: the procedural skin features library `[OTH-02]`.
+//! - [`feature_layers`]: the document's feature layers, their global settings and region masks
+//!   (todo 2.3).
 //! - [`noise`]: the PCG hash and periodic noise shared with the WGSL.
 //! - [`regional`]: measured regional specular and sebum per face zone (todo 1.4).
 //! - [`values`]: the document's global skin values and what they set (todo 1.4).
+//! - [`materials`]: the document's eye, mouth and hair-colour materials (todo 2.3).
 //! - [`wrinkle_author`]: the template's procedural expression wrinkle maps (todo 1.4).
 //! - [`variation`]: low-frequency skin tone variation over the rest surface (todo 1.4).
 //! - [`baked`]: baked thickness and occlusion to the compositor's input bytes (todo 1.4).
@@ -36,8 +39,10 @@ pub mod baked;
 pub mod channels;
 pub mod dirty;
 pub mod error;
+pub mod feature_layers;
 pub mod features;
 pub mod layers;
+pub mod materials;
 pub mod microdetail;
 pub mod noise;
 pub mod pigment;

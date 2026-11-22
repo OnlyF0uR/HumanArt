@@ -821,6 +821,7 @@ fn median(samples: &mut [f64]) -> f64 {
 // measured, since a miss is reported as a number, not hidden behind a skipped test.
 #[test]
 fn ac_wp10_2_deformation_timings() {
+    let _timing = crate::tests::gpu_timing_lock();
     let gpu = gpu();
     assert!(
         gpu.features().contains(wgpu::Features::TIMESTAMP_QUERY),

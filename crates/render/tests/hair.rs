@@ -928,3 +928,124 @@ fn hr_08_preset_stills_front_profile_back() {
         drop(keep);
     }
 }
+
+/// `[QUAL-04]` with hair (what the tiled 8K still of `tests/stills.rs` does not cover: its scene
+/// has none): a 2048 x 2048 still of the template head, three-quarter view, with the medium
+/// straight groom set (30 000 scalp strands, brows, lashes), rendered in 1024 pixel tiles with a
+/// 32 pixel overlap against the same still untiled, and the same pair without hair as the
+/// baseline of the skin under it. Counted like the 8K test: samples that differ by more than one
+/// code value, the largest difference, and how many of the differing samples lie within 2 pixels
+/// of a tile seam. Pictures: target/review/light/rf-hair-still-tiled.png (half size) and
+/// rf-hair-still-difference.png (white where a 4 x 4 block holds a sample differing by more than
+/// one code).
+///
+/// Ignored until the hair resolve can see past its tile (measured 2026-11-22, RTX 4060): without
+/// hair 5 of 16.8 M samples differ by more than one code (max 2), with hair 36 832 (max 24, mean
+/// 0.0133; bound 167 and 0.002). Cause: `scene_contact` in shaders/hair/resolve.wgsl marches the
+/// depth buffer in screen space up to the groom's extent and counts a point outside the target as
+/// open, so a tile lights hair the whole image shows occluded (with the march forced to 1, 207
+/// samples differ, max 15, mean 0.00056). The rest is the hair raster projecting with `view_proj`
+/// instead of the whole image's sub-pixel grid (`image_clip` in frame.wgsl). Run with `--ignored`.
+#[test]
+#[ignore = "QUAL-04 with hair: the hair resolve's screen-space march stops at the tile (see doc)"]
+fn qual_04_tiled_still_with_hair_equals_the_untiled_render() {
+    use humanart_model::hair::ScalpStyle;
+    use humanart_render::camera::ReviewCamera;
+    use humanart_render::hair::HairSettings;
+    use humanart_render::light::BuiltinRig;
+    use humanart_render::renderer::{Quality, RenderConfig};
+    use humanart_render::still::{StillSettings, render_still};
+    use template_head::{camera, harness, install, rig};
+
+    let set = template_head::grooms(ScalpStyle::MediumStraight, 30_000);
+    let (w, h, samples) = (2048_u32, 2048_u32, 4);
+    let tile = 1024_u32;
+    let render = |hair: Option<HairSettings>, tile: u32, overlap: u32| {
+        let settings = StillSettings { width: w, height: h, tile, overlap, samples };
+        let (tw, th) = settings.target_size();
+        let mut hx = harness(RenderConfig { quality: Quality::Still, ..RenderConfig::new(tw, th) });
+        let keep = hair.map(|hair| install(&mut hx, &set, hair));
+        let r = rig(&mut hx, BuiltinRig::NeutralStudio);
+        let cam = camera(ReviewCamera::ThreeQuarterLeft, 1.0, 1.0, &r);
+        let image = render_still(&mut hx.renderer, &mut hx.resources, &mut hx.scene, &cam, &r, &settings).unwrap();
+        drop(keep);
+        image
+    };
+    // (samples above one code, largest difference, mean difference, of the first within 2 px of a seam)
+    let compare = |untiled: &[u8], tiled: &[u8]| {
+        let (mut differing, mut max, mut sum, mut at_seam) = (0_usize, 0_u8, 0_u64, 0_usize);
+        for (i, (a, b)) in untiled.iter().zip(tiled).enumerate() {
+            let d = a.abs_diff(*b);
+            max = max.max(d);
+            sum += u64::from(d);
+            if d > 1 {
+                differing += 1;
+                let pixel = (i / 4) as u32;
+                let (x, y) = (pixel % w, pixel / w);
+                if x % tile < 2 || x % tile > tile - 3 || y % tile < 2 || y % tile > tile - 3 {
+                    at_seam += 1;
+                }
+            }
+        }
+        (differing, max, sum as f64 / untiled.len() as f64, at_seam)
+    };
+    let bald_untiled = render(None, w, 0);
+    let bald_tiled = render(None, tile, 32);
+    let hair_untiled = render(Some(HairSettings::default()), w, 0);
+    let hair_tiled = render(Some(HairSettings::default()), tile, 32);
+    let bald = compare(&bald_untiled, &bald_tiled);
+    let hair = compare(&hair_untiled, &hair_tiled);
+    // Hair pixels: where the hair changed the untiled still.
+    let hair_samples = bald_untiled.iter().zip(&hair_untiled).filter(|(a, b)| a.abs_diff(**b) > 2).count();
+    println!(
+        "[QUAL-04] 2048 x 2048 still in 1024 tiles, of {} samples: without hair {} differ by more than 1 code (max {}, mean {:.6}, {} at a seam); with hair ({hair_samples} samples changed by it) {} differ (max {}, mean {:.6}, {} at a seam)",
+        hair_untiled.len(),
+        bald.0,
+        bald.1,
+        bald.2,
+        bald.3,
+        hair.0,
+        hair.1,
+        hair.2,
+        hair.3
+    );
+    let dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/review/light");
+    std::fs::create_dir_all(&dir).unwrap();
+    let (hw, hh) = (w / 2, h / 2);
+    let mut half = vec![0_u8; (hw * hh * 4) as usize];
+    let (mw, mh) = (w / 4, h / 4);
+    let mut map = vec![0_u8; (mw * mh * 4) as usize];
+    for y in 0..h {
+        for x in 0..w {
+            let i = ((y * w + x) * 4) as usize;
+            if x % 2 == 0 && y % 2 == 0 {
+                let o = ((y / 2 * hw + x / 2) * 4) as usize;
+                half[o..o + 4].copy_from_slice(&hair_tiled[i..i + 4]);
+            }
+            if (0..3).any(|c| hair_untiled[i + c].abs_diff(hair_tiled[i + c]) > 1) {
+                let m = ((y / 4 * mw + x / 4) * 4) as usize;
+                map[m..m + 3].fill(255);
+            }
+        }
+    }
+    map.chunks_exact_mut(4).for_each(|p| p[3] = 255);
+    let png = |name: &str, pw: u32, ph: u32, rgba: &[u8]| {
+        std::fs::write(dir.join(name), humanart_render::capture::encode_png_rgba8(pw, ph, rgba).unwrap()).unwrap();
+    };
+    png("rf-hair-still-tiled.png", hw, hh, &half);
+    png("rf-hair-still-difference.png", mw, mh, &map);
+    assert!(hair_samples > 200_000, "the hair is in the picture: {hair_samples}");
+    assert!(hair.2 < HAIR_STILL_MEAN, "mean difference {}", hair.2);
+    assert!(
+        hair.0 < hair_untiled.len() / HAIR_STILL_DIFFERING,
+        "{} samples differ by more than one code value",
+        hair.0
+    );
+    assert!(hair.3 <= hair.0 / 20 + 2, "tile seams show: {} of {}", hair.3, hair.0);
+}
+
+/// Bounds of `qual_04_tiled_still_with_hair_equals_the_untiled_render`: the mean difference in code
+/// values, and one sample in this many that may differ by more than one code (the bounds of the 8K
+/// still without hair).
+const HAIR_STILL_MEAN: f64 = 0.002;
+const HAIR_STILL_DIFFERING: usize = 100_000;

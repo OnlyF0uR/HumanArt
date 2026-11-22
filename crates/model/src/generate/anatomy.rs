@@ -71,12 +71,21 @@ pub const KNEE_HEIGHT: f32 = 0.479;
 /// Lateral malleolus height, ANSUR II `lateralmalleolusheight` (72.9 / 62.7 mm): the ankle centre's
 /// height.
 pub const MALLEOLUS_HEIGHT: f32 = 0.068;
+/// Ear length, top of the helix to the bottom of the lobe along the ear's long axis, ANSUR II
+/// `earlength` (64.2 / 59.4 mm): the finished auricle (`face::ear`, [`Auricle::Finished`]).
+pub const EAR_LENGTH: f32 = 0.062;
+/// Ear breadth, the widest across the ear at right angles to its long axis, ANSUR II
+/// `earbreadth` (36.1 / 33.2 mm).
+pub const EAR_BREADTH: f32 = 0.035;
+/// Ear protrusion, the horizontal distance from the skin of the head to the back of the helix,
+/// ANSUR II `earprotrusion` (23.2 / 20.4 mm).
+pub const EAR_PROTRUSION: f32 = 0.022;
 /// Glenohumeral joint centre below the acromion: a design value (**unsourced**); with it the
 /// shoulder-to-elbow distance is `ACROMION_RADIALE` less about this offset.
 pub const ACROMION_ABOVE_SHOULDER: f32 = 0.020;
 
 /// The ANSUR II variable each cited constant equals (sex midpoint, metres), for the data test.
-pub const ANSUR_CITED: [(&str, f32); 18] = [
+pub const ANSUR_CITED: [(&str, f32); 21] = [
     ("stature", STATURE),
     ("tragiontopofhead", TRAGION_TO_VERTEX),
     ("biacromialbreadth", BIACROMIAL),
@@ -95,6 +104,9 @@ pub const ANSUR_CITED: [(&str, f32); 18] = [
     ("trochanterionheight", TROCHANTERION_HEIGHT),
     ("lateralfemoralepicondyleheight", KNEE_HEIGHT),
     ("lateralmalleolusheight", MALLEOLUS_HEIGHT),
+    ("earlength", EAR_LENGTH),
+    ("earbreadth", EAR_BREADTH),
+    ("earprotrusion", EAR_PROTRUSION),
 ];
 
 /// The rest pose: arm abduction from the vertical, radians (an A-pose, 45 degrees; a pose, not

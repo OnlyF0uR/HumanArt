@@ -15,7 +15,7 @@ use humanart_math::{Vec2, Vec3, ndc_to_screen};
 use humanart_render::camera::{Camera, Exposure, ViewMatrices};
 use humanart_render::capture;
 use humanart_render::ibl::EnvironmentSource;
-use humanart_render::light::{Background, Light, LightColor, LightRig, ProceduralEnvironment};
+use humanart_render::light::{Background, BuiltinRig, Light, LightColor, LightRig, ProceduralEnvironment};
 use humanart_render::renderer::{DebugView, Quality, RenderConfig};
 use humanart_render::scene::{Material, Mesh, Scene};
 use humanart_render::sss::{self, SKIN_CLASS, SkinShading};
@@ -160,6 +160,275 @@ fn ac_wp14_1_subsurface_passes_match_the_cpu_kernel() {
     assert!(peak > 0.1 && edge_change > 0.1 * peak, "the shadow edge gives the blur something to do");
     assert!(worst < 0.01 * peak, "GPU and CPU kernels differ by {worst}");
 }
+
+/// Todo 1.4 (the red ring in the eye socket): the subsurface passes across a depth step against the
+/// CPU reference. A lit skin shelf 4 mm in front of a skin floor, lit from the side 30 degrees
+/// above the floor, casts a shadow 6.9 mm long on the floor beside it (a shadowed pit next to a
+/// lit rim). The step is deeper than the shadow lookup's normal offset at that angle (about 1 mm,
+/// `SHADOW_TERMINATOR_OFFSET` in lighting.wgsl) plus its least penumbra (0.8 mm): with a 2.5 mm
+/// step lit at 45 or 14 degrees the strip beside the shelf kept 6 to 12 % of the light. The
+/// GPU blur matches `sss::blur_pass_reference` on its own input (depths included), and in the
+/// shadowed strip it carries clearly less light over the step than the same blur on a flat surface
+/// would (the reference with the floor's depth everywhere), red the most.
+#[test]
+fn todo_1_4_subsurface_passes_attenuate_across_a_depth_step() {
+    let mut scene = Scene::default();
+    scene.add(quad(Vec3::ZERO, 0.3), skin_material(0.6));
+    scene.add(quad(Vec3::new(0.0, 0.0, 0.004), 0.015), skin_material(0.6));
+    let (w, h) = (256, 256);
+    // About 3.8 pixels per mm from 0.83 m (300 mm, the longest lens the camera takes): the view is
+    // 67 mm wide, the shelf 30 mm.
+    let cam = camera(Vec3::new(0.0, 0.0, 0.8333), Vec3::ZERO, 300.0);
+    let config = RenderConfig { taa: false, debug: DebugView::Irradiance, ..RenderConfig::new(w, h) };
+    let mut harness = common::Harness::new(config, &scene);
+    // Travelling towards -x and into the floor at 30 degrees (tan 30 = 0.577).
+    let mut light = white_light(Vec3::new(-1.0, 0.0, -0.577), 1000.0);
+    light.kind = humanart_render::light::LightKind::Directional { angular_diameter: 0.002 };
+    harness.frames(&cam, &rig(0.0, vec![light]), 1);
+    let input = read(&mut harness, "irradiance");
+    let output = read(&mut harness, "diffuse");
+    let px_per_mm = (screen(&cam, w, h, Vec3::new(0.001, 0.0, 0.0)) - screen(&cam, w, h, Vec3::ZERO)).x;
+    let (wu, hu) = (w as usize, h as usize);
+    let horizontal = sss::blur_pass_reference(&input, wu, hu, true, px_per_mm, 1.0);
+    let reference = sss::blur_pass_reference(&horizontal, wu, hu, false, px_per_mm, 1.0);
+    let flat_input: Vec<[f32; 4]> =
+        input.iter().map(|p| [p[0], p[1], p[2], if p[3] > 0.0 { 1.0 } else { 0.0 }]).collect();
+    let flat_h = sss::blur_pass_reference(&flat_input, wu, hu, true, px_per_mm, 1.0);
+    let flat = sss::blur_pass_reference(&flat_h, wu, hu, false, px_per_mm, 1.0);
+    let margin = (sss::KERNEL_RANGE_MM * px_per_mm).ceil() as usize + 2;
+    let peak = input.iter().map(|p| p[0]).fold(0.0_f32, f32::max);
+    let mut worst = 0.0_f32;
+    for y in margin..hu - margin {
+        for x in margin..wu - margin {
+            let i = y * wu + x;
+            for c in 0..3 {
+                worst = worst.max((output[i][c] - reference[i][c]).abs());
+            }
+        }
+    }
+    // The shadowed strip on the floor left of the shelf (the light travels towards -x), 0.3 to
+    // 1.5 mm from the shelf's edge, along the middle of its height.
+    let edge = screen(&cam, w, h, Vec3::new(-0.015, 0.0, 0.004)).x;
+    let (mut gpu_strip, mut flat_strip, mut lit_shelf) = ([0.0_f64; 3], [0.0_f64; 3], 0.0_f64);
+    let mut n = 0;
+    for y in hu / 2 - 20..hu / 2 + 20 {
+        for x in (edge - 1.5 * px_per_mm) as usize..(edge - 0.3 * px_per_mm) as usize {
+            let i = y * wu + x;
+            for c in 0..3 {
+                gpu_strip[c] += f64::from(output[i][c]);
+                flat_strip[c] += f64::from(flat[i][c]);
+            }
+            n += 1;
+        }
+        lit_shelf += f64::from(input[y * wu + edge as usize + 8][1]);
+    }
+    let strip_dark = input[hu / 2 * wu + (edge - 0.9 * px_per_mm) as usize];
+    println!(
+        "depth step: {px_per_mm:.3} px/mm, worst GPU vs CPU {worst:.5} (peak {peak:.3}); shadowed strip GPU {:?} vs flat blur {:?} over {n} px, input there {strip_dark:?}, shelf {:.3}",
+        gpu_strip.map(|v| v / f64::from(n)),
+        flat_strip.map(|v| v / f64::from(n)),
+        lit_shelf / 40.0
+    );
+    assert!(peak > 0.05 && strip_dark[1] < 0.02 * peak, "the strip beside the shelf is in shadow");
+    assert!(worst < 0.01 * peak, "GPU and CPU kernels differ by {worst}");
+    for c in 0..3 {
+        assert!(gpu_strip[c] < 0.8 * flat_strip[c], "channel {c}: {} vs flat {}", gpu_strip[c], flat_strip[c]);
+    }
+    assert!(gpu_strip[0] > gpu_strip[1] && gpu_strip[1] >= gpu_strip[2], "red carries farthest: {gpu_strip:?}");
+}
+
+/// The whole template as a scene (the skin part in a skin material, the eyeballs, teeth and the
+/// other parts plain) and the centre of the left eyeball.
+fn template_scene() -> (Scene, Vec3) {
+    let generated = humanart_model::generate::build::template(&humanart_model::generate::build::Options {
+        lods: false,
+        ..Default::default()
+    })
+    .unwrap();
+    let template = generated.template.mesh();
+    let mut scene = Scene::default();
+    let mut eye = Vec3::ZERO;
+    for part in template.parts() {
+        let mesh = Mesh::from_template(template, Some(&part.name)).unwrap();
+        if part.name == "eyeball-L" {
+            let mut used = mesh.indices.clone();
+            used.sort_unstable();
+            used.dedup();
+            eye = used.iter().fold(Vec3::ZERO, |sum, &i| sum + mesh.positions[i as usize]) / used.len() as f32;
+        }
+        let material = if part.name == "body" {
+            Material { base_color: [0.56, 0.38, 0.30], ..skin_material(1.0) }
+        } else {
+            Material { base_color: [0.6; 3], roughness: 0.3, ..Material::default() }
+        };
+        scene.add(mesh, material);
+    }
+    (scene, eye)
+}
+
+/// Both subsurface passes on the CPU with the off-plane `rates` given (`sss::blur_pass_with_rates`
+/// along x and then y): all zero is the blur that weighs taps by their screen offset alone.
+fn blur_on_cpu(
+    input: &[[f32; 4]],
+    w: usize,
+    h: usize,
+    px_per_mm: f32,
+    rates: &[[f32; 3]; sss::KERNEL_TAPS],
+) -> Vec<[f32; 4]> {
+    let horizontal = sss::blur_pass_with_rates(input, w, h, true, px_per_mm, 1.0, rates);
+    sss::blur_pass_with_rates(&horizontal, w, h, false, px_per_mm, 1.0, rates)
+}
+
+/// The value below which `fraction` of `values` lie.
+fn percentile(mut values: Vec<f32>, fraction: f32) -> f32 {
+    values.sort_by(f32::total_cmp);
+    values[((values.len() - 1) as f32 * fraction) as usize]
+}
+
+/// The light the blur carries into shadowed skin: over the skin pixels `margin` inside the image
+/// whose `input` (the lighting before the passes) is below 3 % of the lit level (the 95th
+/// percentile of the skin, per channel), the mean of `output` relative to that level per channel,
+/// and the number of such pixels.
+fn light_in_shadow(input: &[[f32; 4]], output: &[[f32; 4]], w: usize, h: usize, margin: usize) -> ([f64; 3], usize) {
+    let lit: [f32; 3] =
+        std::array::from_fn(|c| percentile(input.iter().filter(|p| p[3] > 0.0).map(|p| p[c]).collect(), 0.95));
+    let (mut sum, mut n) = ([0.0_f64; 3], 0_usize);
+    for y in margin..h - margin {
+        for x in margin..w - margin {
+            let i = y * w + x;
+            if input[i][3] > 0.0 && input[i][1] < 0.03 * lit[1] {
+                for c in 0..3 {
+                    sum[c] += f64::from(output[i][c] / lit[c]);
+                }
+                n += 1;
+            }
+        }
+    }
+    (sum.map(|v| v / n.max(1) as f64), n)
+}
+
+/// Two lightings of unit albedo side by side as a picture for the review folder: skin-coloured,
+/// the lit level at 0.7 of white, display gamma 2.2.
+fn save_pair(name: &str, left: &[[f32; 4]], right: &[[f32; 4]], w: usize, h: usize, lit: f32) {
+    let albedo = [0.56_f32, 0.38, 0.30];
+    let mut rgba = vec![255_u8; 2 * w * h * 4];
+    for y in 0..h {
+        for x in 0..2 * w {
+            let p = if x < w { left[y * w + x] } else { right[y * w + x - w] };
+            for c in 0..3 {
+                let v = (0.7 * albedo[c] / albedo[0] * p[c] / lit).clamp(0.0, 1.0).powf(1.0 / 2.2);
+                rgba[(y * 2 * w + x) * 4 + c] = (v * 255.0).round() as u8;
+            }
+        }
+    }
+    common::save_png(name, 2 * w as u32, h as u32, &rgba);
+}
+
+/// Todo 1.4, the red ring in the eye socket under a side light, measured on the template: the left
+/// eye from the front, the built-in harsh side light and a 5 nit uniform fill. "Before" is the blur
+/// that weighs taps by their screen offset alone, run on the CPU on the GPU's own input
+/// (`sss::blur_pass_with_rates` with zero rates); "after" is the GPU's output, which the CPU
+/// reference with the off-plane rates follows. The ring is the light the passes carry into the
+/// shadowed skin of the socket (`light_in_shadow`): red far above green. Picture (before left,
+/// after right): target/agents/render/shots/skin_eye_socket_ring.png.
+#[test]
+fn todo_1_4_eye_socket_ring_under_side_light() {
+    let (scene, eye) = template_scene();
+    assert!(eye.x > 0.01 && eye.y > 1.3, "the left eyeball: {eye:?}");
+    let (w, h) = (512_usize, 512_usize);
+    // 40 mm across from half a metre: the depth of the socket changes the scale by 2 %.
+    let cam = camera(eye + Vec3::new(0.0, 0.0, 0.5), eye, 300.0);
+    let config = RenderConfig { taa: false, debug: DebugView::Irradiance, ..RenderConfig::new(w as u32, h as u32) };
+    let mut harness = common::Harness::new(config, &scene);
+    let side = LightRig::builtin(BuiltinRig::HarshSidelight, eye, 0.12).lights;
+    harness.frames(&cam, &rig(5.0, side), 1);
+    let input = read(&mut harness, "irradiance");
+    let output = read(&mut harness, "diffuse");
+    let px_per_mm =
+        (screen(&cam, w as u32, h as u32, eye + Vec3::new(0.001, 0.0, 0.0)) - screen(&cam, w as u32, h as u32, eye)).x;
+    let before = blur_on_cpu(&input, w, h, px_per_mm, &[[0.0; 3]; sss::KERNEL_TAPS]);
+    let reference = blur_on_cpu(&input, w, h, px_per_mm, &sss::off_plane_rates());
+    let margin = 8;
+    let (unblurred, n) = light_in_shadow(&input, &input, w, h, margin);
+    let (ring_before, _) = light_in_shadow(&input, &before, w, h, margin);
+    let (ring_reference, _) = light_in_shadow(&input, &reference, w, h, margin);
+    let (ring_after, _) = light_in_shadow(&input, &output, w, h, margin);
+    let skin = input.iter().filter(|p| p[3] > 0.0).count();
+    let excess = |ring: [f64; 3]| ring[0] - ring[1];
+    println!(
+        "eye socket, {px_per_mm:.2} px/mm, {n} shadowed of {skin} skin pixels; light in the shadow relative to the lit skin (r, g, b): unblurred {unblurred:.4?}, before {ring_before:.4?}, after (GPU) {ring_after:.4?}, after (CPU reference) {ring_reference:.4?}; red excess before {:.4}, after {:.4} ({:.0} % of before)",
+        excess(ring_before),
+        excess(ring_after),
+        100.0 * excess(ring_after) / excess(ring_before)
+    );
+    let lit = percentile(input.iter().filter(|p| p[3] > 0.0).map(|p| p[0]).collect(), 0.95);
+    save_pair("skin_eye_socket_ring.png", &before, &output, w, h, lit);
+    assert!(n > skin / 50 && n > 2000, "the socket has shadowed skin: {n} of {skin}");
+    assert!(excess(ring_before) > 0.01, "the ring is there without the off-plane weights: {ring_before:?}");
+    assert!(
+        (ring_after[0] - ring_reference[0]).abs() < 0.15 * ring_reference[0],
+        "GPU {ring_after:?} against the CPU reference {ring_reference:?}"
+    );
+    assert!(
+        excess(ring_after) < RING_LEFT * excess(ring_before),
+        "red excess {} against {} before",
+        excess(ring_after),
+        excess(ring_before)
+    );
+}
+
+/// The share of the red excess in the shadowed eye socket the off-plane weights may leave
+/// (`todo_1_4_eye_socket_ring_under_side_light`; measured 0.79: the ring gets weaker, the profile's
+/// own bleed along the skin from the lit border stays).
+const RING_LEFT: f64 = 0.85;
+
+/// Todo 1.4, what the off-plane weights must not take away: the glow past the terminator of a
+/// convex curve. Skin spheres of 30 mm (a chin, a cheek) and 10 mm radius (the tip of a nose, the
+/// rim of an ear) lit from the side: the red light the passes carry into the shadowed side on the
+/// GPU against the blur that weighs taps by their screen offset alone (on the CPU, from the GPU's
+/// input). A tap on a curve of radius R lies x² / 2R off the tangent plane, a fraction of a
+/// millimetre within red's reach, so nearly all of the glow stays.
+#[test]
+fn todo_1_4_off_plane_weights_keep_the_terminator_glow() {
+    let (w, h) = (256_usize, 256_usize);
+    let light = white_light(Vec3::new(-1.0, 0.0, 0.0), 1000.0);
+    for (radius, distance, kept_at_least) in [(0.03_f32, 1.2_f32, GLOW_KEPT[0]), (0.01, 0.4, GLOW_KEPT[1])] {
+        let mut scene = Scene::default();
+        scene.add(Mesh::sphere(Vec3::ZERO, radius, 192, 128), skin_material(1.0));
+        let cam = camera(Vec3::new(0.0, 0.0, distance), Vec3::ZERO, 300.0);
+        let config = RenderConfig { taa: false, debug: DebugView::Irradiance, ..RenderConfig::new(w as u32, h as u32) };
+        let mut harness = common::Harness::new(config, &scene);
+        harness.frames(&cam, &rig(0.0, vec![light]), 1);
+        let input = read(&mut harness, "irradiance");
+        let output = read(&mut harness, "diffuse");
+        let px_per_mm = (screen(&cam, w as u32, h as u32, Vec3::new(0.001, 0.0, 0.0))
+            - screen(&cam, w as u32, h as u32, Vec3::ZERO))
+        .x;
+        let before = blur_on_cpu(&input, w, h, px_per_mm, &[[0.0; 3]; sss::KERNEL_TAPS]);
+        let reference = blur_on_cpu(&input, w, h, px_per_mm, &sss::off_plane_rates());
+        let (glow_before, n) = light_in_shadow(&input, &before, w, h, 2);
+        let (glow_reference, _) = light_in_shadow(&input, &reference, w, h, 2);
+        let (glow_after, _) = light_in_shadow(&input, &output, w, h, 2);
+        println!(
+            "sphere of {:.0} mm, {px_per_mm:.2} px/mm, {n} shadowed pixels; light past the terminator (r, g, b): before {glow_before:.4?}, after (GPU) {glow_after:.4?}, after (CPU reference) {glow_reference:.4?}; red kept {:.1} %",
+            radius * 1000.0,
+            100.0 * glow_after[0] / glow_before[0]
+        );
+        assert!(n > 1000 && glow_before[0] > 1e-3, "the shadowed side takes red light: {glow_before:?} over {n}");
+        assert!(glow_after[0] > glow_after[1] && glow_after[1] >= glow_after[2] * 0.99, "red the farthest");
+        assert!(
+            glow_after[0] > kept_at_least * glow_before[0],
+            "{radius} m: red glow {} of {} before",
+            glow_after[0],
+            glow_before[0]
+        );
+    }
+}
+
+/// The share of the red glow past the terminator the off-plane weights must keep on a sphere of
+/// 30 mm and of 10 mm radius (`todo_1_4_off_plane_weights_keep_the_terminator_glow`; measured 1.01
+/// and 1.00).
+const GLOW_KEPT: [f64; 2] = [0.97, 0.95];
 
 /// `[SHD-03]` light through a thin part: a 6 mm skin disc lit from behind glows on the front,
 /// red far more than green and blue, as much as the profile's transmittance through its thickness

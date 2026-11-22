@@ -171,6 +171,27 @@
      "evaluation": {"kind": "expression", "target": "ctl.brow-ridge-compress"}},
     {"id": "expression.eyelid_crease_depth", "sides": true, "display_name": "Eyelid crease depth", "group": "expression/eyes", "region": "upper-lid-{side}", "tags": ["eyelid", "crease"],
      "description": "Deepens the upper eyelid crease (the fold between lid and socket), as happens when the eye opens wide or looks up.",
-     "evaluation": {"kind": "expression", "target": "ctl.eyelid-crease-{side}"}}
+     "evaluation": {"kind": "expression", "target": "ctl.eyelid-crease-{side}"}},
+    {"id": "expression.viseme.lip_closure", "display_name": "Lip closure", "group": "expression/viseme", "tags": ["viseme", "speech", "lips", "closure", "bilabial"],
+     "description": "Presses the lips together as for p, b and m (viseme PP): the closure before a bilabial release. A speech-shape control of the expression rig; the viseme presets combine these with jaw and lip action units.",
+     "evaluation": {"kind": "expression", "target": "viseme.lip-closure"}},
+    {"id": "expression.viseme.funnel", "display_name": "Lip funnel", "group": "expression/viseme", "tags": ["viseme", "speech", "lips", "funnel", "protrude"],
+     "description": "Pushes the lips forward into a funnel with an open centre, as for sh, ch and j (viseme CH). A speech-shape control of the expression rig; the viseme presets combine these with jaw and lip action units.",
+     "evaluation": {"kind": "expression", "target": "viseme.funnel"}},
+    {"id": "expression.viseme.pucker", "display_name": "Lip pucker", "group": "expression/viseme", "tags": ["viseme", "speech", "lips", "pucker", "round"],
+     "description": "Rounds and protrudes the lips into a small opening, as for oo and w (viseme ou). A speech-shape control of the expression rig; the viseme presets combine these with jaw and lip action units.",
+     "evaluation": {"kind": "expression", "target": "viseme.pucker"}},
+    {"id": "expression.viseme.stretch", "display_name": "Lip stretch", "group": "expression/viseme", "tags": ["viseme", "speech", "lips", "stretch", "spread"],
+     "description": "Spreads the lips sideways over the teeth, as for ee and i (visemes E, ih). A speech-shape control of the expression rig; the viseme presets combine these with jaw and lip action units.",
+     "evaluation": {"kind": "expression", "target": "viseme.stretch"}},
+    {"id": "expression.viseme.jaw_open_round", "display_name": "Jaw open, round", "group": "expression/viseme", "tags": ["viseme", "speech", "lips", "jaw", "open", "round"],
+     "description": "Opens the jaw with the lips rounded, as for o (viseme oh). A speech-shape control of the expression rig; the viseme presets combine these with jaw and lip action units.",
+     "evaluation": {"kind": "expression", "target": "viseme.jaw-open-round"}},
+    {"id": "expression.viseme.jaw_open_wide", "display_name": "Jaw open, wide", "group": "expression/viseme", "tags": ["viseme", "speech", "lips", "jaw", "open", "wide"],
+     "description": "Opens the jaw wide with relaxed lips, as for a in father (viseme aa). A speech-shape control of the expression rig; the viseme presets combine these with jaw and lip action units.",
+     "evaluation": {"kind": "expression", "target": "viseme.jaw-open-wide"}},
+    {"id": "expression.viseme.labiodental", "display_name": "Labiodental", "group": "expression/viseme", "tags": ["viseme", "speech", "lips", "labiodental", "teeth"],
+     "description": "Tucks the lower lip under the upper front teeth, as for f and v (viseme FF). A speech-shape control of the expression rig; the viseme presets combine these with jaw and lip action units.",
+     "evaluation": {"kind": "expression", "target": "viseme.labiodental"}}
   ]
 }
