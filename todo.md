@@ -64,7 +64,12 @@ forms) are checked and in use; FLAME is out (owner, 2026-11-20).
      regions, finger and toe pads, arch, malleoli, ANSUR hand and foot sizes). Still to do: toes are
      boxy; a back-facing sliver at a toe base; nails and creases are at the limit of the mesh density
      and need the skin side to shade the new nail regions;
-   - pose correctives for shoulders, armpits, elbows, hips and knees;
+   - pose correctives for shoulders, armpits, elbows, hips and knees. A `PoseCorrective` today fades
+     in around one target rotation with a radius, which is weakest at the shoulder and armpit: blend
+     several example poses per joint with radial basis functions and split twist from swing. Epic's
+     OpenRigLogic (MIT, https://github.com/EpicGames/OpenRigLogic, `src/riglogic/rbf` and
+     `src/riglogic/joints/cpu/twistswing`) is a tested reference to read, or to port with its MIT
+     notice kept. The corrective shapes themselves are ours to make.
 4. **Skin surface.** Done 2026-11-21 (`target/agents/skin-surface/STATUS.md`, stills
    `target/review/skin/`): `skin.*` values reach the compositor (CLI, editor, agent server), baked
    thickness and GPU-baked occlusion feed it, regional specular (Weyrich 2006) and sebum
@@ -169,6 +174,16 @@ fallbacks and low-memory behaviour (WP-33), large fuzz runs and server hardening
 format documentation (WP-36), release packaging (WP-37), sample project (WP-38), 8-hour soak test
 (WP-39), macOS and Linux builds (B-003). LOD package sections carry landmarks (ADR-021).
 
+DNA export: write a character as a MetaHuman `.dna` file so tools that read DNA (MetaHuman Animator
+and the Maya and Houdini plugins) can drive it. Needs our expression controls mapped onto theirs.
+The format comes from OpenRigLogic's DNA library (MIT, https://github.com/EpicGames/OpenRigLogic;
+port with its notice kept, no C++ dependency); an importer, if wanted, is a parser under `[ROB-01]`.
+Only the format: MetaHuman assets (the OpenRigLogic sample content on Fab, MetaHuman Creator
+exports) stay out of `data/` and the template (the Fab licence forbids redistributing an asset on its
+own, the sample listing forbids use with AI, and there is no consent or provenance record for them).
+"MetaHuman" may describe compatibility, never name a product or feature (OpenRigLogic
+`TRADEMARKS.md`).
+
 ## 5. Performance
 
 Benchmark suite and per-target report (WP-32): `humanart-cli bench --scenario 10` (the UI scene) exists
@@ -192,6 +207,9 @@ device (ADR-040), the document side of the autosave no longer allocates.
 - Identity axes use a pooled standard deviation; ADR-046 asks for per-sex values.
 - Shoulder width measured as 351 vs 382 mm by two agents: recheck on the current template.
 - UV slivers that lock LOD vertices; low UV packing coverage.
+- Rename the type `humanart_model::eval::rig::RigLogic` (15 uses, ADR-031), e.g. to `ControlRig`:
+  Epic lists RigLogic as its trademark (OpenRigLogic `TRADEMARKS.md`). It is a Rust type, not a
+  registry id, so renaming it changes no stored name.
 - The embedded face model `data/template/face/face-model.hafm` cannot be rebuilt byte for byte from the
   8 current fits: a rebuild shifts the mean face by about 1 mm and turns components 02 and 04-07, which
   would change those sliders. The embedded file stays until the builder reproduces it (measured in
