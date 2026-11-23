@@ -867,15 +867,22 @@ impl<'f, 't> Recipes<'f, 't> {
         Ok(s)
     }
 
-    /// AU14: the corners tighten inward with a dimple lateral to them.
+    /// AU14: the corners tighten and pull back into the cheek (buccinator), a little up, with a
+    /// dimple lateral to them and the tightened tissue bulging beside the dimple. The one-sided
+    /// form carries contempt (todo 1.8: 2.2 mm back and a 1 mm dimple read as a slight corner pull
+    /// even at full weight).
     fn au14(&self) -> ExprResult<Shape> {
-        let mut s = self.corners(0.0, 14.0, |side| v_mm(1.8 * sign(side), 0.0, -2.2))?;
+        let mut s = self.corners(0.0, 15.0, |side| v_mm(1.4 * sign(side), 0.9, -3.4))?;
         for side in [Side::Left, Side::Right] {
             let c = self.f.landmark(&format!("{}.lip.corner", letter(side)))?;
             let dimple = self.near(c + v_mm(7.0 * sign(side), -1.0, -2.0))?;
-            let m = self.geo(&[dimple], mm(0.5), mm(5.0));
-            s.apply(self.f, &m, Action::Normal { amount: -mm(1.0) });
+            let m = self.geo(&[dimple], mm(0.5), mm(5.5));
+            s.apply(self.f, &m, Action::Normal { amount: -mm(1.6) });
+            let bulge = self.near(c + v_mm(11.0 * sign(side), 2.5, -3.5))?;
+            let m = self.geo(&[bulge], mm(2.0), mm(8.0)).scale(|n| self.off_corner(n, mm(6.0)));
+            s.apply(self.f, &m, Action::Normal { amount: mm(0.7) });
         }
+        s.relax(self.f, 2, 0.5, |n| self.f.part_of(n) == self.body);
         Ok(s)
     }
 

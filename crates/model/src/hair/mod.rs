@@ -170,8 +170,9 @@ pub(crate) mod sheet {
         )
         .unwrap();
         let png = humanart_io::png::encode(&image).unwrap();
-        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/agents/hair");
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join(name), png).unwrap();
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/agents/hair").join(name);
+        // `name` may lead into a sibling folder (`../hair-render/...`): create the file's own.
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, png).unwrap();
     }
 }

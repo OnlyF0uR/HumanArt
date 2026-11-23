@@ -180,6 +180,7 @@ impl std::fmt::Debug for CharacterHair {
         f.debug_struct("CharacterHair")
             .field("grooms", &self.grooms.iter().map(|g| (g.kind, g.gpu.strand_count())).collect::<Vec<_>>())
             .field("generated", &self.generated)
+            .field("spec", &self.spec)
             .finish()
     }
 }

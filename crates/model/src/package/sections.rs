@@ -13,6 +13,7 @@ use humanart_math::{F16, Quat, Transform, Vec2, Vec3};
 use super::PackageLimits;
 use crate::delta::{DeltaBases, DeltaComponent, DeltaKind, MAX_COMPONENTS};
 use crate::error::{ModelError, Result};
+use crate::expression::pose_space::{MAX_DRIVER_POSES, PoseDriver, PoseMetric};
 use crate::expression::{
     CombinationCorrective, CombineOp, Expression, ExpressionKind, ExpressionSet, MAX_COMBINATION_INPUTS,
     MAX_DEFINITIONS, PoseCorrective,
@@ -246,6 +247,35 @@ pub(crate) fn write_expressions(w: &mut Writer, e: &ExpressionSet) {
         w.f32_le(p.radius);
         w.u32_le(p.component);
     }
+}
+
+/// The pose drivers (section `PDRV`, written only when a template has drivers).
+pub(crate) fn write_pose_drivers(w: &mut Writer, drivers: &[PoseDriver]) {
+    w.u32_le(drivers.len() as u32);
+    for d in drivers {
+        put_str(w, &d.name);
+        w.u16_le(d.joint);
+        w.u8(d.metric.to_u8());
+        w.f32_le(d.radius);
+        w.u32_le(d.correctives.len() as u32);
+        for &c in &d.correctives {
+            w.u32_le(c);
+        }
+    }
+}
+
+/// Reads the `PDRV` payload. Name, joint, metric, radius and the corrective count take at least
+/// 15 bytes per driver.
+pub(crate) fn read_pose_drivers(d: &mut Dec<'_>) -> Result<Vec<PoseDriver>> {
+    let n = d.count("pose driver count", MAX_DEFINITIONS)?;
+    d.array(n, 15, |d| {
+        let name = d.string()?;
+        let joint = d.u16()?;
+        let metric = d.enum_byte("bad pose metric", PoseMetric::from_u8)?;
+        let radius = d.f32()?;
+        let k = d.count("pose driver corrective count", MAX_DRIVER_POSES)?;
+        Ok(PoseDriver { name, joint, metric, radius, correctives: d.u32s(k)? })
+    })
 }
 
 pub(crate) fn write_lods(w: &mut Writer, lods: &[LodLevel]) {
@@ -544,7 +574,7 @@ pub(crate) fn read_expressions(d: &mut Dec<'_>) -> Result<ExpressionSet> {
             component: d.u32()?,
         })
     })?;
-    Ok(ExpressionSet { expressions, combinations, pose_correctives })
+    Ok(ExpressionSet { expressions, combinations, pose_correctives, pose_drivers: Vec::new() })
 }
 
 pub(crate) fn read_lods(d: &mut Dec<'_>) -> Result<Vec<LodLevel>> {

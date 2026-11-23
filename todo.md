@@ -27,11 +27,16 @@ forms) are checked and in use; FLAME is out (owner, 2026-11-20).
    `wp25_finished_ear_is_fold_free_and_ansur_sized`); a rounder forehead-to-temple curve; the pale
    column at the outer eye corner is gone. Still to do: the concha floor reads as a diamond-shaped pit in
    profile and a short crease runs forward from the ear's lower front; a faint tone change remains at the
-   temple; the white sliver across the caruncle (a lid-margin highlight, not the tear line); natural
-   asymmetry as the default (`identity.asymmetry` 0.35, tests that need a symmetric face set it to 0);
-   a default procedural mole sits on the jugular notch since the torso UV repack (moles are placed in
-   texture space: `skin_appearance/features.rs` should place them on the surface or keep them off
-   landmarks).
+   temple; the white sliver across the caruncle (a lid-margin highlight, not the tear line).
+   Done 2026-11-23: natural asymmetry is the default (`identity.asymmetry` 0.35); moles keep clear of
+   the jugular notch, nipples, navel and eye and mouth corners (`feature_layers::SPOT_CLEARANCE`, test
+   `todo_1_1_moles_keep_clear_of_landmarks`); the adult face of both sexes (2026-11-23, test
+   `todo_1_3_both_sexes_have_adult_proportions`): menton-sellion now 112.6 / 122.1 mm (ANSUR II means
+   113.1 / 122.6; the chin longer and 1 mm more prominent), nose protrusion 17.0 / 17.8 mm (was 15.7 for
+   the woman), lid opening / fissure 0.41 (was 0.43, a juvenile round eye), the skin under the chin
+   lifted 3 mm (submental drop 3.3 / 2.0 mm). The sex switch fits the face height on the profile
+   (sellion to menton found anew on each shape) instead of two fixed landmark vertices. Not yet looked
+   at in a render.
 2. **Face-shape controls from the scans.** Done 2026-11-21: `face.scan.shape_01..07` in the registry
    (`provisional`), each with a range measured to fold no triangle (shape_03 -1.6..0.6, the others about
    -1..1 or wider). Still to do: each component still mixes ancestry, sex, age and weight; ranges were
@@ -64,12 +69,19 @@ forms) are checked and in use; FLAME is out (owner, 2026-11-20).
      regions, finger and toe pads, arch, malleoli, ANSUR hand and foot sizes). Still to do: toes are
      boxy; a back-facing sliver at a toe base; nails and creases are at the limit of the mesh density
      and need the skin side to shade the new nail regions;
-   - pose correctives for shoulders, armpits, elbows, hips and knees. A `PoseCorrective` today fades
-     in around one target rotation with a radius, which is weakest at the shoulder and armpit: blend
-     several example poses per joint with radial basis functions and split twist from swing. Epic's
-     OpenRigLogic (MIT, https://github.com/EpicGames/OpenRigLogic, `src/riglogic/rbf` and
-     `src/riglogic/joints/cpu/twistswing`) is a tested reference to read, or to port with its MIT
-     notice kept. The corrective shapes themselves are ours to make.
+   - pose correctives: done 2026-11-23 (ADR-057). `PoseDriver` solves the correctives of a joint by
+     radial basis interpolation over swing, twist or the whole rotation (after OpenRigLogic, MIT
+     notice kept; package section `PDRV`); the template derives 22 correctives (elbow 90 / 140, knee
+     90 / 126, shoulder down / up / forward / back, hip flexed / extended / spread, both sides) from
+     dual-quaternion skinning, Delta-Mushed with the volume put back at the elbow, knee and shoulder.
+     Against plain skinning (test `todo_1_3_correctives_keep_volume_and_smooth_folds_at_bent_joints`):
+     knee at 126 degrees 709 cm³ lost -> none, mean fold angle 4.05 -> 2.84 degrees; elbow at 126
+     degrees 7.8 -> 2.4 degrees and its volume kept; arm raised forward 47 -> 8 faces turned over; hip
+     flexed 57 -> 24. The twist joints are driven now (`eval::twist`): the forearm takes the hand's
+     roll, the upper arm's twist joint undoes the arm's roll at the shoulder. Still to do: contact
+     where the calf meets the thigh past 126 degrees and the elbow folds on itself at 140 (about 160
+     faces turned in the crease); the hip gains volume (dual quaternions bulge); not yet looked at in
+     a render (`humanart-cli render --pose L.forearm=x120` now poses joints).
 4. **Skin surface.** Done 2026-11-21 (`target/agents/skin-surface/STATUS.md`, stills
    `target/review/skin/`): `skin.*` values reach the compositor (CLI, editor, agent server), baked
    thickness and GPU-baked occlusion feed it, regional specular (Weyrich 2006) and sebum
@@ -109,11 +121,12 @@ forms) are checked and in use; FLAME is out (owner, 2026-11-20).
    longer stretches a skin sheet across the opening, the neutral upper lip has no folds, and
    `ExpressionDrive` drives the face from the document's sliders (clamped to each parameter's range,
    tested). 2026-11-22: contempt presets (one-sided AU12 + AU14, low/medium/high), 7 viseme
-   parameters, `humanart-cli render --preset NAME` for every emotion and viseme. Still to do: sadness,
+   parameters, `humanart-cli render --preset NAME` for every emotion and viseme; 2026-11-23: the agent
+   tool `apply_expression` (so `batch` too) applies a built-in preset by name when the document has no
+   stored one of that name. Still to do: sadness,
    disgust and contempt read weakly (contempt is a slight one-sided corner pull even at high: stronger
    AU14 shape needed), wrinkles do not appear with the expressions (no authored maps; disgust shows no
-   nose wrinkle); `batch` cannot apply built-in presets; checked against FACS from memory, not against
-   reference photographs.
+   nose wrinkle); checked against FACS from memory, not against reference photographs.
 9. **Light and camera.** Done 2026-11-21 (`target/agents/light-camera/STATUS.md`, stills
    `target/review/light/s4-*.png`): shadow maps fitted to the view (about 0.25 mm per texel on the
    face), soft penumbrae that grow with distance, ambient occlusion and contact shadows, 13 rigs
@@ -202,14 +215,9 @@ device (ADR-040), the document side of the autosave no longer allocates.
 - `skin::tests::ac_wp13_3_partial_rect_cost_scales_with_area` (render lib, GPU timing ratio, bound
   2.0x) fails when other GPU tests run beside it (2.05x and 2.39x with 2 test threads) and passes alone:
   run GPU timing tests serially or mark them.
-- `tools/fontbake/bake.sh` can call `humanart-cli fontbake --dir` now; then delete
-  `crates/ui/examples/fontbake.rs`.
 - Identity axes use a pooled standard deviation; ADR-046 asks for per-sex values.
 - Shoulder width measured as 351 vs 382 mm by two agents: recheck on the current template.
 - UV slivers that lock LOD vertices; low UV packing coverage.
-- Rename the type `humanart_model::eval::rig::RigLogic` (15 uses, ADR-031), e.g. to `ControlRig`:
-  Epic lists RigLogic as its trademark (OpenRigLogic `TRADEMARKS.md`). It is a Rust type, not a
-  registry id, so renaming it changes no stored name.
 - The embedded face model `data/template/face/face-model.hafm` cannot be rebuilt byte for byte from the
   8 current fits: a rebuild shifts the mean face by about 1 mm and turns components 02 and 04-07, which
   would change those sliders. The embedded file stays until the builder reproduces it (measured in

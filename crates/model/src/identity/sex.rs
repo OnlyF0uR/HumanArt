@@ -93,7 +93,7 @@ pub const ARM_GIRTH: Gauge = Gauge::Girth(&["upper-arm"], Level("L.shoulder.acro
 /// Head length.
 pub const HEAD_LENGTH_GAUGE: Gauge = Gauge::Path(&["forehead.glabella", "head.opisthocranion"]);
 /// Menton-sellion length.
-pub const FACE_HEIGHT_GAUGE: Gauge = Gauge::Path(&["nose.root", "chin.menton"]);
+pub const FACE_HEIGHT_GAUGE: Gauge = Gauge::FaceHeight;
 /// Bizygomatic breadth.
 pub const BIZYGOMATIC_GAUGE: Gauge = Gauge::Path(&["L.zygion", "R.zygion"]);
 
@@ -227,16 +227,24 @@ fn one_sided(kit: &Kit<'_, '_>) -> IdResult<Raw> {
 
 /// The adult face of both sexes (todo 1.3, authored, read off renders and the adult-proportion
 /// test: the scanned mean face on the generated head read young): 3 mm less cheek fat,
-/// cheekbones 1.5 mm and the chin 2 mm more prominent, the lower nose 1.5 mm longer and its tip
-/// 2.25 mm farther forward (a juvenile nose is short and flat: Farkas sn-prn is about 17 to 20 mm
-/// in adults), a slightly stronger brow.
+/// cheekbones 1.5 mm and the chin 3 mm more prominent, the chin about 3.5 mm longer below the lip
+/// (a short lower face is a child's: menton-sellion was 114 mm against the ANSUR II midpoint of
+/// 118), the lower nose 1.5 mm longer and its tip
+/// 3.75 mm farther forward (a juvenile nose is short and flat: Farkas sn-prn is about 17 to 20 mm
+/// in adults; 2.25 mm left it at 15.7 mm for the woman), a slightly stronger brow, the lids a
+/// little less open (the large round eye is a juvenile cue: opening / fissure was 0.43, Farkas
+/// adults about 0.33 to 0.37) and the skin under the chin lifted 3 mm toward the jaw (a defined
+/// cervicomental angle).
 fn adult_face(kit: &Kit<'_, '_>) -> IdResult<Raw> {
     let mut raw = face::cheek_fullness(kit)?.scaled(-1.5);
     raw.add(&face::cheekbones(kit, true)?, 1.0);
-    raw.add(&face::chin_projection(kit)?, 1.0);
+    raw.add(&face::chin_projection(kit)?, 1.5);
+    raw.add(&face::chin_height(kit)?, 1.7);
     raw.add(&face::nose_length(kit)?, 1.0);
-    raw.add(&face::nose_tip(kit, Vec3::Z * 0.0015, &["nose.tip"])?, 1.5);
+    raw.add(&face::nose_tip(kit, Vec3::Z * 0.0015, &["nose.tip"])?, 2.5);
     raw.add(&face::brow_ridge(kit)?, 0.4);
+    raw.add(&face::eye_size(kit)?, -0.6);
+    raw.add(&face::submental_lift(kit, 0.003)?, 1.0);
     Ok(raw)
 }
 
@@ -326,25 +334,36 @@ fn carry_genitals(s: &Space<'_>, female: &[u16], body: u16, disp: &mut [Vec3]) {
         .filter(|&n| genitals::site_coords(pos[n]).2.abs() < 0.012)
         .map(|n| (pos[n], disp.get(n).copied().unwrap_or(Vec3::ZERO)))
         .collect();
-    for n in 0..pos.len() {
-        if !vulva(n) {
-            continue;
-        }
+    let carried = |p: Vec3| {
         let (mut sum, mut wsum) = (Vec3::ZERO, 0.0);
         for &(q, d) in &ring {
-            let w = 1.0 / q.distance_squared(pos[n]).max(1.0e-8);
+            let w = 1.0 / q.distance_squared(p).max(1.0e-8);
             sum += d * w;
             wsum += w;
         }
-        if let Some(d) = disp.get_mut(n).filter(|_| wsum > 0.0) {
-            *d = sum / wsum;
+        (wsum > 0.0).then(|| sum / wsum)
+    };
+    for (n, &p) in pos.iter().enumerate() {
+        if !vulva(n) {
+            continue;
+        }
+        if let (Some(d), Some(c)) = (disp.get_mut(n), carried(p)) {
+            *d = c;
         }
     }
+    // A male-piece node on the attachment border (its real place on its skin node) follows that
+    // node exactly, so the piece stays attached; nodes a centimetre or more away follow the
+    // ring's smooth mean at their real place instead, so the piece is carried nearly rigidly
+    // (following single skin nodes it was distorted by 3.3 mm where the groin moves unevenly by
+    // 1.1 mm, todo 1.3).
     for n in 0..pos.len() {
         if let (true, Some(m)) = (s.is_stowed(n), s.attached(n)) {
             let follow = disp.get(m).copied().unwrap_or(Vec3::ZERO);
+            let real = genitals::male_real(pos[n]);
+            let away = pos.get(m).map_or(0.0, |q| q.distance(real));
+            let smooth = carried(real).unwrap_or(follow);
             if let Some(d) = disp.get_mut(n) {
-                *d = follow;
+                *d = follow.lerp(smooth, smoothstep(0.0, 0.01, away));
             }
         }
     }

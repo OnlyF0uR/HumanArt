@@ -351,6 +351,7 @@ pub(crate) mod fixtures {
                 inputs: vec![0, 1],
                 component: find("smile.blink"),
             }],
+            pose_drivers: Vec::new(),
             pose_correctives: vec![PoseCorrective {
                 name: "tip.bend".into(),
                 joint: 1,

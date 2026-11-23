@@ -9,8 +9,9 @@
 //! - [`skinning`]: joint posing from regressed bind positions, LBS and DQS `[SKIN-01]`.
 //! - [`normals`]: the triangle and gather passes for normals and tangents `[EVAL-04]`.
 //! - [`strain`]: edge strain and its per-region reduction `[EVAL-06]`.
-//! - [`rig`]: [`RigLogic`], the data-driven control-to-expression graph `[EXP-03]`.
+//! - [`rig`]: [`RigGraph`], the data-driven control-to-expression graph `[EXP-03]`.
 //! - [`wrinkle`]: [`WrinkleDrivers`], per-region fold and stretch activations `[EXP-04]`.
+//! - [`twist`]: [`TwistRig`], the twist joints driven from the limb's roll (todo 1.3).
 //! - [`landmarks`]: [`LandmarkSolver`], landmark drags with pins and locks `[LM-01]`..`[LM-03]`.
 //! - [`prior`]: [`IdentityPrior`], the plausibility score `[ID-04]` and sampling `[ID-06]`.
 //! - [`evaluator`]: [`Evaluator`], steps 1–5 with incremental rest-shape accumulation `[EVAL-03]`.
@@ -28,6 +29,7 @@ pub mod prior;
 pub mod rig;
 pub mod skinning;
 pub mod strain;
+pub mod twist;
 pub mod wrinkle;
 
 pub use error::{EvalError, EvalResult};
@@ -35,9 +37,10 @@ pub use evaluator::{EvalInput, Evaluator};
 pub use landmarks::{LandmarkGoal, LandmarkSolver, SolveReport, SolveRequest, SolveSettings};
 pub use layer::SculptLayer;
 pub use prior::{Covariance, GroupScore, GroupSpec, IdentityPrior, Plausibility, SampleRequest};
-pub use rig::{RigLogic, RigOp};
+pub use rig::{RigGraph, RigOp};
 pub use skinning::{JointFrames, SkinningMode};
 pub use strain::StrainField;
+pub use twist::TwistRig;
 pub use wrinkle::{WrinkleDriver, WrinkleDrivers};
 
 #[cfg(test)]

@@ -674,6 +674,7 @@ pub fn skin(rig: &Rig, a: &Anatomy, mesh: &Mesh, regions: &RegionMap) -> Result<
         .iter()
         .filter_map(|n| Some((rig.index(n)?, rig.index(&format!("{n}.twist"))?)))
         .collect();
+    let upper_arms: Vec<u16> = ["L.upper-arm", "R.upper-arm"].iter().filter_map(|n| rig.index(n)).collect();
     let to_head = |p: Vec3| (p - a.head_origin) * 1000.0;
     // Per side (left, right): the upper-arm joint and every arm joint that is not trunk.
     let arm_side = |l: &str| -> Result<(u16, Vec<u16>)> {
@@ -697,7 +698,14 @@ pub fn skin(rig: &Rig, a: &Anatomy, mesh: &Mesh, regions: &RegionMap) -> Result<
                     let w = (0.004 + d).powi(-4);
                     match twist.get(&j) {
                         Some(&tw) => {
-                            let share = smoothstep((t - 0.15) / 0.75);
+                            // The forearm's twist joint takes the hand's roll, growing toward the
+                            // wrist; the upper arm's takes the inverse of the arm's own roll at the
+                            // shoulder end, so the roll grows toward the elbow (`eval::twist`).
+                            let share = if upper_arms.contains(&j) {
+                                1.0 - smoothstep(t / 0.85)
+                            } else {
+                                smoothstep((t - 0.15) / 0.75)
+                            };
                             list.push((j, w * (1.0 - share)));
                             list.push((tw, w * share));
                         }

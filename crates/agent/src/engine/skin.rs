@@ -31,7 +31,7 @@ use humanart_model::expression::controls::wrinkle_drivers;
 use humanart_model::skin_appearance::baked::baked_inputs;
 use humanart_model::skin_appearance::dirty::Rect;
 use humanart_model::skin_appearance::feature_layers::{
-    FeatureLayer, RegionMask, generate_layer, level_lines, region_masks,
+    FeatureLayer, RegionMask, SPOT_CLEARANCE, clear_of_landmarks, generate_layer, level_lines, region_masks,
 };
 use humanart_model::skin_appearance::features::{GeneratorKind, GeneratorParams, Target, generate};
 use humanart_model::skin_appearance::layers::{LayerId, LayerStack};
@@ -565,6 +565,14 @@ impl SkinLook {
         for layer in layers {
             let i = self.masks_of(layer.region.as_deref())?;
             let masks = self.masks.get(i).map_or(&[][..], |(_, m)| m.as_slice());
+            // Moles keep clear of the landmarks where one reads as a model blemish (todo 1.1).
+            let cleared;
+            let masks = if layer.params.kind == GeneratorKind::Moles {
+                cleared = clear_of_landmarks(&self.template, masks, self.tile_size, SPOT_CLEARANCE);
+                cleared.as_slice()
+            } else {
+                masks
+            };
             let id = generate_into(&mut self.stack, masks, &layer.params, layer.seed, layer.opacity)?;
             self.feature_ids.extend(id);
         }

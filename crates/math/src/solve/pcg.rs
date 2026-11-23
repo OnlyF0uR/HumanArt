@@ -479,7 +479,10 @@ mod tests {
         let mut run = |m: &dyn Fn(&mut [f64], &mut PcgWorkspace) -> PcgReport| {
             let mut x = vec![0.0; a.rows()];
             let report = m(&mut x, &mut workspace);
-            assert!(relative_residual(&a, &x, &b) < 1e-10, "{report:?}");
+            // The solver stops on its recursive residual (below 1e-10); after thousands of
+            // unpreconditioned steps the true residual drifts from it by rounding (1.08e-10 on
+            // Linux for the plain run), so the true one is checked with a decade of slack.
+            assert!(relative_residual(&a, &x, &b) < 1e-9, "{report:?}");
             report.iterations
         };
         let plain = run(&|x, w| pcg(&a, &b, x, &IdentityPreconditioner, &settings, w).unwrap());

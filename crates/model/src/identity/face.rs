@@ -330,7 +330,7 @@ fn lid_margins(s: &Space<'_>) -> IdResult<(Vec<Vec3>, Vec<Vec3>)> {
 }
 
 /// `semantic.eye-size`: the lids turn open about the eye centre (they slide on the eyeball).
-fn eye_size(kit: &Kit<'_, '_>) -> IdResult<Raw> {
+pub(crate) fn eye_size(kit: &Kit<'_, '_>) -> IdResult<Raw> {
     let s = kit.space;
     let eye = s.joint("L.eye")?;
     let (upper, lower) = lid_margins(s)?;
@@ -572,6 +572,28 @@ pub fn chin_width(kit: &Kit<'_, '_>) -> IdResult<Raw> {
     Raw::confined(s, JAW, Symmetry::Mirror, disp, Vec::new())
 }
 
+/// The skin under the chin lifted by `a` metres (per unit weight) toward the jaw: a more defined
+/// angle between the chin's underside and the neck (the cervicomental angle), which is soft in
+/// a child's face. Full from 1 cm to 3 cm behind the menton, between the jaw angles, on the
+/// downward-facing skin only; nothing at the menton itself or on the neck's front.
+pub(crate) fn submental_lift(kit: &Kit<'_, '_>, a: f32) -> IdResult<Raw> {
+    let s = kit.space;
+    let menton = s.landmark("chin.menton")?;
+    let gonion = s.landmark("jaw.L.01")?;
+    let f = move |pt: &Point| {
+        let back = menton.z - pt.p.z;
+        let along = smoothstep(0.0, 0.01, back) * smoothstep(0.05, 0.03, back);
+        let across = smoothstep(gonion.x, gonion.x * 0.5, pt.p.x.abs());
+        let below = smoothstep(menton.y + 0.004, menton.y - 0.002, pt.p.y)
+            * smoothstep(menton.y - 0.04, menton.y - 0.02, pt.p.y);
+        let down = smoothstep(-0.2, -0.6, pt.n.y);
+        Vec3::Y * (a * along * across * below * down)
+    };
+    let mut disp = s.eval(|pt| s.sym(pt, &f));
+    s.smooth_field(&mut disp, 10, &NECK)?;
+    Raw::confined(s, NECK, Symmetry::Mirror, disp, Vec::new())
+}
+
 /// The cheekbone field of the left side: outward along the malar-zygion line.
 fn cheekbone_field(s: &Space<'_>, a: f32) -> IdResult<impl Fn(&Point) -> Vec3 + use<>> {
     let malar = s.landmark("L.cheek.malar")?;
@@ -661,9 +683,15 @@ pub fn neck_width(kit: &Kit<'_, '_>) -> IdResult<Raw> {
     // A long ramp into the shoulders and the jaw: the sex axis uses this field at several
     // millimetres.
     s.smooth(&mut t, 60);
-    // Smoothed normals: the raw normal turns sharply in the suprasternal notch.
-    let normals = s.smooth_normals(10);
-    let disp = s.eval(|pt| normals.get(pt.node).copied().unwrap_or(pt.n) * (0.0015 * at(&t, pt)));
+    // Strongly smoothed normals (the raw normal turns sharply in the suprasternal notch and at
+    // the neck-chin angle), horizontal part only: the crease under the jaw angle, inside the ramp
+    // with its normals converging downward, would otherwise move down into the neck and fold
+    // (192 turned faces with the sex axis at 2, todo 1.3).
+    let normals = s.smooth_normals(40);
+    let disp = s.eval(|pt| {
+        let n = normals.get(pt.node).copied().unwrap_or(pt.n);
+        Vec3::new(n.x, 0.0, n.z) * (0.0015 * at(&t, pt))
+    });
     Raw::confined(s, NECK, Symmetry::Mirror, disp, Vec::new())
 }
 
@@ -823,19 +851,23 @@ fn gums(kit: &Kit<'_, '_>) -> IdResult<Raw> {
 /// `asymmetry.nose`: the lower nose off centre to the left, the left ala a little wider.
 fn asym_nose(kit: &Kit<'_, '_>) -> IdResult<Raw> {
     let s = kit.space;
-    let w = s.around_solid(
-        &["nose.tip", "nose.subnasale", "nose.bridge.02", "L.nose.alare", "R.nose.alare"],
-        0.006,
-        0.02,
-        "nose",
-    )?;
-    let ala = s.around_solid(&["L.nose.alare", "L.nose.alar-crease"], 0.003, 0.01, "nose")?;
+    // Both weights are Euclidean everywhere, not gated by the nose region as `around_solid` is:
+    // the gate made them jump at the alar crease, where the cheek next to the ala is near in space
+    // but far along the surface (a 51-degree crease at weight 2, `id_02`). The cheek beside the
+    // ala now moves a little with it.
+    let mut seeds = Vec::new();
+    for n in ["nose.tip", "nose.subnasale", "nose.bridge.02", "L.nose.alare", "R.nose.alare"] {
+        seeds.push(s.landmark(n)?);
+    }
+    let ala = [s.landmark("L.nose.alare")?, s.landmark("L.nose.alar-crease")?];
     let root = s.landmark("nose.root")?.y;
     let tip = s.landmark("nose.tip")?.y;
+    let nearest = |points: &[Vec3], p: Vec3| points.iter().map(|q| q.distance(p)).fold(f32::INFINITY, f32::min);
     let disp = s.eval(|pt| {
         let t = smoothstep(root, tip, pt.p.y);
-        let flare = if pt.p.x > 0.0 { 0.03 * pt.p.x * at(&ala, pt) } else { 0.0 };
-        Vec3::X * (0.0008 * t * at(&w, pt) + flare)
+        let w = falloff(nearest(&seeds, pt.p), 0.006, 0.02);
+        let flare = if pt.p.x > 0.0 { 0.03 * pt.p.x * falloff(nearest(&ala, pt.p), 0.003, 0.01) } else { 0.0 };
+        Vec3::X * (0.0008 * t * w + flare)
     });
     Raw::confined(s, NOSE, Symmetry::Free, disp, Vec::new())
 }

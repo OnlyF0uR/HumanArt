@@ -109,8 +109,7 @@ pub fn assemble(surface: &Surface, parts: &[Part], layout: &Layout) -> Result<As
     // One builder vertex per layout copy, in copy order: the first copy of a piece vertex is a
     // vertex, later ones are UV-seam duplicates of the first copy on the same side of a hard edge
     // (hard-edge duplicates of the other side's first copy when their side has none yet).
-    let mut first: [Vec<Vec<u32>>; 2] =
-        [0, 1].map(|_| pieces.iter().map(|m| vec![u32::MAX; m.pos.len()]).collect());
+    let mut first: [Vec<Vec<u32>>; 2] = [0, 1].map(|_| pieces.iter().map(|m| vec![u32::MAX; m.pos.len()]).collect());
     let mut source = Vec::with_capacity(layout.copies.len());
     let mut vertex_regions = Vec::with_capacity(layout.copies.len());
     for (i, c) in layout.copies.iter().enumerate() {

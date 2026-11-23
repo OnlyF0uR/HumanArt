@@ -75,8 +75,12 @@ pub const MAX_FRAMES: u32 = 1024;
 pub const CLOSE_UPS: [&str; 3] = ["none", "eye", "mouth"];
 /// Most `--set` values on one command line.
 pub const MAX_SET_VALUES: usize = 64;
+/// Most `--pose` joints on one command line.
+pub const MAX_POSE_JOINTS: usize = 64;
+/// Most axis steps of one `--pose` rotation.
+pub const MAX_POSE_STEPS: usize = 8;
 
-const OPTIONS: [OptSpec; 22] = [
+const OPTIONS: [OptSpec; 23] = [
     OptSpec {
         name: "camera",
         value: Some("NAME"),
@@ -124,6 +128,12 @@ const OPTIONS: [OptSpec; 22] = [
         value: Some("NAME"),
         default: Some("none"),
         help: "Expression preset before --set: none, neutral, {happiness,sadness,surprise,fear,anger,disgust,contempt}.{low,medium,high} or viseme.{sil,PP,FF,TH,DD,kk,CH,SS,nn,RR,aa,E,ih,oh,ou}.",
+    },
+    OptSpec {
+        name: "pose",
+        value: Some("JOINT=ROT,..."),
+        default: None,
+        help: "Joint rotations relative to rest, in the joint's frame (Y along the bone): each ROT is axis letters with degrees applied in order, e.g. L.forearm=z120,L.upper-arm=x-70y20.",
     },
     OptSpec {
         name: "view",
@@ -181,7 +191,7 @@ pub static RENDER: CommandSpec =
     CommandSpec { name: "render", summary: "Renders one still of the character offscreen.", options: &OPTIONS };
 
 /// What `render` was asked to do.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct RenderJob {
     /// The framing.
     pub framing: Framing,
@@ -221,6 +231,9 @@ pub struct RenderJob {
     pub backdrop: BackdropChoice,
     /// Screen-space ambient occlusion and contact shadows.
     pub occlusion: bool,
+    /// Joint rotations relative to rest (joint name, unit quaternion `x, y, z, w`), set on the
+    /// document before the render.
+    pub pose: Vec<(String, [f64; 4])>,
 }
 
 impl RenderJob {
@@ -252,6 +265,7 @@ impl RenderJob {
             focus_mm: focus(p.get("focus").unwrap_or("eye"))?,
             backdrop: BACKDROPS[pick("background", &BACKGROUNDS)?],
             occlusion: pick("occlusion", &["on", "off"])? == 0,
+            pose: pose_values(p.get("pose").unwrap_or(""))?,
         })
     }
 }
@@ -360,6 +374,50 @@ fn set_values(list: &str) -> Result<Vec<(String, String)>, CliError> {
     Ok(out)
 }
 
+/// The `--pose` list: `JOINT=ROT` pairs separated by commas, each `ROT` a sequence of an axis
+/// letter (`x`, `y`, `z`) and degrees, applied in order (`z120x-10` turns 120 degrees about Z, then
+/// 10 degrees back about the turned X). Joint names are checked against the template later.
+fn pose_values(list: &str) -> Result<Vec<(String, [f64; 4])>, CliError> {
+    let mut out = Vec::new();
+    for item in list.split(',').map(str::trim).filter(|i| !i.is_empty()) {
+        let bad = || {
+            CliError::Usage(crate::args::UsageError(format!(
+                "--pose: `{item}` is not JOINT=ROT with ROT like z120 or x-30y15 (at most {MAX_POSE_STEPS} steps)"
+            )))
+        };
+        let (joint, rot) = item.split_once('=').ok_or_else(bad)?;
+        let (joint, rot) = (joint.trim(), rot.trim());
+        if joint.is_empty() || rot.is_empty() || out.len() >= MAX_POSE_JOINTS {
+            return Err(bad());
+        }
+        let mut q = humanart_math::DQuat::IDENTITY;
+        let mut steps = 0;
+        let mut rest = rot;
+        while let Some(axis) = rest.chars().next() {
+            let axis = match axis {
+                'x' | 'X' => humanart_math::DVec3::X,
+                'y' | 'Y' => humanart_math::DVec3::Y,
+                'z' | 'Z' => humanart_math::DVec3::Z,
+                _ => return Err(bad()),
+            };
+            let tail = &rest[1..];
+            let end = tail.find(|c: char| c.is_ascii_alphabetic()).unwrap_or(tail.len());
+            let degrees: f64 = tail[..end].parse().map_err(|_| bad())?;
+            if !degrees.is_finite() || degrees.abs() > 360.0 {
+                return Err(bad());
+            }
+            q *= humanart_math::DQuat::from_axis_angle(axis, degrees.to_radians());
+            rest = &tail[end..];
+            steps += 1;
+            if steps > MAX_POSE_STEPS {
+                return Err(bad());
+            }
+        }
+        out.push((joint.to_owned(), [q.x, q.y, q.z, q.w]));
+    }
+    Ok(out)
+}
+
 /// The hair options of a parsed `render` command line.
 pub(crate) fn hair_options(p: &Parsed) -> Result<Option<HairOptions>, CliError> {
     let style = p.choice("hair", &HAIR_STYLES)?;
@@ -458,6 +516,12 @@ pub fn run(job: &RenderJob) -> Result<RenderSummary, CliError> {
             for (id, value) in preset_values(&registry, name)? {
                 doc.params.insert(id, ParamValue::Scalar(value));
             }
+        }
+        for (joint, q) in &job.pose {
+            if model.template().skeleton().find(joint).is_none() {
+                return Err(CliError::Data(format!("--pose: the template has no joint `{joint}`")));
+            }
+            doc.pose.insert(joint.clone(), *q);
         }
         for (id, value) in &job.params {
             if !registry.params().iter().any(|p| p.id == *id) {
@@ -609,6 +673,31 @@ mod tests {
             &["--preset", "viseme.pp"],
         ] {
             assert!(matches!(job(bad), Err(CliError::Usage(_))), "{bad:?}");
+        }
+    }
+
+    /// todo 1.3: `--pose` turns joints for posed stills (pose correctives).
+    #[test]
+    fn todo_1_3_pose_from_the_command_line() {
+        assert!(job(&[]).unwrap().pose.is_empty());
+        let p = job(&["--pose", "L.forearm=z90, R.thigh=x-30y10"]).unwrap().pose;
+        assert_eq!(p.len(), 2);
+        assert_eq!(p[0].0, "L.forearm");
+        let s = std::f64::consts::FRAC_1_SQRT_2;
+        let q = p[0].1;
+        assert!((q[2] - s).abs() < 1e-12 && (q[3] - s).abs() < 1e-12 && q[0].abs() < 1e-12 && q[1].abs() < 1e-12);
+        let q = p[1].1;
+        assert!(((q[0] * q[0] + q[1] * q[1] + q[2] * q[2] + q[3] * q[3]).sqrt() - 1.0).abs() < 1e-12);
+        for bad in [
+            "L.forearm",
+            "=z90",
+            "L.forearm=",
+            "L.forearm=w90",
+            "L.forearm=z",
+            "L.forearm=z9000",
+            "a=x1x1x1x1x1x1x1x1x1",
+        ] {
+            assert!(matches!(job(&["--pose", bad]), Err(CliError::Usage(_))), "{bad}");
         }
     }
 

@@ -732,16 +732,18 @@ pub fn sex(kit: &Kit<'_, '_>) -> IdResult<Raw> {
     raw.add(&term(hips(kit, 0.03)?, &HIP_BREADTH_GAUGE, &HIP_BREADTH)?, 1.0);
     raw.add(&term(waist(kit, 0.04)?, &WAIST_BREADTH_GAUGE, &WAIST_BREADTH)?, 1.0);
     raw.add(&term(face::neck_width(kit)?, &NECK_GIRTH, &NECK_CIRC)?, 1.0);
-    raw.add(&breasts(kit, -0.006)?, 1.0);
-    // The ptosis shrinks with the mound (as in the switch's breast): a female breast reduced by
-    // this axis would otherwise keep a lower pole hanging over a smaller mound and turn the faces
-    // at the inframammary fold over.
-    let ptosis = -0.006 * super::sex::BREAST_PTOSIS / super::sex::BREAST_HEIGHT;
-    raw.add(&breast_shape(kit, BreastShape::Ptosis, ptosis)?, 1.0);
     raw.add(&Raw::confined(s, SOFT_TISSUE, Symmetry::Mirror, muscle_field(kit, 0.0, 0.5)?, Vec::new())?, 1.0);
     raw.add(&glutes(kit, -0.004)?, 1.0);
     raw.add(&flanks(kit, -0.003)?, 1.0);
     s.smooth_field(&mut raw.disp, SHAPE_SMOOTHING, &TRUNK_AND_LIMBS)?;
+    // The breast terms come after the smoothing (each is smoothed on its own already): smoothed
+    // again with the rest, the reduction blurred across the inframammary fold and turned 8 faces
+    // there over for a female at weight 2 (todo 1.3). The ptosis shrinks with the mound (as in
+    // the switch's breast): a female breast reduced by this axis would otherwise keep a lower pole
+    // hanging over a smaller mound and turn the faces at the fold over.
+    raw.add(&breasts(kit, -0.006)?, 1.0);
+    let ptosis = -0.006 * super::sex::BREAST_PTOSIS / super::sex::BREAST_HEIGHT;
+    raw.add(&breast_shape(kit, BreastShape::Ptosis, ptosis)?, 1.0);
     raw.add(&face::brow_ridge(kit)?, 0.8);
     raw.add(&face::jaw_width(kit)?, 0.7);
     raw.add(&face::chin_height(kit)?, 0.5);

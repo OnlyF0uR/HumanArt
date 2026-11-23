@@ -283,6 +283,13 @@ pub fn without_identity(template: &Template) -> IdResult<Template> {
     rebuild(template, |name| !BINDINGS.iter().any(|b| b.1 == name), &[])
 }
 
+/// The template with only the existing components `keep` accepts, every index that refers to a
+/// component re-mapped by name (definitions that point at a dropped component must be removed
+/// first).
+pub(crate) fn rebuild_keeping(template: &Template, keep: impl Fn(&str) -> bool) -> IdResult<Template> {
+    rebuild(template, keep, &[])
+}
+
 /// The template with the existing components `keep` accepts plus `components`, every index that
 /// refers to a component re-mapped by name.
 fn rebuild(template: &Template, keep: impl Fn(&str) -> bool, components: &[IdentityComponent]) -> IdResult<Template> {

@@ -725,7 +725,7 @@ pub fn character_grooms(hair: &TemplateHair, spec: &GroomSetSpec) -> HairResult<
         let mask = ScalpMask::new(surface, hair.body_triangles().to_vec())?;
         let p = body_hair(surface, &mask, &sparse, 1500, spec.seed ^ 0xB0D7)?;
         let (eumelanin, pheomelanin, grey_fraction) = colour(GroomKind::Body);
-        let params = GroomParams { eumelanin, pheomelanin, grey_fraction, ..p.params };
+        let params = GroomParams { grey_fraction, eumelanin, pheomelanin, ..p.params };
         let layout = place(surface, &mask, &p.guides, &params, &maps, spec.seed ^ 0xB0D8)?;
         out.push(groom(GroomKind::Body, p.guides, params, layout));
     }
@@ -1180,6 +1180,6 @@ mod tests {
         assert!(length(&longer, GroomKind::Facial) > 1.5 * length(&full, GroomKind::Facial));
         let brows = set.iter().find(|g| g.kind == GroomKind::Brows).unwrap();
         assert_eq!(brows.params.grey_fraction, pigments(GroomKind::Brows, &faced).2);
-        assert!(set.iter().find(|g| g.kind == GroomKind::Lashes).unwrap().params.grey_fraction == 0.0);
+        assert_eq!(set.iter().find(|g| g.kind == GroomKind::Lashes).unwrap().params.grey_fraction, 0.0);
     }
 }

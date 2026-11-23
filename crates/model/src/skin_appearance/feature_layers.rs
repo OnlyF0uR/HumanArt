@@ -17,7 +17,7 @@
 
 use humanart_core::id::Id128;
 use humanart_core::rng::Rng;
-use humanart_math::Vec2;
+use humanart_math::{Vec2, Vec3};
 
 use super::dirty::Rect;
 use super::error::SkinError;
@@ -217,6 +217,70 @@ pub fn generate_layer(
         layer.opacity = if opacity.is_finite() { opacity.clamp(0.0, 1.0) } else { 1.0 };
     }
     Ok(out)
+}
+
+/// The landmarks spot features (moles) keep clear of, with the clearance in metres (todo 1.1): a
+/// mole in the jugular notch, on a nipple, in the navel or at an eye or mouth corner reads as a
+/// blemish of the model, not of the person. Moles are placed in texture space, so a UV repack
+/// moved one onto the notch.
+pub const SPOT_CLEARANCE: &[(&str, f32)] = &[
+    ("torso.suprasternal", 0.025),
+    ("L.chest.nipple", 0.02),
+    ("R.chest.nipple", 0.02),
+    ("torso.navel", 0.02),
+    ("L.eye.canthus.medial", 0.008),
+    ("L.eye.canthus.lateral", 0.008),
+    ("R.eye.canthus.medial", 0.008),
+    ("R.eye.canthus.lateral", 0.008),
+    ("L.lip.corner", 0.008),
+    ("R.lip.corner", 0.008),
+];
+
+/// `masks` (made from `template` at `tile_size`² texels) with the texels whose rest surface lies
+/// within each landmark's clearance set to zero, fading to full over the next half clearance.
+/// Landmarks the template lacks are skipped. The tiles' shares are kept (counts stay those of
+/// the whole region).
+#[must_use]
+pub fn clear_of_landmarks(
+    template: &Template,
+    masks: &[RegionMask],
+    tile_size: u32,
+    clearance: &[(&str, f32)],
+) -> Vec<RegionMask> {
+    let mesh = template.mesh();
+    let points: Vec<(Vec3, f32)> = clearance
+        .iter()
+        .filter_map(|&(name, r)| {
+            let l = template.landmarks().iter().find(|l| l.name == name)?;
+            Some((l.position(mesh.positions())?, r))
+        })
+        .collect();
+    if points.is_empty() {
+        return masks.to_vec();
+    }
+    let triangles = mesh.triangulate();
+    masks
+        .iter()
+        .map(|m| {
+            let mut out = m.clone();
+            if m.mask.len() as u64 != m.rect.area() {
+                return out;
+            }
+            let surface = surface_under(mesh, &triangles, m, tile_size);
+            for ((w, texel), &covered) in out.mask.iter_mut().zip(&surface.texels).zip(&surface.covered) {
+                if !covered {
+                    continue;
+                }
+                let p = Vec3::new(texel[0], texel[1], texel[2]);
+                for &(q, r) in &points {
+                    let d = p.distance(q);
+                    let t = ((d - r) / (0.5 * r)).clamp(0.0, 1.0);
+                    *w *= t * t * (3.0 - 2.0 * t);
+                }
+            }
+            out
+        })
+        .collect()
 }
 
 /// Most lines [`level_lines`] draws.
@@ -545,6 +609,50 @@ mod tests {
         assert!(tiles.len() > 1, "one rectangle per tile, one layer");
     }
 
+    /// todo 1.1: the masks moles are placed with keep clear of the jugular notch, the nipples, the
+    /// navel and the eye and mouth corners; elsewhere they are untouched.
+    #[test]
+    fn todo_1_1_moles_keep_clear_of_landmarks() {
+        let t = crate::generate::build::template(&crate::generate::build::Options {
+            lods: false,
+            ..crate::generate::build::Options::default()
+        })
+        .unwrap()
+        .template;
+        let size = 256;
+        let all = region_masks(&t, None, size).unwrap();
+        let cleared = clear_of_landmarks(&t, &all, size, SPOT_CLEARANCE);
+        assert_eq!(cleared.len(), all.len());
+        let triangles = t.mesh().triangulate();
+        let landmark =
+            |n: &str| t.landmarks().iter().find(|l| l.name == n).unwrap().position(t.mesh().positions()).unwrap();
+        let (mut near, mut kept, mut far) = (0, 0, 0);
+        for (before, after) in all.iter().zip(&cleared) {
+            assert_eq!((before.tile, before.rect, before.share), (after.tile, after.rect, after.share));
+            let s = surface_under(t.mesh(), &triangles, before, size);
+            for ((&b, &a), (texel, &covered)) in
+                before.mask.iter().zip(&after.mask).zip(s.texels.iter().zip(&s.covered))
+            {
+                if !covered || b <= 0.0 {
+                    continue;
+                }
+                let p = Vec3::new(texel[0], texel[1], texel[2]);
+                let gap =
+                    SPOT_CLEARANCE.iter().map(|&(n, r)| p.distance(landmark(n)) / r).fold(f32::INFINITY, f32::min);
+                if gap < 1.0 {
+                    near += 1;
+                    assert_eq!(a, 0.0, "a texel inside a clearance keeps weight {a}");
+                } else if gap > 1.5 {
+                    far += 1;
+                    kept += usize::from(a == b);
+                }
+            }
+        }
+        println!("[todo 1.1] {near} texels cleared, {kept} of {far} far texels kept");
+        assert!(near > 20, "the clearances cover texels");
+        assert_eq!(kept, far, "texels away from every landmark keep their weight");
+    }
+
     /// The neck's lines are level lines of the rest height: every marked texel lies near one of
     /// the few heights (rows in the tile's texels wander over the whole neck, its island is an
     /// arc), and the lines go around the neck (they span its width, front and back).
@@ -606,7 +714,7 @@ mod tests {
             touched[1].len(),
             bins.len(),
         );
-        assert!(touched[1].len() > 400 && deepest < -0.4 && deepest >= -0.7);
+        assert!(touched[1].len() > 400 && (-0.7..-0.4).contains(&deepest));
         assert!((60.0..200.0).contains(&span_mm), "a neck, not the strays of its region map: {span_mm} mm");
         // Four lines, each within its wave and the groove's deep part of its height.
         let band_mm = 2.0 * (LEVEL_WAVE_MM + 1.35_f32.max(texel_mm)) + 1.0;

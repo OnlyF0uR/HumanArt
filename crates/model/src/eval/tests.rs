@@ -184,6 +184,7 @@ pub fn face_patch(n: usize, identity: usize) -> Template {
             inputs: vec![0, 2],
             component: find("smile-L.brow-raise"),
         }],
+        pose_drivers: Vec::new(),
         pose_correctives: vec![PoseCorrective {
             name: "jaw.open-fix".into(),
             joint: 2,

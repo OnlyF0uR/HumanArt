@@ -248,6 +248,7 @@ pub(crate) mod fixtures {
                     }
                 })
                 .collect(),
+            pose_drivers: Vec::new(),
             pose_correctives: (0..spec.pose_correctives)
                 .map(|k| PoseCorrective {
                     name: format!("pose.{k}"),

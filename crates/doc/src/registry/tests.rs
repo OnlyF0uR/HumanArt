@@ -497,6 +497,7 @@ fn reg_02_template_coverage_reports_both_directions() {
         expressions: ExpressionSet {
             expressions: vec![expression],
             combinations: Vec::new(),
+            pose_drivers: Vec::new(),
             pose_correctives: Vec::new(),
         },
         lods: Vec::new(),

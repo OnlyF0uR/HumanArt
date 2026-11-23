@@ -20,6 +20,7 @@ use humanart_io::bytes::{Reader, Writer};
 use humanart_io::{Error as IoError, Format, Limits};
 
 use crate::error::{ModelError, Result};
+use crate::expression::pose_space::PoseDriver;
 use crate::mesh::MAX_VERTICES;
 use crate::template::{Template, TemplateParts};
 use sections::Dec;
@@ -67,7 +68,10 @@ pub mod tag {
     pub const EXPR: [u8; 4] = *b"EXPR";
     /// LOD1 and further.
     pub const LODS: [u8; 4] = *b"LODS";
-    /// Every tag this version writes, in order.
+    /// Pose drivers: written after the others, and only when the template has any (a required
+    /// section then, since a reader that skipped it would activate the correctives differently).
+    pub const PDRV: [u8; 4] = *b"PDRV";
+    /// Every tag this version always writes, in order.
     pub const ALL: [[u8; 4]; 10] = [META, MESH, TILE, REGN, LMRK, SKEL, SKIN, DLTA, EXPR, LODS];
 }
 
@@ -137,8 +141,17 @@ impl SectionEntry {
 /// Writes `template` as a package.
 pub fn write_package(template: &Template) -> Result<Vec<u8>> {
     let payloads = encode_sections(template.parts())?;
-    let sections: Vec<([u8; 4], u16, &[u8])> =
+    let mut sections: Vec<([u8; 4], u16, &[u8])> =
         tag::ALL.iter().zip(&payloads).map(|(&t, p)| (t, FLAG_REQUIRED, p.as_slice())).collect();
+    let drivers = &template.parts().expressions.pose_drivers;
+    let mut w = Writer::default();
+    if !drivers.is_empty() {
+        sections::write_pose_drivers(&mut w, drivers);
+    }
+    let pdrv = w.into_vec();
+    if !drivers.is_empty() {
+        sections.push((tag::PDRV, FLAG_REQUIRED, pdrv.as_slice()));
+    }
     Ok(assemble(&sections))
 }
 
@@ -147,7 +160,16 @@ pub fn read_package(bytes: &[u8], limits: &PackageLimits) -> Result<Template> {
     let entries = read_directory(bytes, limits)?;
     let mut payloads: Vec<Vec<u8>> = vec![Vec::new(); tag::ALL.len()];
     let mut found = [false; tag::ALL.len()];
+    let mut drivers = None;
     for e in &entries {
+        if e.tag == tag::PDRV {
+            if e.version != SECTION_VERSION {
+                return Err(ModelError::Codec(IoError::Unsupported { format: Format::Chunk, what: "section version" })
+                    .in_section(e.tag));
+            }
+            drivers = Some(section_payload(bytes, e).map_err(|err| err.in_section(e.tag))?);
+            continue;
+        }
         match tag::ALL.iter().position(|&t| t == e.tag) {
             Some(i) => {
                 if e.version != SECTION_VERSION {
@@ -179,7 +201,11 @@ pub fn read_package(bytes: &[u8], limits: &PackageLimits) -> Result<Template> {
         .in_section(tag::ALL[i]));
     }
     let views: Vec<&[u8]> = payloads.iter().map(Vec::as_slice).collect();
-    decode_template(&views, limits)
+    let drivers = match &drivers {
+        Some(raw) => section(tag::PDRV, raw, limits, sections::read_pose_drivers)?,
+        None => Vec::new(),
+    };
+    decode_template(&views, drivers, limits)
 }
 
 /// Reads and checks the header and section table: magic, version, flags, file length, table
@@ -379,12 +405,16 @@ fn section<T>(
 }
 
 /// Decodes the payloads of `tag::ALL` (in that order) into a checked template.
-pub(crate) fn decode_template(raw: &[&[u8]], limits: &PackageLimits) -> Result<Template> {
+pub(crate) fn decode_template(
+    raw: &[&[u8]],
+    pose_drivers: Vec<PoseDriver>,
+    limits: &PackageLimits,
+) -> Result<Template> {
     let [meta, mesh, tiles, regions, landmarks, skeleton, skin, deltas, expressions, lods] = raw else {
         return Err(ModelError::invalid("package", 0, "wrong number of sections"));
     };
     let info = sections::read_meta(meta).map_err(|e| e.in_section(tag::META))?;
-    let parts = TemplateParts {
+    let mut parts = TemplateParts {
         info,
         mesh: section(tag::MESH, mesh, limits, sections::read_mesh)?,
         tiles: section(tag::TILE, tiles, limits, sections::read_tiles)?,
@@ -396,6 +426,7 @@ pub(crate) fn decode_template(raw: &[&[u8]], limits: &PackageLimits) -> Result<T
         expressions: section(tag::EXPR, expressions, limits, sections::read_expressions)?,
         lods: section(tag::LODS, lods, limits, sections::read_lods)?,
     };
+    parts.expressions.pose_drivers = pose_drivers;
     Template::new(parts)
 }
 

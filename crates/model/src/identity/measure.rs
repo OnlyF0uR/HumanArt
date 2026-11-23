@@ -208,6 +208,71 @@ pub enum Gauge {
     /// regions within [`GIRTH_BAND`] of the level; with `true` only the left side (x > 0, one
     /// thigh).
     Girth(&'static [&'static str], Level, bool),
+    /// ANSUR II `mentonsellionlength` on the displaced midline profile of the outer face skin
+    /// ([`midline_profile`], [`face_points`]): the straight distance from the sellion (the deepest
+    /// point of the nasal root) to the menton (the lowest point of the chin). Found anew on each
+    /// shape, so it follows the skin where fixed landmark vertices would not (the menton is
+    /// whichever vertex is lowest on the reshaped chin).
+    FaceHeight,
+}
+
+/// The regions under the face whose skin is inside the mouth (the profile skips them).
+pub const MOUTH_INSIDE: [&str; 6] =
+    ["mouth-interior", "teeth-upper", "teeth-lower", "gums-upper", "gums-lower", "tongue"];
+
+/// The frontmost of `points` per millimetre of height between `lo` and `hi` among those near the
+/// midline (|x| < 2 mm) and in front of the depth `front`, top down: the face's profile as a
+/// side photograph shows it.
+#[must_use]
+pub fn midline_profile(points: impl Iterator<Item = Vec3>, lo: f32, hi: f32, front: f32) -> Vec<Vec3> {
+    let span = hi - lo;
+    if span.is_nan() || span <= 0.0 || span >= 10.0 {
+        return Vec::new();
+    }
+    let mut bins: Vec<Option<Vec3>> = vec![None; ((hi - lo) * 1000.0) as usize + 1];
+    for q in points.filter(|q| q.x.abs() < 0.002 && q.y > lo && q.y < hi && q.z > front) {
+        if let Some(slot) = bins.get_mut(((hi - q.y) * 1000.0) as usize)
+            && slot.is_none_or(|o: Vec3| q.z > o.z)
+        {
+            *slot = Some(q);
+        }
+    }
+    bins.into_iter().flatten().collect()
+}
+
+/// The profile point between the heights `lo` and `hi` that lies farthest along `dir`, softly:
+/// the mean of the points weighted by `exp((d - d_max) / 0.5 mm)` for their distance `d` along
+/// `dir`. The hard extreme jumps from one vertex to another as a shape changes (2 mm jumps of the
+/// face height made the sex switch's fit oscillate); the soft one moves continuously and lies
+/// within a fraction of a millimetre of it.
+#[must_use]
+pub fn profile_support(profile: &[Vec3], lo: f32, hi: f32, dir: Vec3) -> Option<Vec3> {
+    const SCALE: f32 = 0.0005;
+    let window = || profile.iter().copied().filter(|q| q.y >= lo && q.y <= hi);
+    let top = window().map(|q| q.dot(dir)).fold(f32::NEG_INFINITY, f32::max);
+    if !top.is_finite() {
+        return None;
+    }
+    let (sum, wsum) = window().fold((Vec3::ZERO, 0.0), |(s, w), q| {
+        let k = ((q.dot(dir) - top) / SCALE).exp();
+        (s + q * k, w + k)
+    });
+    (wsum > 0.0).then(|| sum / wsum)
+}
+
+/// The midline points `[sellion, supramentale, pogonion, menton]` of a profile, given the heights
+/// of the nose tip, the brow and the lower lip.
+/// `None` where a point has no profile sample.
+#[must_use]
+pub fn profile_points(profile: &[Vec3], nose_tip_y: f32, brow_y: f32, lower_lip_y: f32) -> Option<[Vec3; 4]> {
+    let sellion = profile_support(profile, nose_tip_y + 0.012, brow_y + 0.006, -Vec3::Z)?;
+    let supramentale = profile_support(profile, lower_lip_y - 0.022, lower_lip_y - 0.003, -Vec3::Z)?;
+    let pogonion = profile_support(profile, supramentale.y - 0.03, supramentale.y - 0.003, Vec3::Z)?;
+    // The menton: the lowest point of the chin, taken 60 degrees below the horizontal among the
+    // points at most 25 mm behind the pogonion, so that the neck below does not count as chin.
+    let chin: Vec<Vec3> = profile.iter().copied().filter(|q| q.z > pogonion.z - 0.025).collect();
+    let menton = profile_support(&chin, pogonion.y - 0.035, pogonion.y, Vec3::new(0.0, -0.866, 0.5))?;
+    Some([sellion, supramentale, pogonion, menton])
 }
 
 impl Gauge {
@@ -266,6 +331,19 @@ impl Gauge {
                 let pts = selected(regions, &|p| (p.y - y).abs() <= GIRTH_BAND && (!left || p.x > 0.0))?;
                 let flat: Vec<(f32, f32)> = pts.iter().map(|p| (p.x, p.z)).collect();
                 hull_perimeter(&flat)
+            }
+            Self::FaceHeight => {
+                let flags = s.reach_flags(&Reach { regions: &["face"], except: &MOUTH_INSIDE, margin: 0.0 })?;
+                let points = (0..s.node_count())
+                    .filter(|&n| skin(n) && flags.get(field.region_of(n) as usize).copied().unwrap_or(false))
+                    .map(at);
+                let (prn, brow) = (landmark("nose.tip")?, landmark("L.brow.03")?);
+                let (li, sto) = (landmark("lip.lower.outer.06")?, landmark("lip.upper.inner.06")?);
+                let (vertex, tragion) = (landmark("head.vertex")?, landmark("ear.L.tragion")?);
+                let profile = midline_profile(points, sto.y - 0.09, vertex.y, tragion.z);
+                let [sellion, _, _, menton] = profile_points(&profile, prn.y, brow.y, li.y)
+                    .ok_or(IdentityError::invalid("measurement", 0, "the face profile misses a point"))?;
+                sellion.distance(menton)
             }
         };
         if value.is_finite() && value > 0.0 {

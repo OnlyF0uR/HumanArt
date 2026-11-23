@@ -175,7 +175,7 @@ fn ac_wp11_3_tiled_8k_still_equals_the_untiled_render() {
         };
         by_seam[bucket] += 1;
     }
-    map.chunks_exact_mut(4).for_each(|p| p[3] = 255);
+    map.as_chunks_mut::<4>().0.iter_mut().for_each(|p| p[3] = 255);
     common::save_png("still_8k_difference_map.png", mw, mh, &map);
     println!("samples differing by more than 1, by distance to a seam (0-2, 2-8, 8-32, 32-128, 128+ px): {by_seam:?}");
     assert!(mean < 0.002, "mean difference {mean}");

@@ -15,7 +15,7 @@
 //!
 //! Every intermediate value is saturated to `±`[`MAX_WEIGHT`] (products step by step), so finite
 //! controls always give finite weights. **Outputs** map nodes or controls to expressions (at most
-//! one output per expression); [`RigLogic::evaluate`] writes those expressions' weights and leaves
+//! one output per expression); [`RigGraph::evaluate`] writes those expressions' weights and leaves
 //! the others as the caller set them, so directly driven expressions can be mixed in.
 //!
 //! The arrays are flat (SoA: op codes, parameters, argument ranges into shared register/weight
@@ -97,7 +97,7 @@ impl RigOp {
     }
 }
 
-/// The description of one node for [`RigLogic::add_node`].
+/// The description of one node for [`RigGraph::add_node`].
 #[derive(Clone, Debug, PartialEq)]
 pub struct NodeSpec<'a> {
     /// Stable name of the node's register.
@@ -116,7 +116,7 @@ pub struct NodeSpec<'a> {
 
 /// A checked rig-logic graph, flat arrays.
 #[derive(Clone, Debug, Default, PartialEq)]
-pub struct RigLogic {
+pub struct RigGraph {
     names: Vec<String>,
     controls: usize,
     ops: Vec<RigOp>,
@@ -132,7 +132,7 @@ pub struct RigLogic {
     lookup: BTreeMap<String, u32>,
 }
 
-impl RigLogic {
+impl RigGraph {
     /// A rig with the given controls and no nodes or outputs.
     pub fn new<'a>(controls: impl IntoIterator<Item = &'a str>) -> EvalResult<Self> {
         let mut rig = Self { arg_offsets: vec![0], curve_offsets: vec![0], ..Self::default() };
@@ -446,7 +446,7 @@ mod tests {
     #[test]
     fn exp_03_rig_from_json_evaluates_every_op() {
         let t = face_patch(4, 0);
-        let rig = RigLogic::from_json(&parse_str(RIG).unwrap(), t.expressions()).unwrap();
+        let rig = RigGraph::from_json(&parse_str(RIG).unwrap(), t.expressions()).unwrap();
         assert_eq!(rig.control_count(), 2);
         assert_eq!(rig.register_count(), 8);
         assert_eq!(rig.control_names(), &["smile_L".to_string(), "brow_up".to_string()]);
@@ -474,7 +474,7 @@ mod tests {
 
     #[test]
     fn exp_03_extreme_controls_stay_finite() {
-        let mut rig = RigLogic::new(["a"]).unwrap();
+        let mut rig = RigGraph::new(["a"]).unwrap();
         let mut reg = 0;
         for k in 0..20 {
             let name = format!("p{k}");
@@ -522,9 +522,9 @@ mod tests {
         ];
         for (i, text) in bad.iter().enumerate() {
             let v = parse_str(text).unwrap();
-            assert!(RigLogic::from_json(&v, t.expressions()).is_err(), "case {i} accepted");
+            assert!(RigGraph::from_json(&v, t.expressions()).is_err(), "case {i} accepted");
         }
-        let mut rig = RigLogic::new(["a"]).unwrap();
+        let mut rig = RigGraph::new(["a"]).unwrap();
         rig.add_output(0, 0, 2).unwrap();
         assert!(rig.add_output(0, 0, 2).is_err(), "expression driven twice");
         assert!(rig.add_output(1, 9, 2).is_err());
@@ -555,7 +555,7 @@ mod tests {
             std::time::Duration::from_secs(60),
             move |bytes| {
                 let Ok(v) = humanart_io::json::parse(bytes) else { return };
-                if let Ok(rig) = RigLogic::from_json(&v, &expressions) {
+                if let Ok(rig) = RigGraph::from_json(&v, &expressions) {
                     let mut regs = vec![0.0; rig.register_count()];
                     let mut ex = vec![0.0; expressions.expressions.len()];
                     let controls = vec![0.7; rig.control_count()];

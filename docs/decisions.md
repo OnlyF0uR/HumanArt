@@ -381,15 +381,17 @@ rewritten: a later ADR supersedes it and says so.
 
 ## ADR-031: Rig logic and the joint hierarchy evaluate on the CPU
 
-- **Decision.** The rig logic `[EXP-03]` (`humanart_model::eval::rig::RigLogic::evaluate`) and the
+- **Decision.** The rig logic `[EXP-03]` (`humanart_model::eval::rig::RigGraph::evaluate`) and the
   joint chain run on the CPU; the GPU deformer (`humanart_render::deform::GpuDeformer`) receives
   per-component weights (expression weights included) and 5 `vec4` per joint (`JointFrames`).
   `[EXP-03]` allows either ("evaluated-on-GPU or CPU"). Wrinkle drivers likewise stay on the CPU
   (`WrinkleDrivers`); the region strain they read is produced on the GPU.
 - **Reason.** Both are sequential chains of a few hundred nodes or joints (microseconds on the CPU);
-  a GPU version would run on one thread. A GPU rig would also need read accessors on `RigLogic`
+  a GPU version would run on one thread. A GPU rig would also need read accessors on `RigGraph`
   (its parameters, argument tables and curve tables are private to the CPU module).
 - Source: `target/agents/gpu-eval/STATUS.md` (proposed ADR).
+- **Note (2026-11-23).** The type was called `RigLogic` until 2026-11-23 and is `RigGraph` now: Epic lists
+  RigLogic as its trademark (OpenRigLogic `TRADEMARKS.md`). No stored name changed.
 
 ## ADR-032: GPU deformation outputs are packed f32 xyz, not the `[EVAL-05]` example layouts
 
@@ -869,3 +871,40 @@ Amends ADR-002 (profiles).
   procedural face, `scan_face: false`) and this ADR is revisited.
 - Source: the lead's judgement, delegated by the owner on 2026-11-21 ("fix the licensing thing, on
   what you think is best").
+
+## ADR-057: Pose correctives are solved by radial basis interpolation and derived from better skinning
+
+- **Context.** `todo.md` 1.3 asks for pose correctives at the shoulders, armpits, elbows, hips and
+  knees. A `PoseCorrective` fades in around one target rotation with a compact kernel, which is
+  weakest where one joint reaches the same skin through very different rotations: two overlapping
+  kernels both switch on half way and add up. The template had no correctives at all, so the
+  default (linear-blend) skinning collapsed the bent elbow and knee (the 126-degree knee lost
+  709 cm³) and turned faces over at the raised shoulder.
+- **Decision.** (1) A `PoseDriver` (`humanart_model::expression::pose_space`, section `PDRV` of the
+  package, written only when a template has drivers) groups the correctives of one joint and
+  solves them by Gaussian radial basis interpolation over their target rotations with the rest
+  pose as an implicit zero example, comparing the swing, the unwound twist about the bone (the
+  joint frame's Y) or the whole rotation; activations are clamped to [0, 1] and scaled down when
+  they sum above 1. It follows OpenRigLogic's interpolative solver and swing/twist metrics (MIT,
+  Epic Games; the notice is kept in the module). `PoseSpace` evaluates every corrective (drivers and
+  free kernels) without allocation and is shared by the CPU evaluator and the GPU deformer, so
+  both activate identically. (2) The template's correctives (`generate::correctives`, 11 example
+  poses per side: elbow 90 and 140 degrees, knee 90 and 126, shoulder down, up, forward, back,
+  hip flexed, extended, spread) are derived, not sculpted: the rest-space delta that turns the
+  default skinning into a target surface at the example pose. The target is dual-quaternion
+  skinning (hips) or Delta Mush (Mancewicz et al. 2014) of it with the enclosed volume put back
+  around the bent joint (elbow, knee, shoulder), chosen by measurement (volume, faces turned over,
+  mean change of the dihedral angles near the joint) against the alternatives (plain Delta Mush,
+  10 to 40 iterations, with and without the volume, dual quaternions alone).
+- **Alternatives.** Sculpted corrective shapes (none exist, and nobody here can sculpt and judge
+  them on screen); optimised centres of rotation (Le and Hodgins 2016), a skinning method rather
+  than correctives and an O(vertices × triangles) precomputation; per-pose Delta Mush at run time
+  (smoothing every frame breaks `[PERF-R1]`).
+- **Consequences.** Posed bodies keep their volume at the knee and elbow and fold less at the
+  shoulder (test `todo_1_3_correctives_keep_volume_and_smooth_folds_at_bent_joints`; numbers in
+  `todo.md` 1.3). Past about 126 degrees the calf meets the thigh: there is no contact handling, so
+  the deepest knee example stops there, and the elbow at 140 degrees still has about 160 faces
+  turned over in the crease where the arm folds on itself. The shapes are a starting point the
+  sculpt tools can refine; twist joints (`upper-arm.twist`, `forearm.twist`) still carry no skin
+  weights, so a rolled forearm still wraps.
+- Source: the lead, 2026-11-23 (todo 1.3, overnight run).

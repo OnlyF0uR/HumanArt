@@ -9,11 +9,13 @@
 use humanart_core::id::Id128;
 use humanart_doc::command::{Action, Command, ObjectKind, Outcome, RangePolicy, StrokeKind};
 use humanart_doc::document::{Document, LockTarget};
+use humanart_doc::expression_drive::ExpressionDrive;
 use humanart_doc::history::Scope;
-use humanart_doc::registry::{ParamValue, decode_value};
+use humanart_doc::registry::{Evaluation, ParamValue, decode_value};
 use humanart_io::json::{Object, Value};
 use humanart_math::Vec3;
 use humanart_model::eval::landmarks::{LandmarkGoal, LandmarkSolver, SolveRequest, SolveSettings};
+use humanart_model::expression::presets::Presets;
 use humanart_render::camera::Camera;
 
 use super::super::render::{CAMERA_PRESETS, RIG_NAMES, rig_by_name, rig_name};
@@ -266,7 +268,7 @@ pub static TOOLS: [ToolSpec; 35] = [
         Access::Mutate,
         APPLY_EXPRESSION,
         apply_expression,
-        "Sets every expression control to a stored preset's weights."
+        "Sets every expression control to a preset's weights: one stored in the document, or a built-in one by name (neutral, happiness.high, viseme.PP, ...)."
     ),
     tool!(
         "set_pose",
@@ -518,15 +520,45 @@ fn apply_expression(ctx: &mut ToolCtx<'_, '_>, a: &Value) -> Result<ToolOutput, 
     let proposal = args::id(a, "proposal_id")?;
     let preset = match (args::id(a, "preset_id")?, args::str(a, "preset_name")) {
         (Some(id), _) => id,
-        (None, Some(name)) => target_doc(ctx, proposal)?
-            .expression_presets
-            .iter()
-            .find(|p| p.name == name)
-            .map(|p| p.id)
-            .ok_or_else(|| ToolError::new("not_found", format!("no expression preset named {name}")))?,
+        (None, Some(name)) => {
+            let stored = target_doc(ctx, proposal)?.expression_presets.iter().find(|p| p.name == name).map(|p| p.id);
+            match stored {
+                Some(id) => id,
+                // No preset of that name in the document: a built-in one (todo 1.8).
+                None => return apply_builtin_expression(ctx, a, name),
+            }
+        }
         (None, None) => return Err(bad("give preset_id or preset_name")),
     };
     run(ctx, a, Action::ApplyExpressionPreset { preset })
+}
+
+/// Applies the built-in expression preset `name` (`data/template/expressions/presets.json`:
+/// emotions and visemes) as one parameter change, as a stored preset applies: every expression
+/// parameter to the preset's weight for its control, the others back to their defaults.
+fn apply_builtin_expression(ctx: &mut ToolCtx<'_, '_>, a: &Value, name: &str) -> Result<ToolOutput, ToolError> {
+    let presets =
+        Presets::builtin().map_err(|e| ToolError::new("internal", format!("the built-in expression presets: {e}")))?;
+    let preset =
+        presets.find(name).ok_or_else(|| ToolError::new("not_found", format!("no expression preset named {name}")))?;
+    let reg = ctx.engine.registry();
+    let mut values: Vec<(String, ParamValue)> = reg
+        .params()
+        .iter()
+        .filter(|p| matches!(p.evaluation, Evaluation::Expression(_)) && !p.read_only)
+        .map(|p| (p.id.clone(), p.default.clone()))
+        .collect();
+    for (control, weight) in &preset.controls {
+        let p = ExpressionDrive::param_of_control(reg, control).ok_or_else(|| {
+            ToolError::new("internal", format!("preset {name}: no parameter drives the control {control}"))
+        })?;
+        let value = ParamValue::Scalar(f64::from(*weight));
+        match values.iter_mut().find(|(id, _)| *id == p.id) {
+            Some(slot) => slot.1 = value,
+            None => values.push((p.id.clone(), value)),
+        }
+    }
+    run(ctx, a, Action::SetParams { values, relative: false, policy: policy(a) })
 }
 
 fn set_pose(ctx: &mut ToolCtx<'_, '_>, a: &Value) -> Result<ToolOutput, ToolError> {

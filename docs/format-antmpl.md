@@ -169,7 +169,19 @@ scan data `[ID-07]` kinds 0, 1 and 3 are simply absent.
   corrective delta).
 - `u32` pose corrective count (≤ 4096), per corrective: `str` name, `u16` joint, `quat` target
   rotation relative to rest, `f32` radius in (0, π], `u32` component (a pose corrective delta).
-  Activation: `(1 − (a / radius)²)²` for the angle `a` to the target below the radius, else 0.
+  Activation: `(1 − (a / radius)²)²` for the angle `a` to the target below the radius, else 0,
+  unless a pose driver (`PDRV`) owns the corrective.
+
+### `PDRV`: pose drivers (optional, todo 1.3)
+
+Written after `LODS`, flagged required, and only when the template has pose drivers (templates
+without any are byte-identical to before). `u32` driver count (≤ 4096), per driver: `str` name,
+`u16` joint, `u8` metric (0 swing, 1 twist, 2 full; twist is about the joint frame's Y axis, the
+bone), `f32` kernel radius in (0, π], `u32` corrective count (1..32), that many `u32` distinct pose
+corrective indices, each corrective driving the same joint and owned by no other driver. The
+correctives' targets are the driver's example poses; the rest pose is an implicit example with every
+output 0. Activations: Gaussian radial basis interpolation `exp(−(d/r)²)` of the examples, clamped to
+[0, 1] and scaled down when they sum above 1 (`humanart_model::expression::pose_space`).
 
 ### `LODS`: LOD1 and further `[MOD-05]`
 

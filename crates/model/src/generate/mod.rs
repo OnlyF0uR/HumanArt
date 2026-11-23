@@ -25,6 +25,7 @@ pub mod assemble;
 pub mod body;
 pub mod build;
 pub mod cage;
+pub mod correctives;
 pub mod face;
 pub mod finish;
 pub mod genitals;

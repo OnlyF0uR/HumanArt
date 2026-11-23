@@ -39,8 +39,10 @@ use humanart_gpu::profiler::GpuProfiler;
 use humanart_gpu::resources::{BufferDesc, BufferId, Category, Resources, Tag};
 use humanart_math::{Quat, Vec3};
 use humanart_model::Template;
+use humanart_model::eval::TwistRig;
 use humanart_model::eval::evaluator::{FULL_REFRESH_INTERVAL, MAX_WEIGHT};
 use humanart_model::eval::{EvalError, EvalInput, JointFrames, SculptLayer, SkinningMode};
+use humanart_model::expression::pose_space::PoseSpace;
 
 use super::error::DeformError;
 use super::tables::{DeformTables, LodTables};
@@ -381,6 +383,10 @@ pub struct GpuDeformer {
     is_shape: Vec<bool>,
     dynamic_components: Vec<u32>,
     scratch_dynamic: Vec<f32>,
+    pose_space: PoseSpace,
+    pose_activations: Vec<f32>,
+    twist: TwistRig,
+    driven_pose: Vec<Quat>,
     component_offsets: Vec<u32>,
     applied_shape: Vec<f32>,
     applied_layers: Vec<f32>,
@@ -792,6 +798,11 @@ impl GpuDeformer {
             block_count: t.region_blocks.len() as u32,
             dynamic_components: (0..t.component_count).filter(|&c| t.is_dynamic[c as usize]).collect(),
             scratch_dynamic: vec![0.0; t.component_count as usize],
+            // The template's check solved every driver already; own kernels are the fallback.
+            pose_space: PoseSpace::new(template.expressions()).unwrap_or_default(),
+            pose_activations: vec![0.0; template.expressions().pose_correctives.len()],
+            twist: TwistRig::new(template.skeleton()),
+            driven_pose: vec![Quat::IDENTITY; template.skeleton().joints.len()],
             applied_shape: vec![0.0; t.component_count as usize],
             applied_layers: Vec::new(),
             dynamic_weights: vec![0.0; t.component_count as usize],
@@ -1019,8 +1030,12 @@ impl GpuDeformer {
         let rest_changed = self.diff_rest(input.shape, input.layers);
         let dynamic_changed = self.resolve_dynamic(input);
         let mut pose_changed = rest_changed;
-        for (slot, q) in self.pose.iter_mut().enumerate() {
-            let next = input.pose.get(slot).map_or(Quat::IDENTITY, |q| q.normalize());
+        // The twist joints are driven from the limbs' roll, as in the CPU evaluator.
+        for (slot, q) in self.driven_pose.iter_mut().enumerate() {
+            *q = input.pose.get(slot).map_or(Quat::IDENTITY, |q| q.normalize());
+        }
+        self.twist.apply(&mut self.driven_pose);
+        for (q, &next) in self.pose.iter_mut().zip(&self.driven_pose) {
             if *q != next {
                 *q = next;
                 pose_changed = true;
@@ -1115,9 +1130,9 @@ impl GpuDeformer {
         for c in &set.combinations {
             add(c.component, c.activation(input.expressions));
         }
-        for pc in &set.pose_correctives {
-            let q = input.pose.get(pc.joint as usize).map_or(Quat::IDENTITY, |q| q.normalize());
-            add(pc.component, pc.activation(q));
+        self.pose_space.activations(&set.pose_correctives, input.pose, &mut self.pose_activations);
+        for (pc, &a) in set.pose_correctives.iter().zip(&self.pose_activations) {
+            add(pc.component, a);
         }
         let mut changed = false;
         for &c in &self.dynamic_components {

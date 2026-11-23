@@ -296,6 +296,8 @@ pub fn template(options: &Options) -> Result<Generated> {
     let template = crate::identity::add_components(&template, &crate::identity::scan::components(&template, &fields)?)?;
     let specs = CorrectiveSpecs::builtin().map_err(expression_error)?;
     let (template, _) = with_expressions(&template, &specs).map_err(expression_error)?;
+    // The body's pose correctives (todo 1.3), derived on the finished rest shape and skin weights.
+    let (template, _) = super::correctives::with_pose_correctives(&template)?;
     let loops = protected_loops(&surface, &asm)?;
     if !options.lods {
         return Ok(Generated {

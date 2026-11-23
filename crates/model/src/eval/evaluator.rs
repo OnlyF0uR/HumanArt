@@ -42,7 +42,9 @@ use super::normals::{TriangleFrames, normal_corner_gather, own_corner_gather};
 use super::penetration::{PenetrationGuard, PenetrationReport};
 use super::skinning::{JointFrames, SkinningMode};
 use super::strain::StrainField;
+use super::twist::TwistRig;
 use crate::delta::{DeltaBases, DeltaKind};
+use crate::expression::pose_space::PoseSpace;
 use crate::template::Template;
 use crate::topology::Csr;
 
@@ -107,6 +109,8 @@ pub struct Evaluator {
     tangents: Vec<Vec4>,
     combination_activations: Vec<f32>,
     pose_activations: Vec<f32>,
+    pose_space: PoseSpace,
+    twist: TwistRig,
     joints: JointFrames,
     strain: StrainField,
     guard: Option<PenetrationGuard>,
@@ -159,6 +163,10 @@ impl Evaluator {
             tangents: vec![Vec4::new(1.0, 0.0, 0.0, 1.0); v],
             combination_activations: vec![0.0; t.expressions().combinations.len()],
             pose_activations: vec![0.0; t.expressions().pose_correctives.len()],
+            // `Template::new` solved every driver already (`ExpressionSet::check`), so this
+            // cannot fail for a template; the empty space (own kernels only) is the fallback.
+            pose_space: PoseSpace::new(t.expressions()).unwrap_or_default(),
+            twist: TwistRig::new(skeleton),
             joints: JointFrames::new(joint_count),
             strain,
             guard: None,
@@ -244,6 +252,7 @@ impl Evaluator {
         for (slot, q) in self.pose.iter_mut().enumerate() {
             *q = input.pose.get(slot).map_or(Quat::IDENTITY, |q| q.normalize());
         }
+        self.twist.apply(&mut self.pose);
         self.apply_pose_correctives()?;
         self.skin(input.skinning);
         if let Some(guard) = &self.guard {
@@ -338,11 +347,11 @@ impl Evaluator {
     fn apply_pose_correctives(&mut self) -> EvalResult<()> {
         let t = &*self.template;
         let deltas = t.deltas();
-        for (pc, act) in t.expressions().pose_correctives.iter().zip(&mut self.pose_activations) {
-            let q = self.pose.get(pc.joint as usize).copied().unwrap_or(Quat::IDENTITY);
-            *act = pc.activation(q);
-            if *act != 0.0 {
-                accumulate(deltas, pc.component as usize, *act, &mut self.pre_skin)?;
+        let correctives = &t.expressions().pose_correctives;
+        self.pose_space.activations(correctives, &self.pose, &mut self.pose_activations);
+        for (pc, &act) in correctives.iter().zip(&self.pose_activations) {
+            if act != 0.0 {
+                accumulate(deltas, pc.component as usize, act, &mut self.pre_skin)?;
             }
         }
         Ok(())

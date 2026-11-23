@@ -30,7 +30,7 @@ use humanart_io::json::{JsonWriter, Value, parse};
 use humanart_math::{Quat, Vec3};
 
 use super::error::{ExprError, ExprResult};
-use crate::eval::rig::RigLogic;
+use crate::eval::rig::RigGraph;
 use crate::eval::wrinkle::WrinkleDrivers;
 use crate::names::Side;
 use crate::template::Template;
@@ -68,7 +68,7 @@ pub struct JointDriver {
 /// The rig logic plus the joint drivers of a template.
 #[derive(Clone, Debug, PartialEq)]
 pub struct ControlRig {
-    logic: RigLogic,
+    logic: RigGraph,
     drivers: Vec<JointDriver>,
     rig_json: Value,
     drivers_json: Value,
@@ -87,7 +87,7 @@ impl ControlRig {
     pub fn from_json_bytes(template: &Template, rig: &[u8], drivers: &[u8]) -> ExprResult<Self> {
         let rig_json = parse_limited(rig)?;
         let drivers_json = parse_limited(drivers)?;
-        let logic = RigLogic::from_json(&rig_json, template.expressions())?;
+        let logic = RigGraph::from_json(&rig_json, template.expressions())?;
         let root = drivers_json.node();
         root.deny_unknown(&["format", "version", "description", "drivers"])?;
         if root.field("format")?.str()? != "humanart-joint-drivers" {
@@ -137,7 +137,7 @@ impl ControlRig {
 
     /// The rig-logic graph.
     #[must_use]
-    pub const fn logic(&self) -> &RigLogic {
+    pub const fn logic(&self) -> &RigGraph {
         &self.logic
     }
 

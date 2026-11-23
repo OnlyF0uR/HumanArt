@@ -163,7 +163,7 @@ fn rob_01_fuzz_section_payloads() {
             move |bytes| {
                 let mut views: Vec<&[u8]> = others.iter().map(Vec::as_slice).collect();
                 views[s] = bytes;
-                if let Ok(t) = decode_template(&views, &PackageLimits::FUZZ) {
+                if let Ok(t) = decode_template(&views, Vec::new(), &PackageLimits::FUZZ) {
                     // Whatever is accepted is a consistent template that writes and reads back.
                     let again = write_package(&t).unwrap();
                     assert_eq!(read_package(&again, &PackageLimits::FUZZ).unwrap(), t);

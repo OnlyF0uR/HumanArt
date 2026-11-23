@@ -66,8 +66,6 @@ sh tools/check-tree.sh && sh tools/check-deps.sh && sh tools/check-tree-selftest
 - **`LodLevel` has no landmarks.** The LOD generator returns per-level landmarks in
   `GeneratedLod::landmarks`; adding them to `LodLevel` and the LODS package section is proposed
   (ADR-021), not decided.
-- **`humanart-cli fontbake`** does not exist yet; `crates/ui/examples/fontbake.rs` (run by
-  `tools/fontbake/bake.sh`) is what it should do.
 - **Template still in progress (ADR-039).** Ear holes, flipped faces and the nostril check are
   fixed (round 6). Open: external genitalia (needs the pelvis and inner thighs reshaped first),
   crotch apex 48 mm above the ANSUR midpoint, narrow upper body (biacromial -9 mm, chest, waist and
@@ -100,8 +98,6 @@ sh tools/check-tree.sh && sh tools/check-deps.sh && sh tools/check-tree-selftest
 - **Hair on the template.** `ScalpMask`, `FaceAnchors` and the brow / lid feature lines must be
   built from template regions and landmarks; hair cards need a skin binding and a place in
   `export_character` `[EXP-P1]`.
-- **`.anthair` curl phase unit.** The module doc of `crates/model/src/hair/format.rs` says radians;
-  `Strands::curl_phase` and the generator use a fraction of a turn (`docs/format-anthair.md`).
 - **Viewport toolbar dropdowns.** They were moved out of the viewport toolbar while viewports were
   drawn over the UI; with ADR-041 they could return (a UI decision).
 - **Windowed editor never launched** (B-009): the owner should try `cargo run -p humanart`.

@@ -1028,7 +1028,7 @@ fn qual_04_tiled_still_with_hair_equals_the_untiled_render() {
             }
         }
     }
-    map.chunks_exact_mut(4).for_each(|p| p[3] = 255);
+    map.as_chunks_mut::<4>().0.iter_mut().for_each(|p| p[3] = 255);
     let png = |name: &str, pw: u32, ph: u32, rgba: &[u8]| {
         std::fs::write(dir.join(name), humanart_render::capture::encode_png_rgba8(pw, ph, rgba).unwrap()).unwrap();
     };

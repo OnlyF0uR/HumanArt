@@ -186,7 +186,7 @@ pub fn corrective_shapes(targets: &[Target], specs: &CorrectiveSpecs) -> ExprRes
 }
 
 /// The lowest common ancestor of the regions of `vertices` (region 0 when there are none).
-fn bounding_region(template: &Template, vertices: impl Iterator<Item = u32>) -> u16 {
+pub(crate) fn bounding_region(template: &Template, vertices: impl Iterator<Item = u32>) -> u16 {
     let regions = template.regions();
     let chain = |r: u16| {
         let mut out = vec![r];
@@ -293,6 +293,8 @@ pub fn with_expressions(template: &Template, specs: &CorrectiveSpecs) -> ExprRes
         p.component = find(name)?;
         set.pose_correctives.push(p);
     }
+    // Drivers index the pose correctives, whose order is kept.
+    set.pose_drivers.clone_from(&template.expressions().pose_drivers);
     let mut parts = template.clone().into_parts();
     // The regressor is indexed by component: move each old component's rows to its new index.
     let mut regressor = JointRegressor::empty(deltas.len());

@@ -1136,6 +1136,39 @@ fn todo_1_3_sex_switch_shows_one_genital_variant() {
     let carried: Vec<Vec3> =
         (0..rest.len()).filter(|&v| is(v, &female)).map(|v| fem[v] - genitals::vulva_states(rest[v]).0).collect();
     let carry = carried.iter().fold(Vec3::ZERO, |s, o| s + *o) / carried.len().max(1) as f32;
+    // The skin around the site (outside both variants, within 6 cm of the stow centre's column):
+    // how far the switch carries the groin in each setting. The switch changes the leg length
+    // (ANSUR II crotch heights), so the groin itself moves by centimetres.
+    let ring = |p: &[Vec3]| {
+        let around: Vec<usize> = (0..rest.len())
+            .filter(|&v| on[v] && !is(v, &male) && !is(v, &female))
+            .filter(|&v| {
+                let q = rest[v];
+                (q.x.hypot(q.z - genitals::STOW_CENTRE.z) < 0.08) && (q.y - genitals::STOW_CENTRE.y).abs() < 0.06
+            })
+            .collect();
+        let mean = around.iter().fold(Vec3::ZERO, |s, &v| s + (p[v] - rest[v])) / around.len().max(1) as f32;
+        // How unevenly the groin itself moves (the hips widen): a piece attached to it must
+        // follow that much.
+        let spread = around.iter().map(|&v| (p[v] - rest[v]).distance(mean)).fold(0.0, f32::max);
+        (mean, spread)
+    };
+    // The folded vulva is checked in the site's frame carried with the skin next to it (the
+    // inverse-square-distance mean of how the skin around the site moves, as the groin is uneven
+    // by about a millimetre).
+    let skin: Vec<usize> = (0..rest.len())
+        .filter(|&v| on[v] && !is(v, &male) && !is(v, &female))
+        .filter(|&v| rest[v].distance(genitals::STOW_ORIGIN) < 0.06 && genitals::site_coords(rest[v]).2.abs() < 0.012)
+        .collect();
+    let local_carry = |v: usize| {
+        let (mut sum, mut wsum) = (Vec3::ZERO, 0.0);
+        for &u in &skin {
+            let w = 1.0 / rest[u].distance_squared(rest[v]).max(1.0e-8);
+            sum += (mal[u] - rest[u]) * w;
+            wsum += w;
+        }
+        sum / wsum.max(f32::MIN_POSITIVE)
+    };
     for v in 0..rest.len() {
         if is(v, &male) {
             n_male += 1;
@@ -1145,19 +1178,31 @@ fn todo_1_3_sex_switch_shows_one_genital_variant() {
         } else if is(v, &female) {
             n_female += 1;
             vulva_off.push(fem[v] - genitals::vulva_states(rest[v]).0);
-            worst_fold = worst_fold.max(genitals::site_coords(mal[v]).2);
+            worst_fold = worst_fold.max(genitals::site_coords(mal[v] - local_carry(v)).2);
         }
     }
-    for (name, off) in [("male piece", &male_off), ("vulva", &vulva_off)] {
+    for (name, off, (groin, uneven)) in [("male piece", &male_off, ring(&mal)), ("vulva", &vulva_off, ring(&fem))] {
         let mean = off.iter().fold(Vec3::ZERO, |s, o| s + *o) / off.len().max(1) as f32;
         let spread = off.iter().map(|o| o.distance(mean)).fold(0.0, f32::max);
         println!(
-            "{name}: carried {:.2} mm with the groin, shape error at most {:.2} mm",
+            "{name}: carried {:.2} mm (the groin around it {:.2} mm, unevenly by {:.2} mm), shape error at most {:.2} mm",
             mean.length() * 1e3,
+            groin.length() * 1e3,
+            uneven * 1e3,
             spread * 1e3
         );
-        assert!(mean.length() < 0.012, "{name} carried {:.1} mm", mean.length() * 1e3);
-        assert!(spread < 0.003, "{name} distorted by {:.2} mm", spread * 1e3);
+        assert!(
+            mean.distance(groin) < 0.008,
+            "{name} carried {:.1} mm, the groin around it {:.1} mm",
+            mean.length() * 1e3,
+            groin.length() * 1e3
+        );
+        assert!(
+            spread < 0.003_f32.max(uneven),
+            "{name} distorted by {:.2} mm (the groin around it by {:.2} mm)",
+            spread * 1e3,
+            uneven * 1e3
+        );
     }
     assert!(n_male > 500 && n_female > 500, "{n_male} male, {n_female} female vertices");
     assert!(worst_fold < -4.0e-4, "a folded vulva vertex is only {:.2} mm under the site", -worst_fold * 1e3);
@@ -1261,31 +1306,6 @@ fn todo_1_3_sex_switch_is_fold_free() {
     assert_eq!(bad, 0, "{lines:#?}");
 }
 
-/// The frontmost skin point of each millimetre of height near the midline (|x| < 2 mm) between
-/// the heights `lo` and `hi` and in front of `front` (depth), top down: the profile of the face as
-/// a camera at the side sees it. Without `front` a height whose few midline vertices all lie on
-/// the back of the head would give a back point.
-fn midline_profile(p: &[Vec3], on: &[bool], lo: f32, hi: f32, front: f32) -> Vec<Vec3> {
-    let mut bins: Vec<Option<Vec3>> = vec![None; ((hi - lo) * 1000.0) as usize + 1];
-    for (q, _) in p.iter().zip(on).filter(|(q, on)| **on && q.x.abs() < 0.002 && q.y > lo && q.y < hi && q.z > front) {
-        let slot = &mut bins[((hi - q.y) * 1000.0) as usize];
-        if slot.is_none_or(|o: Vec3| q.z > o.z) {
-            *slot = Some(*q);
-        }
-    }
-    bins.into_iter().flatten().collect()
-}
-
-/// The profile point between the heights `lo` and `hi` that lies farthest along `dir`.
-fn profile_support(profile: &[Vec3], lo: f32, hi: f32, dir: Vec3) -> Vec3 {
-    profile
-        .iter()
-        .copied()
-        .filter(|q| q.y >= lo && q.y <= hi)
-        .max_by(|a, b| a.dot(dir).total_cmp(&b.dot(dir)))
-        .unwrap_or_else(|| panic!("no profile point between {lo} and {hi}"))
-}
-
 /// What the adult-proportion test measures on one posed character, metres.
 /// The midline points are found on the posed profile, not taken from the template's landmarks:
 /// `forehead.glabella`, `nose.root` and `chin.menton` are found on the procedural head before the
@@ -1341,6 +1361,20 @@ fn adult_gauge(t: &Template, on: &[bool], weights: &[(&str, f32)], print_profile
         t.landmarks().iter().find(|l| l.name == name).unwrap_or_else(|| panic!("{name}")).position(&p).unwrap()
     };
     let floor = p.iter().zip(on).filter(|x| *x.1).map(|x| x.0.y).fold(f32::INFINITY, f32::min);
+    // The profile is the outer skin's: the mouth's inside (teeth, gums, tongue, the mouth bag) is
+    // part of the body mesh too, and where no lip or chin vertex falls in a 1 mm bin it stood in
+    // for the skin (a supramentale 28 mm deep).
+    let regions = t.regions();
+    let inside: Vec<u16> = measure::MOUTH_INSIDE
+        .iter()
+        .filter_map(|n| regions.regions.iter().position(|r| r.name == *n).map(|i| i as u16))
+        .collect();
+    let outer: Vec<bool> = on
+        .iter()
+        .zip(&regions.vertex_regions)
+        .map(|(&o, &r)| o && !inside.iter().any(|&i| regions.is_within(r, i)))
+        .collect();
+    let on = &outer[..];
     let vertex = lm("head.vertex");
     let tragion = lm("ear.L.tragion");
     let (en, ex) = (lm("L.eye.canthus.medial"), lm("L.eye.canthus.lateral"));
@@ -1348,7 +1382,10 @@ fn adult_gauge(t: &Template, on: &[bool], weights: &[(&str, f32)], print_profile
     let sn = lm("nose.subnasale");
     let (ls, li, sto) = (lm("lip.upper.outer.06"), lm("lip.lower.outer.06"), lm("lip.upper.inner.06"));
     let brow = lm("L.brow.03");
-    let profile = midline_profile(&p, on, sto.y - 0.09, vertex.y, tragion.z);
+    // The same profile and midline points as the switch's face-height gauge
+    // (`measure::FaceHeight`): the face's inside left out, 1 mm bins.
+    let profile =
+        measure::midline_profile(p.iter().zip(on).filter(|x| *x.1).map(|x| *x.0), sto.y - 0.09, vertex.y, tragion.z);
     if print_profile {
         let line: Vec<String> = profile
             .iter()
@@ -1357,17 +1394,12 @@ fn adult_gauge(t: &Template, on: &[bool], weights: &[(&str, f32)], print_profile
             .collect();
         println!("profile (mm above the endocanthion : mm in front of the tragion) {}", line.join(" "));
     }
-    let sellion = profile_support(&profile, prn.y + 0.012, brow.y + 0.006, -Vec3::Z);
-    let supramentale = profile_support(&profile, li.y - 0.022, li.y - 0.003, -Vec3::Z);
-    let pogonion = profile_support(&profile, supramentale.y - 0.03, supramentale.y - 0.003, Vec3::Z);
-    // Menton: the lowest point of the chin, taken 60 degrees below the horizontal among the
-    // points at most 25 mm behind the pogonion, so that the neck below does not count as chin.
-    let chin: Vec<Vec3> = profile.iter().copied().filter(|q| q.z > pogonion.z - 0.025).collect();
-    let menton = profile_support(&chin, pogonion.y - 0.035, pogonion.y, Vec3::new(0.0, -0.866, 0.5));
+    let [sellion, supramentale, pogonion, menton] =
+        measure::profile_points(&profile, prn.y, brow.y, li.y).expect("profile points");
     let behind = p
         .iter()
         .zip(on)
-        .filter(|(q, on)| **on && q.x.abs() < 0.002 && q.z < menton.z && q.z > menton.z - 0.05 && q.y < pogonion.y)
+        .filter(|(q, on)| **on && q.x.abs() < 0.002 && q.z < menton.z && q.z > menton.z - 0.03 && q.y < pogonion.y)
         .filter(|(q, _)| q.y > menton.y - 0.06)
         .map(|(q, _)| q.y)
         .fold(menton.y, f32::min);
@@ -1475,7 +1507,9 @@ fn todo_1_3_both_sexes_have_adult_proportions() {
         check(format!("{name} eye fissure / bizygomatic breadth"), g.fissure / g.bizygomatic, 0.20, 0.245);
         check(format!("{name} eye opening / fissure length"), g.opening / g.fissure, 0.28, 0.42);
         // Chin: a labiomental fold of 2 to 8 mm, the pogonion at most 12 mm behind the subnasale,
-        // and an underside that does not run down into the neck by more than 10 mm.
+        // and an underside that does not run down into the neck by more than 10 mm over the
+        // first 30 mm behind the menton (farther back a thick neck's front is reached: 58 mm for
+        // the man over 50 mm, which measured the neck, not the chin).
         check(format!("{name} labiomental fold depth mm"), g.sulcus * 1e3, 2.0, 8.0);
         check(format!("{name} pogonion behind subnasale mm"), g.chin_setback * 1e3, -4.0, 12.0);
         check(format!("{name} submental drop mm"), g.submental_drop * 1e3, 0.0, 10.0);

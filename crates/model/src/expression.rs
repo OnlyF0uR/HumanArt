@@ -16,6 +16,7 @@ pub mod build;
 pub mod controls;
 pub mod error;
 pub mod field;
+pub mod pose_space;
 pub mod presets;
 pub mod recipes;
 pub mod sweep;
@@ -176,6 +177,9 @@ pub struct ExpressionSet {
     pub combinations: Vec<CombinationCorrective>,
     /// Pose-space correctives.
     pub pose_correctives: Vec<PoseCorrective>,
+    /// Groups of pose correctives on one joint solved together by radial basis interpolation
+    /// ([`pose_space`]); a corrective in no driver uses its own kernel.
+    pub pose_drivers: Vec<pose_space::PoseDriver>,
 }
 
 impl ExpressionSet {
@@ -185,6 +189,7 @@ impl ExpressionSet {
             ("expression count", self.expressions.len()),
             ("combination corrective count", self.combinations.len()),
             ("pose corrective count", self.pose_correctives.len()),
+            ("pose driver count", self.pose_drivers.len()),
         ] {
             if n > MAX_DEFINITIONS {
                 return Err(ModelError::limit(what, MAX_DEFINITIONS as u64, n as u64));
@@ -193,6 +198,7 @@ impl ExpressionSet {
         check_names("expression", self.expressions.iter().map(|e| e.name.as_str()))?;
         check_names("combination corrective", self.combinations.iter().map(|e| e.name.as_str()))?;
         check_names("pose corrective", self.pose_correctives.iter().map(|e| e.name.as_str()))?;
+        check_names("pose driver", self.pose_drivers.iter().map(|e| e.name.as_str()))?;
         let kind_ok = |c: u32, kind: DeltaKind| deltas.components().get(c as usize).is_some_and(|x| x.kind == kind);
         for (i, e) in self.expressions.iter().enumerate() {
             if !kind_ok(e.component, DeltaKind::Expression) {
@@ -230,6 +236,8 @@ impl ExpressionSet {
                 return Err(ModelError::invalid("pose corrective", i, "radius outside (0, pi]"));
             }
         }
+        // Validates every driver, solves it once and refuses a corrective owned by two drivers.
+        pose_space::PoseSpace::new(self)?;
         Ok(())
     }
 }
@@ -268,6 +276,7 @@ mod tests {
                 inputs: vec![0, 1],
                 component: 2,
             }],
+            pose_drivers: Vec::new(),
             pose_correctives: vec![PoseCorrective {
                 name: "elbow-L.bend".into(),
                 joint: 1,
