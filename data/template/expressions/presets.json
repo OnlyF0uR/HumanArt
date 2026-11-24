@@ -76,11 +76,11 @@
    "controls": {
     "expression.au01_inner_brow_raiser.l": 1.0,
     "expression.au01_inner_brow_raiser.r": 1.0,
-    "expression.au04_brow_lowerer.l": 0.6,
-    "expression.au04_brow_lowerer.r": 0.6,
-    "expression.au15_lip_corner_depressor.l": 0.8,
-    "expression.au15_lip_corner_depressor.r": 0.8,
-    "expression.au17_chin_raiser": 0.3
+    "expression.au04_brow_lowerer.l": 0.5,
+    "expression.au04_brow_lowerer.r": 0.5,
+    "expression.au15_lip_corner_depressor.l": 1.0,
+    "expression.au15_lip_corner_depressor.r": 1.0,
+    "expression.au17_chin_raiser": 0.45
    }
   },
   {
