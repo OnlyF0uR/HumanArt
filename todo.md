@@ -223,9 +223,12 @@ device (ADR-040), the document side of the autosave no longer allocates.
   pixels above 8/255; the other 9 runs differ by 0). Cause unknown. Ruled out: the hair coverage
   check-then-add in `shaders/hair/raster.wgsl` (it saturates at 16, a difference below 1e-6). To try:
   fragments with equal depth writing `hair_records` in a different order; the shared GPU device.
-- `skin::tests::ac_wp13_3_partial_rect_cost_scales_with_area` (render lib, GPU timing ratio, bound
-  2.0x) fails when other GPU tests run beside it (2.05x and 2.39x with 2 test threads) and passes alone:
-  run GPU timing tests serially or mark them.
+- GPU tests that share the one device: `ac_wp13_3_partial_rect_cost_scales_with_area` takes the
+  fastest of 15 rounds and the crate's timing lock (passed 2026-11-23 beside other tests). On a
+  software adapter (lavapipe) three agent tests (`todo_1_4_resting_wrinkles_crease_the_face`,
+  `todo_2_3_document_eye_and_mouth_materials_reach_the_feature_table`, the scripted MCP sessions)
+  fail only when run beside the others (timeouts, a viewer that comes up without its wrinkles) and
+  pass alone; the groom edit latency test cannot meet 16 ms there.
 - Identity axes use a pooled standard deviation; ADR-046 asks for per-sex values.
 - Shoulder width: settled 2026-11-23 by the sex switch's fitted gauge (biacromial 368.6 mm woman, 419.0 mm
   man against the ANSUR II means 365.3 / 415.7; test `todo_1_3_sex_switch_meets_the_ansur_means`).
