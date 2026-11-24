@@ -233,8 +233,8 @@ fn one_sided(kit: &Kit<'_, '_>) -> IdResult<Raw> {
 /// 3.75 mm farther forward (a juvenile nose is short and flat: Farkas sn-prn is about 17 to 20 mm
 /// in adults; 2.25 mm left it at 15.7 mm for the woman), a slightly stronger brow, the lids a
 /// little less open (the large round eye is a juvenile cue: opening / fissure was 0.43, Farkas
-/// adults about 0.33 to 0.37) and the skin under the chin lifted 3 mm toward the jaw (a defined
-/// cervicomental angle).
+/// adults about 0.33 to 0.37; more closing read sleepy in a render, so 0.42) and the skin under
+/// the chin lifted 3 mm toward the jaw (a defined cervicomental angle).
 fn adult_face(kit: &Kit<'_, '_>) -> IdResult<Raw> {
     let mut raw = face::cheek_fullness(kit)?.scaled(-1.5);
     raw.add(&face::cheekbones(kit, true)?, 1.0);
@@ -243,7 +243,7 @@ fn adult_face(kit: &Kit<'_, '_>) -> IdResult<Raw> {
     raw.add(&face::nose_length(kit)?, 1.0);
     raw.add(&face::nose_tip(kit, Vec3::Z * 0.0015, &["nose.tip"])?, 2.5);
     raw.add(&face::brow_ridge(kit)?, 0.4);
-    raw.add(&face::eye_size(kit)?, -0.6);
+    raw.add(&face::eye_size(kit)?, -0.25);
     raw.add(&face::submental_lift(kit, 0.003)?, 1.0);
     Ok(raw)
 }

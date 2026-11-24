@@ -37,7 +37,7 @@ forms) are checked and in use; FLAME is out (owner, 2026-11-20).
    corners anyway (`feature_layers::SPOT_CLEARANCE`, test `todo_1_1_moles_keep_clear_of_landmarks`); the adult face of both sexes (2026-11-23, test
    `todo_1_3_both_sexes_have_adult_proportions`): menton-sellion now 112.6 / 122.1 mm (ANSUR II means
    113.1 / 122.6; the chin longer and 1 mm more prominent), nose protrusion 17.0 / 17.8 mm (was 15.7 for
-   the woman), lid opening / fissure 0.41 (was 0.43, a juvenile round eye), the skin under the chin
+   the woman), lid opening / fissure 0.42 (was 0.43; 0.41 read sleepy in a render), the skin under the chin
    lifted 3 mm (submental drop 3.3 / 2.0 mm). The sex switch fits the face height on the profile
    (sellion to menton found anew on each shape) instead of two fixed landmark vertices. Not yet looked
    at in a render.
