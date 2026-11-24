@@ -62,8 +62,8 @@ forms) are checked and in use; FLAME is out (owner, 2026-11-20).
      crude: the female site has a hard outline with a pointed top, thin ridges beside the penis root,
      from the front the penis hides most of the scrotum. `ac_wp11_1_template_head_ibl_and_shadows`
      now renders the shipped skin and passes (furnace error 0). UV packing: the face tile now packs better (nostril 1204 texels);
-     the other tiles can't be repacked until `Mesh::face_uv_area` stops calling one-texel navel faces
-     collapsed (f32 rounding);
+     the other tiles can be repacked now: `Mesh::face_uv_area` works relative to the first corner and
+     calls no face of the template collapsed (2026-11-23, `diag_uv_flipped_faces`: 0 faces);
    - surface anatomy: done 2026-11-22 for the torso (clavicles, jugular notch, sternocleidomastoid,
      pectoral border, sternum, costal margin, linea alba, iliac crest, ASIS, spine groove with erector
      columns, scapulae, PSIS dimples; smooth, tested for width and slope; stills
