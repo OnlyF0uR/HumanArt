@@ -65,7 +65,7 @@ pub const BICEPS_CIRC: Variable = var("bicepscircumferenceflexed", 358.1, 34.6, 
 pub const HEAD_LENGTH: Variable = var("headlength", 199.5, 7.0, 189.8, 7.4);
 /// `mentonsellionlength`: sellion (nasal root) to menton, mm.
 pub const MENTON_SELLION: Variable = var("mentonsellionlength", 122.6, 6.7, 113.1, 6.1);
-/// `bizygomaticbreadth`: breadth across the zygomatic arches, mm (reported, not fitted).
+/// `bizygomaticbreadth`: breadth across the zygomatic arches, mm (fitted since 2026-11-24).
 pub const BIZYGOMATIC: Variable = var("bizygomaticbreadth", 142.6, 6.2, 133.8, 5.6);
 /// `chestdepth`: depth of the chest at the nipples (women: the bust), mm (reported).
 pub const CHEST_DEPTH: Variable = var("chestdepth", 253.8, 26.2, 247.4, 27.3);
@@ -121,7 +121,7 @@ impl Target {
 }
 
 /// The fitted measurements, in the order of the terms of [`terms`].
-pub const FITTED: [(Gauge, Target); 11] = [
+pub const FITTED: [(Gauge, Target); 12] = [
     (Gauge::Stature, Target::Absolute(STATURE)),
     (BIACROMIAL_GAUGE, Target::Absolute(BIACROMIAL)),
     (CHEST_BREADTH_GAUGE, Target::Relative(CHEST_BREADTH)),
@@ -133,10 +133,11 @@ pub const FITTED: [(Gauge, Target); 11] = [
     (NECK_GIRTH, Target::Relative(NECK_CIRC)),
     (HEAD_LENGTH_GAUGE, Target::Absolute(HEAD_LENGTH)),
     (FACE_HEIGHT_GAUGE, Target::Relative(MENTON_SELLION)),
+    (BIZYGOMATIC_GAUGE, Target::Relative(BIZYGOMATIC)),
 ];
 
 /// The measurements reported beside the fitted ones (tests, STATUS).
-pub const REPORTED: [(Gauge, Variable); 2] = [(CHEST_GIRTH, CHEST_CIRC), (BIZYGOMATIC_GAUGE, BIZYGOMATIC)];
+pub const REPORTED: [(Gauge, Variable); 1] = [(CHEST_GIRTH, CHEST_CIRC)];
 /// Reported as relative changes (the gauge is not taken as the ANSUR II measurer takes it).
 pub const REPORTED_RELATIVE: [(Gauge, Variable); 1] = [(ARM_GIRTH, BICEPS_CIRC)];
 
@@ -190,6 +191,7 @@ fn terms(kit: &Kit<'_, '_>) -> IdResult<Vec<Raw>> {
         face::neck_width(kit)?,
         head_scale(kit, 0.02)?,
         face::chin_height(kit)?,
+        face::face_breadth(kit, 0.002)?,
     ])
 }
 
@@ -227,7 +229,9 @@ fn one_sided(kit: &Kit<'_, '_>) -> IdResult<Raw> {
 
 /// The adult face of both sexes (todo 1.3, authored, read off renders and the adult-proportion
 /// test: the scanned mean face on the generated head read young): 3 mm less cheek fat,
-/// cheekbones 1.5 mm and the chin 3 mm more prominent, the chin about 3.5 mm longer below the lip
+/// cheekbones 1.5 mm and the chin 3 mm more prominent, the midface 2.7 mm narrower on each side at
+/// the zygomatic arches (the scanned mean face was 140 mm across against ANSUR II women's 133.8 and
+/// read round and young), the chin about 3.5 mm longer below the lip
 /// (a short lower face is a child's: menton-sellion was 114 mm against the ANSUR II midpoint of
 /// 118), the lower nose 1.5 mm longer and its tip
 /// 3.75 mm farther forward (a juvenile nose is short and flat: Farkas sn-prn is about 17 to 20 mm
@@ -245,6 +249,7 @@ fn adult_face(kit: &Kit<'_, '_>) -> IdResult<Raw> {
     raw.add(&face::brow_ridge(kit)?, 0.4);
     raw.add(&face::eye_size(kit)?, -0.25);
     raw.add(&face::submental_lift(kit, 0.003)?, 1.0);
+    raw.add(&face::face_breadth(kit, 0.0027)?, 1.0);
     Ok(raw)
 }
 

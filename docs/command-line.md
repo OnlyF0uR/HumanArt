@@ -18,12 +18,14 @@ success, 2 usage, 3 data, 4 GPU, 5 render, 6 file, 7 project, 8 job file, 9 fail
 
 ## Characters without a project
 
-Without `--project` a command works on a new character in memory: every parameter at its registry
-default (the woman, `identity.sex` −1, with natural asymmetry 0.35). `--set ID=V,...` changes scalar
-parameters by their registry id (`data/template/params/*.json`):
+Without `--project` a command works on a new character in memory, started from a starter character
+(`data/template/characters.json`): `--character woman` (the default: a fit adult woman, medium
+straight hair), `man`, or `average` (every registry default: the ANSUR II mean woman). `--hair auto`,
+the default, shows the starter's hair. `--set ID=V,...` changes scalar parameters by their registry
+id (`data/template/params/*.json`) on top of the starter:
 
 ```sh
-humanart-cli render --set identity.sex=1,identity.age=1.5 --out older-man.png
+humanart-cli render --character man --set identity.age=1.5 --out older-man.png
 ```
 
 ## Stills: `render`

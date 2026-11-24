@@ -22,6 +22,36 @@ skin detail) and BodyParts3D (muscle and bone forms) are checked and in use; FLA
 
 ## 1. Photorealism
 
+**The quality bar (owner, 2026-11-24).** The owner's reference images (AI-generated stills and GTA 6
+characters, kept out of the repository; not to be copied as likenesses) set the quality HumanArt must
+reach easily: adult women of about 25 to 35, fit and toned with an hourglass build, high cheekbones
+over slim cheeks, tapered jaws, full lips, narrow noses, large defined eyes with heavy lashes, arched
+brows, warm skin with a sheen and real pores, hair with strands and flyaways (ponytails, bobs, long
+layers), clothing and jewellery. Anything short of that is insufficient. Measured against it
+(lavapipe renders, 2026-11-24) the character still reads as a smooth, bland mannequin. In order of
+what closes the gap most:
+
+1. **Face sliders too weak**: the semantic face axes move features by about 1 mm per unit (cheek
+   fullness at 1.5 changes the jaw breadth by 0.9 mm); calibrate each to a population SD (Farkas's
+   anthropometry) as the body axes are to ANSUR II, so the starter values can reach the references'
+   features. Then a sculpted feminine-attractive face direction (brows, lids, lips, nose, cheek
+   hollows) on top of the scanned mean, which averages 8 people into blandness.
+2. **Skin**: pores at portrait distance, a sheen (oil, sweat) control that reads, makeup layers
+   (liner, lash line, lipstick, contour), region textures from the HSRD-100 scans (item 4 below).
+3. **Hair**: ponytail, bob, updo and long layered styles with flyaways and baby hairs; the six presets
+   are smooth shells by comparison.
+4. **Eyes and lashes**: iris detail, a wet lid line, lashes thick enough to read as lined eyes.
+5. **Body surface**: abdominal definition, toned arm and shoulder relief, a navel and hip bones that
+   read under light skin (limb muscles are listed under item 3).
+6. **Clothing and jewellery**: every reference wears them; HumanArt has attachments (rigid or skinned
+   meshes) but no garments. For the owner: in scope, and how (imported garments, a cloth tool)?
+
+Done 2026-11-24 toward it: starter characters (`data/template/characters.json`, `humanart_doc::starter`):
+a new character is the `woman` starter (the references' build and face direction, medium straight
+hair; the CLI's `--character woman|man|average`, the editor's sample character, the agent host);
+`average` keeps the ANSUR II mean woman. The midface breadth is fitted to ANSUR II per sex (133.8 /
+142.6 mm, was 140 / 147: the face read round and young).
+
 1. **Scanned face into the default character.** Done 2026-11-21 (`target/agents/face-scan/STATUS.md`,
    stills `target/review/face/r2-final-*.png`): the mean face of 8 HSRD-100 people is on in the default
    template, with a rounded skull matching ANSUR head length, breadth and circumference, ears with a rim,

@@ -594,6 +594,26 @@ pub(crate) fn submental_lift(kit: &Kit<'_, '_>, a: f32) -> IdResult<Raw> {
     Raw::confined(s, NECK, Symmetry::Mirror, disp, Vec::new())
 }
 
+/// The face's sides and the ears with it.
+const FACE_SIDES: Reach<'static> = Reach {
+    regions: &["face", "neck", "ear-L", "ear-R"],
+    except: &["eye-L", "eye-R", "mouth-interior", "teeth-upper", "teeth-lower", "gums-upper", "gums-lower", "tongue"],
+    margin: 0.003,
+};
+
+/// The midface `a` metres narrower on each side at the zygomatic arch (per unit weight), fading
+/// to nothing 40 mm from the zygion: the bizygomatic breadth (ANSUR II `bizygomaticbreadth`).
+/// No other axis moves it (todo 1.3: the scanned mean face was 140 mm across where ANSUR II women
+/// measure 133.8).
+pub(crate) fn face_breadth(kit: &Kit<'_, '_>, a: f32) -> IdResult<Raw> {
+    let s = kit.space;
+    let z = s.landmark("L.zygion")?;
+    let f = move |pt: &Point| -Vec3::X * (a * falloff(pt.p.distance(z), 0.008, 0.04));
+    let mut disp = s.eval(|pt| s.sym(pt, &f));
+    s.smooth_field(&mut disp, 4, &FACE_SIDES)?;
+    Raw::confined(s, FACE_SIDES, Symmetry::Mirror, disp, Vec::new())
+}
+
 /// The cheekbone field of the left side: outward along the malar-zygion line.
 fn cheekbone_field(s: &Space<'_>, a: f32) -> IdResult<impl Fn(&Point) -> Vec3 + use<>> {
     let malar = s.landmark("L.cheek.malar")?;

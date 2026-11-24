@@ -12,9 +12,11 @@ use humanart_model::export::{ExportOptions, ExportReport, RestShape, character_g
 
 use crate::args::{CommandSpec, OptSpec, Parsed};
 use crate::error::CliError;
-use crate::render::{default_document, load_registry, load_template, set_values};
+use humanart_doc::starter::DEFAULT;
 
-const OPTIONS: [OptSpec; 6] = [
+use crate::render::{character, default_document, load_registry, load_template, set_values};
+
+const OPTIONS: [OptSpec; 7] = [
     OptSpec { name: "out", value: Some("FILE"), default: Some("character.glb"), help: "The .glb file to write." },
     OptSpec {
         name: "set",
@@ -29,6 +31,12 @@ const OPTIONS: [OptSpec; 6] = [
         help: "on: every expression target as a morph target; off: the shape alone.",
     },
     OptSpec { name: "name", value: Some("NAME"), default: Some("character"), help: "The scene's and mesh's name." },
+    OptSpec {
+        name: "character",
+        value: Some("NAME"),
+        default: Some("woman"),
+        help: "Starter character the values start from: woman (the default), man or average.",
+    },
     OptSpec { name: "data", value: Some("DIR"), default: Some("data"), help: "The data folder." },
     OptSpec { name: "json-errors", value: None, default: None, help: "Errors as one JSON line on stderr." },
 ];
@@ -50,6 +58,8 @@ pub struct ExportJob {
     pub name: String,
     /// The data folder.
     pub data: PathBuf,
+    /// The starter character the document starts from.
+    pub character: String,
 }
 
 impl ExportJob {
@@ -68,6 +78,7 @@ impl ExportJob {
             expressions: p.choice("expressions", &["on", "off"])? == 0,
             name: name.to_owned(),
             data: PathBuf::from(p.get("data").unwrap_or("data")),
+            character: character(p.get("character").unwrap_or(DEFAULT))?.name,
         })
     }
 }
@@ -83,6 +94,9 @@ pub fn run(job: &ExportJob) -> Result<ExportReport, CliError> {
     let template = Arc::new(template);
     let mut model = Model::new(template.clone(), &registry);
     let mut doc = default_document();
+    character(&job.character)?
+        .apply(&mut doc, &registry)
+        .map_err(|e| CliError::Data(format!("starter character: {e}")))?;
     for (id, value) in &job.params {
         if !registry.params().iter().any(|p| p.id == *id) {
             return Err(CliError::Data(format!("--set: no parameter `{id}` in the registry")));

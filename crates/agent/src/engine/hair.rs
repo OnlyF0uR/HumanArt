@@ -120,6 +120,15 @@ impl Default for HairOptions {
 }
 
 impl HairOptions {
+    /// The default options with the scalp style of a starter character of `model`'s sex (todo
+    /// 1.3, `data/template/characters.json`): medium straight for a woman (the sex switch at or
+    /// below 0), short for a man. Read once when a viewer is made.
+    pub fn for_model(model: &Model) -> Self {
+        let switch = model.template().deltas().find(humanart_model::identity::sex::SWITCH);
+        let male = switch.and_then(|c| model.input().shape.get(c as usize)).is_some_and(|&w| w > 0.0);
+        Self { style: if male { ScalpStyle::Short } else { ScalpStyle::MediumStraight }, ..Self::default() }
+    }
+
     /// The groom set these options ask for.
     pub fn spec(&self) -> GroomSetSpec {
         let (eumelanin, pheomelanin) = self.shade.melanin();

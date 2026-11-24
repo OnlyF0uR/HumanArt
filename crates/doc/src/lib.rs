@@ -27,6 +27,7 @@ pub mod proposal;
 pub mod registry;
 pub mod save;
 pub mod session;
+pub mod starter;
 pub mod text;
 
 pub use error::{DocError, Result};

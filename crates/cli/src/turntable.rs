@@ -45,7 +45,12 @@ const OPTIONS: [OptSpec; 17] = [
         default: Some("surface"),
         help: "surface: surfaced skin as in the viewport; plain: one material.",
     },
-    OptSpec { name: "hair", value: Some("STYLE"), default: Some("short"), help: "Hair (as for render)." },
+    OptSpec {
+        name: "hair",
+        value: Some("STYLE"),
+        default: Some("auto"),
+        help: "Hair (as for render; auto: the default starter's).",
+    },
     OptSpec {
         name: "hair-color",
         value: Some("SHADE"),
@@ -153,8 +158,12 @@ pub fn run(job: &TurntableJob) -> Result<TurntableSummary, CliError> {
             .map_err(|e| CliError::Project(format!("{}: {e}", dir.display())))?;
         model.sync(&doc, &registry)?;
     } else {
-        // The registry defaults (`identity.sex` -1: the template's rest shape is no character).
-        model.sync(&crate::render::default_document(), &registry)?;
+        // The default starter character (todo 1.3) over the registry defaults.
+        let mut doc = crate::render::default_document();
+        crate::render::character(humanart_doc::starter::DEFAULT)?
+            .apply(&mut doc, &registry)
+            .map_err(|e| CliError::Data(format!("starter character: {e}")))?;
+        model.sync(&doc, &registry)?;
     }
     std::fs::create_dir_all(&job.out).map_err(|e| CliError::io(&job.out, e))?;
     let mut service = RenderService::new(job.options);

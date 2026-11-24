@@ -1592,3 +1592,48 @@ fn todo_1_3_adult_test_constants_match_the_data_file() {
         assert!((lo..=hi).contains(&age), "{sex} mean age {age}");
     }
 }
+
+#[test]
+#[ignore = "diagnostic"]
+fn diag_face_axes_change_height_and_width() {
+    let t = &*fixture().full;
+    let on = on_body(t);
+    let base = adult_gauge(t, &on, &[(sex::SWITCH, -1.0)], false);
+    let names = [
+        "scan.face-pc1",
+        "scan.face-pc2",
+        "scan.face-pc3",
+        "scan.face-pc4",
+        "scan.face-pc5",
+        "scan.face-pc6",
+        "scan.face-pc7",
+        "semantic.cheek-fullness",
+        "semantic.jaw-width",
+        "semantic.chin-height",
+        "semantic.cheekbone-prominence",
+        "global.mass",
+    ];
+    for name in names {
+        let Some(_) = t.deltas().find(name) else {
+            println!("{name}: missing");
+            continue;
+        };
+        for w in [-1.5_f32, 1.5] {
+            let g = adult_gauge(t, &on, &[(sex::SWITCH, -1.0), (name, w)], false);
+            println!(
+                "{name} {w:+}: face height {:+.1} mm, bizygomatic {:+.1} mm, face breadth {:+.1}, jaw breadth {:+.1}, index {:.3}",
+                (g.face - base.face) * 1e3,
+                (g.bizygomatic - base.bizygomatic) * 1e3,
+                (g.face_breadth - base.face_breadth) * 1e3,
+                (g.jaw_breadth - base.jaw_breadth) * 1e3,
+                g.face / g.bizygomatic
+            );
+        }
+    }
+    println!(
+        "base index {:.3}, height {:.1}, bizyg {:.1}",
+        base.face / base.bizygomatic,
+        base.face * 1e3,
+        base.bizygomatic * 1e3
+    );
+}

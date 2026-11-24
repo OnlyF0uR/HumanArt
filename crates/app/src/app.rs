@@ -17,6 +17,7 @@ use humanart_doc::document::{Author, AuthorKind, Document};
 use humanart_doc::history::Scope;
 use humanart_doc::registry::Registry;
 use humanart_doc::session::{JournalOutcome, Session, SessionConfig};
+use humanart_doc::starter::{DEFAULT as STARTER, Starters};
 use humanart_model::Template;
 use humanart_render::renderer::Quality;
 use humanart_ui::geom::{Rect, Size};
@@ -214,15 +215,25 @@ fn quality_of(q: QualityChoice) -> Quality {
     }
 }
 
-/// The sample document (`[APP-08]`): a new character with the human as its author.
-pub fn sample_document(human: &Author, template: &str) -> Document {
-    Document::new(Id128::from_u128(0x4855_4d41_4e41_5254), "Sample character", template, 1, 0, human.clone())
+/// The sample document (`[APP-08]`): a new character with the human as its author, starting from
+/// the default starter character (todo 1.3: `data/template/characters.json`) where `registry` takes
+/// its values.
+pub fn sample_document(human: &Author, template: &str, registry: &Registry) -> Document {
+    let mut doc =
+        Document::new(Id128::from_u128(0x4855_4d41_4e41_5254), "Sample character", template, 1, 0, human.clone());
+    if let Ok(starters) = Starters::builtin()
+        && let Some(starter) = starters.find(STARTER)
+    {
+        // A starter the registry refuses leaves the registry defaults (the file's test checks it).
+        let _ = starter.apply(&mut doc, registry);
+    }
+    doc
 }
 
 impl<'a> App<'a> {
     /// The editor on the sample document, with `prefs` and the baked `fonts`.
     pub fn new(env: Env<'a>, prefs: Prefs, fonts: Fonts) -> Self {
-        let doc = sample_document(&env.human, "generated");
+        let doc = sample_document(&env.human, "generated", env.registry);
         let session = Session::new(doc, env.registry, env.fs, env.clock, SessionConfig::default(), env.seed);
         let model = Model::new(Arc::clone(&env.template), env.registry);
         let engine = Engine::new(session, env.registry, model);

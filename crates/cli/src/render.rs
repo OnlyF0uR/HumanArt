@@ -12,6 +12,7 @@ use humanart_core::id::Id128;
 use humanart_doc::document::{Author, AuthorKind, Document};
 use humanart_doc::expression_drive::ExpressionDrive;
 use humanart_doc::registry::{ParamValue, Registry, RegistryLimits};
+use humanart_doc::starter::{DEFAULT, Starter, Starters};
 use humanart_gpu::resources::{Budget, Resources};
 use humanart_gpu::{DeviceRequest, Gpu};
 use humanart_math::Vec3;
@@ -61,7 +62,8 @@ const BACKDROPS: [BackdropChoice; 4] =
 pub const MAX_FOCUS_M: f32 = 100.0;
 /// The hair `--hair` takes: `none` (no hair at all), then the scalp styles (`bald` keeps brows,
 /// lashes and peach fuzz).
-pub const HAIR_STYLES: [&str; 8] = ["none", "bald", "short", "medium-straight", "long-wavy", "curly", "coily", "afro"];
+pub const HAIR_STYLES: [&str; 9] =
+    ["auto", "none", "bald", "short", "medium-straight", "long-wavy", "curly", "coily", "afro"];
 /// The colours `--hair-color` takes.
 pub const HAIR_SHADES: [&str; 5] = ["black", "dark-brown", "brown", "blonde", "auburn"];
 /// Most scalp strands `--hair-strands` takes.
@@ -80,7 +82,7 @@ pub const MAX_POSE_JOINTS: usize = 64;
 /// Most axis steps of one `--pose` rotation.
 pub const MAX_POSE_STEPS: usize = 8;
 
-const OPTIONS: [OptSpec; 23] = [
+const OPTIONS: [OptSpec; 24] = [
     OptSpec {
         name: "camera",
         value: Some("NAME"),
@@ -166,8 +168,14 @@ const OPTIONS: [OptSpec; 23] = [
     OptSpec {
         name: "hair",
         value: Some("STYLE"),
-        default: Some("short"),
-        help: "Hair: none, bald (brows, lashes, fuzz only), short, medium-straight, long-wavy, curly, coily, afro.",
+        default: Some("auto"),
+        help: "Hair: auto (the starter character's), none, bald (brows, lashes, fuzz only), short, medium-straight, long-wavy, curly, coily, afro.",
+    },
+    OptSpec {
+        name: "character",
+        value: Some("NAME"),
+        default: Some("woman"),
+        help: "Starter character (data/template/characters.json): woman (the default), man or average (every registry default).",
     },
     OptSpec {
         name: "hair-color",
@@ -234,6 +242,8 @@ pub struct RenderJob {
     /// Joint rotations relative to rest (joint name, unit quaternion `x, y, z, w`), set on the
     /// document before the render.
     pub pose: Vec<(String, [f64; 4])>,
+    /// The starter character the document starts from.
+    pub character: String,
 }
 
 impl RenderJob {
@@ -267,6 +277,7 @@ impl RenderJob {
             backdrop: BACKDROPS[pick("background", &BACKGROUNDS)?],
             occlusion: pick("occlusion", &["on", "off"])? == 0,
             pose: pose_values(p.get("pose").unwrap_or(""))?,
+            character: character(p.get("character").unwrap_or(DEFAULT))?.name,
         })
     }
 }
@@ -421,7 +432,15 @@ fn pose_values(list: &str) -> Result<Vec<(String, [f64; 4])>, CliError> {
 
 /// The hair options of a parsed `render` command line.
 pub(crate) fn hair_options(p: &Parsed) -> Result<Option<HairOptions>, CliError> {
-    let style = p.choice("hair", &HAIR_STYLES)?;
+    let mut style = p.choice("hair", &HAIR_STYLES)?;
+    if style == 0 {
+        // `auto`: the starter character's style.
+        let starter = character(p.get("character").unwrap_or(DEFAULT))?;
+        style = HAIR_STYLES
+            .iter()
+            .position(|s| *s == starter.hair)
+            .ok_or_else(|| CliError::Data(format!("starter `{}`: no hair style `{}`", starter.name, starter.hair)))?;
+    }
     let shade =
         HairShade::from_name(HAIR_SHADES[p.choice("hair-color", &HAIR_SHADES)?]).unwrap_or(HairShade::DarkBrown);
     let strands = p.number("hair-strands", 0, MAX_HAIR_STRANDS)?;
@@ -433,6 +452,18 @@ pub(crate) fn hair_options(p: &Parsed) -> Result<Option<HairOptions>, CliError> 
         body_hair,
         ..HairOptions::default()
     }))
+}
+
+/// The starter character `name` (`data/template/characters.json`).
+///
+/// # Errors
+/// [`CliError::Usage`] for a name the file lacks, [`CliError::Data`] when the file does not parse.
+pub(crate) fn character(name: &str) -> Result<Starter, CliError> {
+    let starters = Starters::builtin().map_err(|e| CliError::Data(format!("starter characters: {e}")))?;
+    starters.find(name).cloned().ok_or_else(|| {
+        let names: Vec<&str> = starters.all().iter().map(|s| s.name.as_str()).collect();
+        CliError::Usage(crate::args::UsageError(format!("--character: `{name}` is not one of {}", names.join(", "))))
+    })
 }
 
 /// What a finished render reports.
@@ -513,6 +544,9 @@ pub fn run(job: &RenderJob) -> Result<RenderSummary, CliError> {
     // rest shape is no character, todo 1.3).
     {
         let mut doc = default_document();
+        character(&job.character)?
+            .apply(&mut doc, &registry)
+            .map_err(|e| CliError::Data(format!("starter character: {e}")))?;
         if let Some(name) = &job.preset {
             for (id, value) in preset_values(&registry, name)? {
                 doc.params.insert(id, ParamValue::Scalar(value));

@@ -165,7 +165,10 @@ impl Viewer {
         width: u32,
         height: u32,
     ) -> Result<Self, EngineError> {
-        Self::with_options(gpu, resources, model, width, height, ViewerOptions::default())
+        // The hair of a starter character of the document's sex (todo 1.3).
+        let options =
+            ViewerOptions { hair: Some(super::hair::HairOptions::for_model(model)), ..ViewerOptions::default() };
+        Self::with_options(gpu, resources, model, width, height, options)
     }
 
     /// [`Viewer::new`] with `options`. When the skin surface cannot be built for the template (no

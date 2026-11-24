@@ -253,9 +253,14 @@ impl Base {
     pub fn engine(&self, human: Option<&str>, create: bool) -> Result<(Engine<'_>, String), CliError> {
         let seed = Id128::random(&OsEntropy).map_err(|e| CliError::Project(format!("no entropy: {e}")))?;
         let config = SessionConfig::default();
+        // A new character starts from the default starter (todo 1.3) over the registry defaults.
+        let starter = crate::render::character(humanart_doc::starter::DEFAULT)?;
         let new_doc = |human: &str| {
             let me = Author { id: human.to_owned(), kind: AuthorKind::Human, name: PROGRAM.to_owned() };
-            Document::new(seed, "Untitled character", self.source, 1, self.clock.unix_millis(), me)
+            let mut doc = Document::new(seed, "Untitled character", self.source, 1, self.clock.unix_millis(), me);
+            // Checked against the registry by `character`'s file test; a failure leaves the defaults.
+            let _ = starter.apply(&mut doc, &self.registry);
+            doc
         };
         let session = match &self.project {
             Some(root) => {
