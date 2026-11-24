@@ -343,14 +343,15 @@ pub const NECK_REGION: &str = "neck";
 const NECK_SEED: u64 = 0x4e_ec00;
 
 /// The wrinkle generator's settings for the neck's resting lines at depth `amount` (0..1):
-/// 3 to 7 lines around the neck, 0.1 to 0.7 mm deep, 0.6 to 1.8 mm wide, older with the amount
-/// (artistic).
+/// 3 to 7 lines around the neck, 0.15 to 1.0 mm deep, 0.6 to 1.5 mm wide, older with the amount
+/// (artistic; 0.7 mm deep and 1.8 mm wide at full depth changed a frontal close-up by one or two
+/// 8-bit steps, too faint for the creases of an old neck).
 fn neck_params(amount: f32) -> GeneratorParams {
     let a = amount.clamp(0.0, 1.0);
     let mut p = GeneratorParams::new(GeneratorKind::Wrinkles);
-    p.set("skin.features.wrinkles.depth", 0.1 + 0.6 * a);
+    p.set("skin.features.wrinkles.depth", 0.15 + 0.85 * a);
     p.set("skin.features.wrinkles.count", (3.0 + 4.0 * a).round());
-    p.set("skin.features.wrinkles.width", 0.6 + 1.2 * a);
+    p.set("skin.features.wrinkles.width", 0.6 + 0.9 * a);
     p.set("skin.features.wrinkles.age", a);
     p
 }
@@ -1117,10 +1118,11 @@ mod tests {
         assert!(viewer.sync_skin(gpu, &model).unwrap());
         let lined = shoot(&mut model, &mut viewer, &mut res, "skin-neck-1.png");
         let lines = mad(&smooth, &lined);
-        // The lines are thin: the picture rows (over the middle of the neck) whose green they
-        // change by two 8-bit steps on average, against the rows the jitter alone changes so.
+        // The lines are thin: the picture rows (over the neck: rows 100 to 400 of the 500-row
+        // close-up; 100 to 300 left out the lower lines) whose green they change by two 8-bit
+        // steps on average, against the rows the jitter alone changes so.
         let rows = |a: &[u8], b: &[u8]| -> usize {
-            (100..300_usize)
+            (100..400_usize)
                 .filter(|y| {
                     let green = |x: usize| (y * 400 + x) * 4 + 1;
                     (150..250).map(|x| u32::from(a[green(x)].abs_diff(b[green(x)]))).sum::<u32>() >= 200
