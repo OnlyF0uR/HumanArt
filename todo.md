@@ -5,15 +5,20 @@ plan. `PROGRESS.md` records what is done and the evidence for it, `docs/decision
 `docs/blockers.md` what is blocked. Requirement IDs such as `[EYE-05]` in code and tests are labels from
 the original specification; `PROGRESS.md` keeps the evidence under them.
 
-## Where we stand (2026-11-21)
+## Where we stand (2026-11-23)
 
 The engineering base is broad and tested: codecs, GPU layer, shader system, document and commands,
 CPU and GPU evaluation, render graph, UI toolkit, skin model calibrated against measured skin colour,
-subsurface shading, bakers, LODs, texture compression. Since 2026-11-20 the eyes, mouth interior and
-hair are drawn on the head in CLI renders and the editor, the body measurements match ANSUR II, and
-the default face is the mean of 8 scanned people. The character still reads as **computer-made**: the
-skin is waxy, the lashes and teeth look artificial and expressions read weakly. Data: HSRD-100 (face shape, skin detail) and BodyParts3D (muscle and bone
-forms) are checked and in use; FLAME is out (owner, 2026-11-20).
+subsurface shading, bakers, LODs, texture compression. The eyes, mouth interior and hair are drawn on
+the head in CLI renders and the editor, the body measurements and both sexes' faces match ANSUR II,
+and the default face is the mean of 8 scanned people. Since 2026-11-23: pose correctives and driven
+twist joints, glTF export, the shadow acne that looked like a mole fixed, every crate's tests run
+(on a software GPU: lavapipe renders work, about 90 s per head still, which is how tonight's visual
+checks were made). The character still reads as **computer-made**: the skin is waxy, the lashes and
+teeth look artificial, expressions read weakly, and the default woman with the default short hair
+reads boyish (a longer default hair style for her is the owner's call). Data: HSRD-100 (face shape,
+skin detail) and BodyParts3D (muscle and bone forms) are checked and in use; FLAME is out (owner,
+2026-11-20).
 
 ## 1. Photorealism
 
