@@ -843,7 +843,9 @@ mod tests {
         let mut res = Resources::new(gpu, Budget::UNLIMITED);
         let (w, h) = (480, 320);
         let mut viewer = Viewer::new(gpu, &mut res, &model, w, h).unwrap();
-        let wrinkles = viewer.wrinkles().expect("the template's wrinkles are authored and bound");
+        let wrinkles = viewer
+            .wrinkles()
+            .unwrap_or_else(|| panic!("the template's wrinkles are authored and bound: {:?}", viewer.wrinkles_error()));
         assert!(wrinkles.report().missing.is_empty(), "{wrinkles:?}");
         #[allow(clippy::cast_precision_loss)]
         let camera = close_up_camera(&model, CloseUp::Eye, Framing::Head, w as f32 / h as f32).unwrap();

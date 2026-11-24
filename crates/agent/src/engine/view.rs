@@ -123,6 +123,7 @@ pub struct Viewer {
     skin: Option<SkinLook>,
     skin_error: Option<EngineError>,
     wrinkles: Option<SkinWrinkles>,
+    wrinkles_error: Option<EngineError>,
     /// The scene object of the surfaced skin.
     skin_object: Option<usize>,
     hair: Option<CharacterHair>,
@@ -232,9 +233,12 @@ impl Viewer {
             DeformSettings { lods: false, ..DeformSettings::default() },
         )?;
         // The expression wrinkles read the deformer's region strain (a failure leaves them off).
-        let wrinkles = match &skin {
-            Some(_) => SkinWrinkles::new(gpu, template, &deformer).ok().flatten(),
-            None => None,
+        let (wrinkles, wrinkles_error) = match &skin {
+            Some(_) => match SkinWrinkles::new(gpu, template, &deformer) {
+                Ok(w) => (w, None),
+                Err(e) => (None, Some(e)),
+            },
+            None => (None, None),
         };
         if let Some(w) = &wrinkles {
             w.bind(gpu, &mut renderer);
@@ -262,6 +266,7 @@ impl Viewer {
             skin_object,
             hair,
             hair_error,
+            wrinkles_error,
             features,
             features_error,
             hair_options: options.hair,
@@ -399,6 +404,13 @@ impl Viewer {
     /// Why the hair asked for in [`ViewerOptions`] could not be built, if it could not.
     pub fn hair_error(&self) -> Option<&EngineError> {
         self.hair_error.as_ref()
+    }
+
+    /// Why the expression wrinkles could not be set up (the viewer then draws without them), if
+    /// they could not.
+    #[must_use]
+    pub fn wrinkles_error(&self) -> Option<&EngineError> {
+        self.wrinkles_error.as_ref()
     }
 
     /// What the viewer shows.
