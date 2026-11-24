@@ -186,7 +186,10 @@ fn skn_04_hardware_bc6h_decoder_matches_the_cpu_reference_on_random_blocks() {
                 let p = (by * 4 + t / 4) * w as usize + bx * 4 + t % 4;
                 let g = [0, 1, 2].map(|c| f32_to_f16_bits(gpu[p][c]));
                 let c = [cpu[3 * p], cpu[3 * p + 1], cpu[3 * p + 2]];
-                if g != c {
+                // -0 and +0 are one value: a decoder may give either for a zero endpoint
+                // (llvmpipe gives -0 where the reference gives +0 in signed mode).
+                let zero = |h: u16| if h == 0x8000 { 0 } else { h };
+                if g.map(zero) != c.map(zero) {
                     if let Some(m) = mode {
                         per_mode[m] += 1;
                     }
