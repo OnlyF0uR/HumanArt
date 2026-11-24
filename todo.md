@@ -174,8 +174,7 @@ forms) are checked and in use; FLAME is out (owner, 2026-11-20).
 6. Agent server and CLI (WP-23): done 2026-11-21, including the CLI commands `serve` (stdio, loopback
    HTTP with a token), `batch`, `turntable`, `validate` and the editor hook (`crates/app/src/
    agent_host.rs`: grant starts the server and admits the agent, pause/revoke drive its gate). User
-   docs for the commands: text in `target/agents/cli-hook/STATUS.md`, to go into the user
-   documentation (WP-36). Still to do: quality report and metrics (WP-24).
+   docs for the commands: `docs/command-line.md` (2026-11-23; its batch example was run). Still to do: quality report and metrics (WP-24).
 
 ## 3. Data pipeline
 
@@ -228,7 +227,8 @@ device (ADR-040), the document side of the autosave no longer allocates.
   2.0x) fails when other GPU tests run beside it (2.05x and 2.39x with 2 test threads) and passes alone:
   run GPU timing tests serially or mark them.
 - Identity axes use a pooled standard deviation; ADR-046 asks for per-sex values.
-- Shoulder width measured as 351 vs 382 mm by two agents: recheck on the current template.
+- Shoulder width: settled 2026-11-23 by the sex switch's fitted gauge (biacromial 368.6 mm woman, 419.0 mm
+  man against the ANSUR II means 365.3 / 415.7; test `todo_1_3_sex_switch_meets_the_ansur_means`).
 - UV slivers that lock LOD vertices; low UV packing coverage.
 - The embedded face model `data/template/face/face-model.hafm` cannot be rebuilt byte for byte from the
   8 current fits: a rebuild shifts the mean face by about 1 mm and turns components 02 and 04-07, which
