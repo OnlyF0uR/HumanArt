@@ -28,9 +28,13 @@ forms) are checked and in use; FLAME is out (owner, 2026-11-20).
    column at the outer eye corner is gone. Still to do: the concha floor reads as a diamond-shaped pit in
    profile and a short crease runs forward from the ear's lower front; a faint tone change remains at the
    temple; the white sliver across the caruncle (a lid-margin highlight, not the tear line).
-   Done 2026-11-23: natural asymmetry is the default (`identity.asymmetry` 0.35); moles keep clear of
-   the jugular notch, nipples, navel and eye and mouth corners (`feature_layers::SPOT_CLEARANCE`, test
-   `todo_1_1_moles_keep_clear_of_landmarks`); the adult face of both sexes (2026-11-23, test
+   Done 2026-11-23: natural asymmetry is the default (`identity.asymmetry` 0.35); the "mole on the
+   jugular notch" was shadow acne, not a mole (it stayed with plain skin and moved with the light): the
+   shadow filter's receiver plane counted the rim of a concave hollow as a blocker of its floor; a
+   curvature allowance (`SHADOW_CURVATURE` in `shaders/render/lighting.wgsl`) removes the specks in the
+   notch and over the clavicles with the nose, lid and lip shadows unchanged (lavapipe renders, owner
+   to confirm on a real GPU); moles keep clear of the jugular notch, nipples, navel and eye and mouth
+   corners anyway (`feature_layers::SPOT_CLEARANCE`, test `todo_1_1_moles_keep_clear_of_landmarks`); the adult face of both sexes (2026-11-23, test
    `todo_1_3_both_sexes_have_adult_proportions`): menton-sellion now 112.6 / 122.1 mm (ANSUR II means
    113.1 / 122.6; the chin longer and 1 mm more prominent), nose protrusion 17.0 / 17.8 mm (was 15.7 for
    the woman), lid opening / fissure 0.41 (was 0.43, a juvenile round eye), the skin under the chin

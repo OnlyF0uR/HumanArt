@@ -88,6 +88,12 @@ const SHADOW_MIN_OFFSET: f32 = 0.0003;
 const SHADOW_TERMINATOR_OFFSET: f32 = 0.0015;
 // The steepest receiver the receiver-plane bias follows: metres of depth per metre across the map.
 const SHADOW_MAX_SLOPE: f32 = 6.0;
+// How much a receiver may curve toward the light away from its tangent plane, per metre squared of
+// tap distance (half the curvature of a hollow of 15 mm radius): the receiver-plane comparison
+// counted the rim of a concave hollow as a blocker of its own floor, which put dark specks in the
+// jugular notch and the hollows over the clavicles under a frontal light (todo 1.1). A real blocker
+// stands off the surface by far more than this over the few millimetres the taps reach.
+const SHADOW_CURVATURE: f32 = 33.0;
 
 // What a shadow lookup gives: how much of the light arrives (1 lit, 0 shadowed); how many times
 // wider than the filter could reach the penumbra should have been (>= 1: the backdrop fades a
@@ -176,6 +182,8 @@ fn shadow_sample(light: Light, world: vec3<f32>, normal: vec3<f32>, pixel: vec2<
     if (steepness > steepest) {
         plane *= steepest / steepness;
     }
+    // Depth allowance per uv squared of tap offset for a receiver curving toward the light.
+    let curve = SHADOW_CURVATURE * depth_per_metre / (uv_per_metre * uv_per_metre);
     // The disc turns per pixel and per frame. With the Interactive tier's 8 taps it turns per 4 x 4
     // block of pixels instead, so neighbouring pixels read neighbouring texels of the map (a turn per
     // pixel scatters them over the cache); the price is noise in blocks, which the accumulated
@@ -223,7 +231,9 @@ fn shadow_sample(light: Light, world: vec3<f32>, normal: vec3<f32>, pixel: vec2<
                 textureLoad(shadow_atlas, vec2<i32>(clamp((uv + o3) * dims, vec2<f32>(0.0), dims - 1.0)), i32(layer), 0),
             );
             // Reversed-Z: a blocker is nearer the light than the receiver's plane, so larger.
-            let reference = vec4<f32>(depth + slack) + vec4<f32>(dot(plane, o0), dot(plane, o1), dot(plane, o2), dot(plane, o3));
+            let reference = vec4<f32>(depth + slack)
+                + vec4<f32>(dot(plane, o0), dot(plane, o1), dot(plane, o2), dot(plane, o3))
+                + curve * vec4<f32>(dot(o0, o0), dot(o1, o1), dot(o2, o2), dot(o3, o3));
             let found = select(vec4<f32>(0.0), vec4<f32>(1.0), z > reference);
             blocker_sum += dot(z, found);
             blockers += dot(found, vec4<f32>(1.0));
@@ -267,10 +277,10 @@ fn shadow_sample(light: Light, world: vec3<f32>, normal: vec3<f32>, pixel: vec2<
         d_filter = golden_turn(d_filter);
         let o3 = d_filter * (sqrt(f32(i) + 3.5) * step);
         d_filter = golden_turn(d_filter);
-        lit += textureSampleCompareLevel(shadow_atlas, shadow_sampler, uv + o0, layer, clamp(depth + dot(plane, o0), 0.0, 1.0))
-            + textureSampleCompareLevel(shadow_atlas, shadow_sampler, uv + o1, layer, clamp(depth + dot(plane, o1), 0.0, 1.0))
-            + textureSampleCompareLevel(shadow_atlas, shadow_sampler, uv + o2, layer, clamp(depth + dot(plane, o2), 0.0, 1.0))
-            + textureSampleCompareLevel(shadow_atlas, shadow_sampler, uv + o3, layer, clamp(depth + dot(plane, o3), 0.0, 1.0));
+        lit += textureSampleCompareLevel(shadow_atlas, shadow_sampler, uv + o0, layer, clamp(depth + dot(plane, o0) + curve * dot(o0, o0), 0.0, 1.0))
+            + textureSampleCompareLevel(shadow_atlas, shadow_sampler, uv + o1, layer, clamp(depth + dot(plane, o1) + curve * dot(o1, o1), 0.0, 1.0))
+            + textureSampleCompareLevel(shadow_atlas, shadow_sampler, uv + o2, layer, clamp(depth + dot(plane, o2) + curve * dot(o2, o2), 0.0, 1.0))
+            + textureSampleCompareLevel(shadow_atlas, shadow_sampler, uv + o3, layer, clamp(depth + dot(plane, o3) + curve * dot(o3, o3), 0.0, 1.0));
     }
     out.visibility = lit / f32(n);
     return out;
