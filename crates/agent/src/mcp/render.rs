@@ -222,6 +222,9 @@ pub struct RenderService {
     resources: Option<Resources>,
     viewer: Option<Viewer>,
     options: ViewerOptions,
+    /// Whether the hair follows the model as the editor's viewport does (`Viewer::new`: the hair
+    /// of a starter character of the document's sex) instead of `options.hair`.
+    model_hair: bool,
     adapter: String,
 }
 
@@ -235,15 +238,19 @@ impl std::fmt::Debug for RenderService {
 }
 
 impl Default for RenderService {
+    /// The editor viewport's look: the default options with the hair `Viewer::new` gives the
+    /// model (`[AC-WP23-3]`: a headless render matches the viewport).
     fn default() -> Self {
-        Self::new(ViewerOptions::default())
+        let mut service = Self::new(ViewerOptions::default());
+        service.model_hair = true;
+        service
     }
 }
 
 impl RenderService {
     /// A service that creates its headless device on the first render.
     pub fn new(options: ViewerOptions) -> Self {
-        Self { gpu: None, resources: None, viewer: None, options, adapter: String::new() }
+        Self { gpu: None, resources: None, viewer: None, options, model_hair: false, adapter: String::new() }
     }
 
     /// The adapter's name (empty before the first render).
@@ -273,7 +280,13 @@ impl RenderService {
                 }
                 v
             }
-            slot @ None => slot.insert(Viewer::with_options(gpu, resources, model, w, h, self.options)?),
+            slot @ None => {
+                let mut options = self.options;
+                if self.model_hair {
+                    options.hair = Some(crate::engine::hair::HairOptions::for_model(model));
+                }
+                slot.insert(Viewer::with_options(gpu, resources, model, w, h, options)?)
+            }
         };
         {
             let s = viewer.settings_mut();
