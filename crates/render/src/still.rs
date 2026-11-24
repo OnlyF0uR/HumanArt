@@ -2,8 +2,9 @@
 //!
 //! The image is cut into tiles no larger than the renderer's target; each tile is rendered with
 //! the sub-frustum of its rectangle grown by an overlap on every side (so passes that read
-//! neighbours, today the TAA neighbourhood and later the subsurface blur and bloom, see real data
-//! at the tile edges), `samples` times with the same full-image jitter sequence, accumulated to
+//! neighbours, the TAA neighbourhood and the subsurface blur, see real data at the tile edges: the
+//! blur reaches [`crate::sss::KERNEL_RANGE_MM`] across the skin, 95 pixels on a face 0.8 m from a
+//! 50 mm lens in an 8K image, which [`subsurface_overlap`] gives), `samples` times with the same full-image jitter sequence, accumulated to
 //! their exact mean, tone mapped, and only the tile's interior is kept. Shadow maps are fitted to
 //! the scene, not the view, and per-pixel noise is seeded with the full-image pixel position, so a
 //! tiled still equals the untiled render up to floating-point rounding (`AC-WP11-3`).
@@ -103,6 +104,21 @@ pub fn plan_tiles(settings: &StillSettings) -> Vec<TilePlan> {
     plans
 }
 
+/// The overlap (pixels) a tile needs so that the subsurface blur of skin no nearer the camera than
+/// `nearest_depth` metres (along its view axis) reads only rendered pixels: the kernel's reach
+/// ([`crate::sss::KERNEL_RANGE_MM`] at profile scale `scatter_scale`) in pixels of an image `height`
+/// pixels high, plus 2 for the neighbours the blur takes its depth slope from and the bilinear
+/// fetch. With less, the blur's taps near a seam clamp at the tile's edge and the tiled still
+/// differs from the untiled one there.
+#[must_use]
+pub fn subsurface_overlap(camera: &crate::camera::Camera, height: u32, nearest_depth: f32, scatter_scale: f32) -> u32 {
+    let depth = nearest_depth.max(camera.near).max(1e-4);
+    let focal_px = height as f32 / (2.0 * (0.5 * camera.fov_y()).tan()).max(1e-6);
+    let reach =
+        crate::sss::KERNEL_RANGE_MM * 1e-3 * scatter_scale.clamp(0.0, crate::sss::MAX_SCATTER_SCALE) * focal_px / depth;
+    if reach.is_finite() { reach.ceil() as u32 + 2 } else { 0 }
+}
+
 /// The jitter of sample `i` (pixels, Halton 2/3 centred): the same for every tile and for the
 /// untiled render.
 pub fn sample_jitter(i: u32, samples: u32) -> Vec2 {
@@ -199,6 +215,22 @@ mod native {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn qual_04_subsurface_overlap_covers_the_kernel_in_pixels() {
+        let camera = crate::camera::Camera { focal_mm: 50.0, ..crate::camera::Camera::default() };
+        let focal_px = 4320.0 / (2.0 * (0.5 * camera.fov_y()).tan());
+        // 8.2 mm at 0.8 m on an 8K-high image.
+        let want = (crate::sss::KERNEL_RANGE_MM * 1e-3 * focal_px / 0.8).ceil() as u32 + 2;
+        assert_eq!(subsurface_overlap(&camera, 4320, 0.8, 1.0), want);
+        assert!(want > 64, "an 8K face needs far more than 32 pixels: {want}");
+        // Twice the scale or half the distance doubles the reach; no skin scale, no reach.
+        assert!(subsurface_overlap(&camera, 4320, 0.4, 1.0) >= 2 * want - 3);
+        assert!(subsurface_overlap(&camera, 4320, 0.8, 2.0) >= 2 * want - 3);
+        assert_eq!(subsurface_overlap(&camera, 4320, 0.8, 0.0), 2);
+        // Depths behind the near plane count as the near plane (finite).
+        assert!(subsurface_overlap(&camera, 1080, -1.0, 1.0) > 0);
+    }
 
     #[test]
     fn qual_04_tiles_cover_the_image_exactly_once() {

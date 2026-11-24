@@ -445,6 +445,27 @@ impl Scene {
         Ok(())
     }
 
+    /// The nearest depth along `camera`'s view axis of any vertex of a skin object in front of the
+    /// camera, and the largest profile scale of the skin objects: what the subsurface blur's reach
+    /// in pixels depends on ([`crate::still::subsurface_overlap`]). `None` without skin in front.
+    #[must_use]
+    pub fn nearest_skin(&self, camera: &crate::camera::Camera) -> Option<(f32, f32)> {
+        let forward = camera.forward();
+        let mut nearest = f32::INFINITY;
+        let mut scale = 0.0_f32;
+        for object in self.objects.iter().filter(|o| o.material.class == SKIN_CLASS) {
+            let Some(mesh) = self.meshes.get(object.mesh) else { continue };
+            scale = scale.max(object.skin.scatter_scale);
+            for p in &mesh.positions {
+                let depth = (object.transform.transform_point3(*p) - camera.position).dot(forward);
+                if depth > camera.near {
+                    nearest = nearest.min(depth);
+                }
+            }
+        }
+        nearest.is_finite().then_some((nearest, scale))
+    }
+
     /// The world bounding box of every object.
     pub fn bounds(&self) -> Aabb {
         let mut out = Aabb::EMPTY;

@@ -150,9 +150,14 @@ skin detail) and BodyParts3D (muscle and bone forms) are checked and in use; FLA
    under side light is the subsurface blur's (it weighs taps by screen offset only: proposal in the
    light-camera STATUS, for the skin); **`--test stills`
    `ac_wp11_3_tiled_8k_still_equals_the_untiled_render` fails since this work**: 1926 samples differ by
-   more than one code value (bound 1327 of 132 M); likely cause: the shadow map is fitted to each tile's
-   own view (`RenderConfig::shadow_focus`), so tiles get different shadow texel grids; a still should fit
-   it once to the whole frame.
+   more than one code value (bound 1327 of 132 M). Checked 2026-11-23 on lavapipe (1180 samples, mean
+   0.0037 against 0.002): the shadow map is already fitted once to the whole frame (the renderer fits
+   the focus with the full image's aspect), every noise source is seeded with the global pixel and the
+   still's sample index, the occlusion pass is off in that test and its bust is not skin; the
+   differences are scattered over the bust's soft shadows (a different grain in the penumbra), not
+   at the seams. Cause still open. Separately, real skin needs a wider tile overlap than 32 pixels: the
+   subsurface blur reaches 95 pixels on a face at 0.8 m in an 8K image (`still::subsurface_overlap`,
+   `Scene::nearest_skin`; callers of `render_still` must size the overlap with them).
 10. **How realism is judged.** The twelve review scenes (portrait front and three-quarter, macro skin,
    macro eye, macro lips and mouth, harsh side light, back light, hair back and profile, expression
    sweep, skin-tone range, age range, full body in poses, crowd), rendered from the CLI and the editor,
