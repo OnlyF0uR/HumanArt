@@ -167,6 +167,30 @@
    ],
    "compression": 8.0,
    "stretch": 6.0
+  },
+  {
+   "name": "nose.L",
+   "region": "nose",
+   "expressions": [
+    [
+     "AU09-L",
+     0.9
+    ]
+   ],
+   "compression": 8.0,
+   "stretch": 6.0
+  },
+  {
+   "name": "nose.R",
+   "region": "nose",
+   "expressions": [
+    [
+     "AU09-R",
+     0.9
+    ]
+   ],
+   "compression": 8.0,
+   "stretch": 6.0
   }
  ]
 }

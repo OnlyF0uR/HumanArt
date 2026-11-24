@@ -127,10 +127,12 @@ forms) are checked and in use; FLAME is out (owner, 2026-11-20).
    tested). 2026-11-22: contempt presets (one-sided AU12 + AU14, low/medium/high), 7 viseme
    parameters, `humanart-cli render --preset NAME` for every emotion and viseme; 2026-11-23: the agent
    tool `apply_expression` (so `batch` too) applies a built-in preset by name when the document has no
-   stored one of that name. Still to do: sadness,
-   disgust and contempt read weakly (contempt is a slight one-sided corner pull even at high: stronger
-   AU14 shape needed), wrinkles do not appear with the expressions (no authored maps; disgust shows no
-   nose wrinkle); checked against FACS from memory, not against reference photographs.
+   stored one of that name; AU14 pulls the corner 3.4 mm back (was 2.2) with a deeper dimple and the
+   tissue bulging beside it; AU9 drives new nose wrinkle maps (`nose.L` / `nose.R`, crease across the
+   nasal root and oblique lines on the sides; `humanart-cli render --close-up nose`). Still to do: in
+   lavapipe renders sadness, disgust and contempt still read weakly at head framing (the nose lines
+   show in the close-up only); the other wrinkle maps (0.2 mm deep) are faint too; checked against FACS
+   from memory, not against reference photographs.
 9. **Light and camera.** Done 2026-11-21 (`target/agents/light-camera/STATUS.md`, stills
    `target/review/light/s4-*.png`): shadow maps fitted to the view (about 0.25 mm per texel on the
    face), soft penumbrae that grow with distance, ambient occlusion and contact shadows, 13 rigs

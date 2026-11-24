@@ -72,7 +72,7 @@ pub const MAX_SIDE: u32 = 8192;
 pub const MAX_FRAMES: u32 = 1024;
 
 /// The close-ups `--close-up` takes (eyes and mouth macro stills).
-pub const CLOSE_UPS: [&str; 3] = ["none", "eye", "mouth"];
+pub const CLOSE_UPS: [&str; 4] = ["none", "eye", "mouth", "nose"];
 /// Most `--set` values on one command line.
 pub const MAX_SET_VALUES: usize = 64;
 /// Most `--pose` joints on one command line.
@@ -115,7 +115,7 @@ const OPTIONS: [OptSpec; 23] = [
         name: "close-up",
         value: Some("NAME"),
         default: Some("none"),
-        help: "none, eye (the left eye) or mouth: a macro still seen from the --view direction.",
+        help: "none, eye (the left eye), mouth or nose: a macro still seen from the --view direction.",
     },
     OptSpec {
         name: "set",
@@ -254,7 +254,8 @@ impl RenderJob {
             rig: BUILTIN_RIGS[pick("rig", &RIGS)?],
             data: PathBuf::from(p.get("data").unwrap_or("data")),
             hair: hair_options(p)?,
-            close_up: [None, Some(CloseUp::Eye), Some(CloseUp::Mouth)][pick("close-up", &CLOSE_UPS)?],
+            close_up: [None, Some(CloseUp::Eye), Some(CloseUp::Mouth), Some(CloseUp::Nose)]
+                [pick("close-up", &CLOSE_UPS)?],
             params: set_values(p.get("set").unwrap_or(""))?,
             preset: preset_name(p.get("preset").unwrap_or("none"))?,
             camera: match pick("camera", &CAMERAS)? {

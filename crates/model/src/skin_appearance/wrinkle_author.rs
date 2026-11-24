@@ -55,6 +55,9 @@ pub enum Pattern {
     Fan,
     /// One deep fold along a curve between two landmarks (nasolabial fold).
     Fold,
+    /// Oblique lines on the side of the upper nose below the nasal root, running down and out
+    /// (the "bunny lines" of the nose wrinkler, AU9: todo 1.8, disgust showed none).
+    Bunny,
 }
 
 /// One authored driver: its name in the driver table, its region, its pattern and the landmarks
@@ -78,7 +81,7 @@ pub struct AuthoredWrinkle {
 }
 
 /// The template's authored wrinkles.
-pub const TEMPLATE_WRINKLES: [AuthoredWrinkle; 7] = [
+pub const TEMPLATE_WRINKLES: [AuthoredWrinkle; 9] = [
     AuthoredWrinkle { driver: "forehead.raise", regions: &["forehead"], side: 0, pattern: Pattern::Rows, anchors: &[] },
     AuthoredWrinkle {
         driver: "glabella.L",
@@ -121,6 +124,14 @@ pub const TEMPLATE_WRINKLES: [AuthoredWrinkle; 7] = [
         regions: &["cheek-R", "malar-R", "upper-lip", "lip-corner-R"],
         pattern: Pattern::Fold,
         anchors: &["R.nose.alar-crease", "R.lip.corner"],
+    },
+    AuthoredWrinkle { driver: "nose.L", side: 1, regions: &["nose"], pattern: Pattern::Bunny, anchors: &["nose.root"] },
+    AuthoredWrinkle {
+        driver: "nose.R",
+        side: -1,
+        regions: &["nose"],
+        pattern: Pattern::Bunny,
+        anchors: &["nose.root"],
     },
 ];
 
@@ -315,6 +326,23 @@ fn author_heights(w: &AuthoredWrinkle, r: &RegionRaster, anchors: &[Vec3]) -> Ve
                         crease(d, LINE_DEPTH_MM, LINE_WIDTH_MM) * fade
                     }
                 }
+                Pattern::Bunny => {
+                    // Three lines 2.5 mm apart, tilted 40 degrees down from the horizontal going
+                    // out from the midline, from 2 to 13 mm out and 2 to 16 mm below the root.
+                    let g = anchors.first().copied().unwrap_or(Vec3::ZERO);
+                    let dx = (p.x - g.x).abs() * mm;
+                    let dy = (p.y - g.y) * mm;
+                    let (sin, cos) = 40_f32.to_radians().sin_cos();
+                    // Across the lines (u) and along them (v), mm.
+                    let u = dx * sin + dy * cos;
+                    let v = dx * cos - dy * sin;
+                    if (-16.0..=1.0).contains(&dy) {
+                        let along = (1.0 - ((v - 7.5) / 5.5).powi(2)).max(0.0);
+                        crease(nearest_line(u, -9.0, -1.5, 3), 3.0 * LINE_DEPTH_MM, 0.8 * LINE_WIDTH_MM) * along
+                    } else {
+                        0.0
+                    }
+                }
                 Pattern::Fold => {
                     // From the alar crease to 4 mm lateral of and 8 mm below the mouth corner.
                     let a = anchors.first().copied().unwrap_or(Vec3::ZERO);
@@ -432,7 +460,8 @@ mod tests {
             let creased = m.height.iter().filter(|h| **h < -0.05).count();
             assert!(deepest < -0.1, "{} has creases", w.driver);
             assert!(creased > 20, "{} has visible creases", w.driver);
-            assert!(m.height.iter().all(|h| *h <= 0.0 && *h >= -2.0 * LINE_DEPTH_MM - 1e-6));
+            // The deepest creases are the nose lines (three line depths).
+            assert!(m.height.iter().all(|h| *h <= 0.0 && *h >= -3.0 * LINE_DEPTH_MM - 1e-6));
         }
         assert!(author_template_wrinkles(template, &names, MAX_WRINKLE_SIZE + 1).is_err());
         let (none, report) = author_template_wrinkles(template, &[], 64).unwrap();

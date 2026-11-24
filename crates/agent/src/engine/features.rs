@@ -452,11 +452,14 @@ pub enum CloseUp {
     Eye,
     /// The lips and the mouth's interior.
     Mouth,
+    /// The nose from the root to the tip, with the inner canthi (nose wrinkles, todo 1.8).
+    Nose,
 }
 
 /// Half the extent a close-up frames, metres.
 const EYE_CLOSE_UP: f32 = 0.017;
 const MOUTH_CLOSE_UP: f32 = 0.032;
+const NOSE_CLOSE_UP: f32 = 0.03;
 
 /// The camera of `close_up` on `model`'s current result, from the direction of `framing`
 /// (front for [`Framing::Body`] and [`Framing::Head`]), at aspect ratio `aspect`. `None` when the
@@ -474,6 +477,11 @@ pub fn close_up_camera(model: &Model, close_up: CloseUp, framing: Framing, aspec
             let lips = LipLandmarks::find(template.landmarks()).ok()?;
             let opening = lips.opening(template.landmarks(), positions, Quat::IDENTITY).ok()?;
             (opening.centre, MOUTH_CLOSE_UP)
+        }
+        CloseUp::Nose => {
+            let at = |name: &str| template.landmarks().iter().find(|l| l.name == name)?.position(positions);
+            let (root, tip) = (at("nose.root")?, at("nose.tip")?);
+            (root.lerp(tip, 0.45), NOSE_CLOSE_UP)
         }
     };
     let kind = match framing {
