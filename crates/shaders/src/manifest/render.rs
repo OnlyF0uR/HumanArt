@@ -40,7 +40,14 @@ static LIBRARIES: &[Library] = &[
     Library {
         path: "render/frame.wgsl",
         summary: "the per-frame constants (cameras, shadows, exposure, viewport, tile, environment, lights) at group 0, the full-screen triangle",
-        functions: &["global_pixel", "fullscreen_position", "pixel_to_ndc", "pixel_direction", "rotate_y"],
+        functions: &[
+            "global_pixel",
+            "fullscreen_position",
+            "pixel_to_ndc",
+            "pixel_direction",
+            "rotate_y",
+            "image_clip",
+        ],
         purpose: Purpose::Runtime,
     },
     Library {

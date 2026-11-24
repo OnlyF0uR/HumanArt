@@ -360,7 +360,7 @@ pub fn preset_values(registry: &Registry, name: &str) -> Result<Vec<(String, f64
 }
 
 /// The `--set` list: `id=value` pairs separated by commas.
-fn set_values(list: &str) -> Result<Vec<(String, String)>, CliError> {
+pub(crate) fn set_values(list: &str) -> Result<Vec<(String, String)>, CliError> {
     let mut out = Vec::new();
     for item in list.split(',').map(str::trim).filter(|i| !i.is_empty()) {
         let bad = || CliError::Usage(crate::args::UsageError(format!("--set: `{item}` is not ID=NUMBER")));

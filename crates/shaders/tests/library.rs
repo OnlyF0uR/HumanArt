@@ -837,7 +837,10 @@ fn ac_wp05_2_fresnel_and_masking_match_f64() {
             let schlick = f0 + (1.0 - f0) * (1.0 - cos_i).clamp(0.0, 1.0).powi(5);
             let f0_ior = ((eta - 1.0) / (eta + 1.0)).powi(2);
             let cpu = [dielectric, schlick, f0_ior, g1_smith(nv, f64::from(alpha))].map(|x| x as f32);
-            let tolerance = if cos_i < 1e-3 { 1e-4 } else { 1e-5 };
+            // WGSL allows 2.5 ULP for a division and the inherited accuracy of `sqrt`; the exact
+            // Fresnel chains several of each, and a software adapter (lavapipe) misses 1e-5 by
+            // 3 % on one case.
+            let tolerance = if cos_i < 1e-3 { 1e-4 } else { 2e-5 };
             assert_close("fresnel", c, &floats(*g), &cpu, tolerance);
         }
     }

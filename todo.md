@@ -182,7 +182,13 @@ HumanArt itself is MIT OR Apache-2.0 (ADR-055).
 
 ## 4. Shipping
 
-Export package and glTF (WP-29), runtime library with editor parity and crowds (WP-30), capability
+Export: glTF done 2026-11-23 (`humanart_model::export`, `humanart-cli export --set ... --out x.glb`): the
+rest shape with the document's identity, the skeleton as nodes with inverse bind matrices, four
+weights per vertex, one primitive per part and UV tile, the 94 expressions as sparse morph targets,
+skin colour from the pigment model; test `exp_p1_the_character_exports_as_a_valid_skinned_glb_with_morph_targets`
+(the in-house validator; the Khronos validator is not available here, B-007). Still to do: the baked
+skin textures (GPU), hair as cards, combination and pose correctives (glTF cannot drive them; they are
+named in the mesh's extras), the export package (WP-29 rest), runtime library with editor parity and crowds (WP-30), capability
 fallbacks and low-memory behaviour (WP-33), large fuzz runs and server hardening (WP-34), user and
 format documentation (WP-36), release packaging (WP-37), sample project (WP-38), 8-hour soak test
 (WP-39), macOS and Linux builds (B-003). LOD package sections carry landmarks (ADR-021).

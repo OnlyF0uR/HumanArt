@@ -3,7 +3,7 @@
 //! Implemented so far: `render` (`[CLI-01]`, one offscreen still through the editor's engine
 //! viewer), `turntable` (stills around the character), `serve` (the agent server on stdio or
 //! loopback HTTP, `[AG-01]`), `batch` (a job file of tool calls), `validate` (data and project
-//! checks), `bench` (scenario 10, the UI benchmark scene `[UI-10]`), `fontbake` (TrueType fonts to
+//! checks), `export` (the character as glTF, `[EXP-P1]`), `bench` (scenario 10, the UI benchmark scene `[UI-10]`), `fontbake` (TrueType fonts to
 //! the UI's `.anfont` atlases `[UI-03]`) and the scan tools. Arguments are parsed by the in-house
 //! declarative parser of [`args`] (`[CLI-02]`); errors exit with one code per class and, with
 //! `--json-errors`, print one JSON line on stderr (`[CLI-03]`, [`error`]).
@@ -13,6 +13,7 @@ mod args;
 mod batch;
 mod bench;
 mod error;
+mod export;
 mod fontbake;
 mod host;
 mod render;
@@ -36,12 +37,13 @@ static ALLOCATOR: humanart_core::alloc::CountingAllocator = humanart_core::alloc
 
 fn usage() -> String {
     format!(
-        "{PROGRAM}: the headless HumanArt command line.\n\nUsage: {PROGRAM} <command> [options]\n\nCommands:\n  render  {}\n  turntable  {}\n  serve  {}\n  batch  {}\n  validate  {}\n  bench  {}\n  fontbake  {}\n  render-mesh  {}\n  pick-landmarks  {}\n  fit-scan  {}\n  face-model  {}\n\n{PROGRAM} <command> --help lists a command's options.\nExit codes: 0 success, 2 usage, 3 data, 4 GPU, 5 render, 6 file, 7 project, 8 job file,\n9 failed steps or checks, 10 agent server.\n",
+        "{PROGRAM}: the headless HumanArt command line.\n\nUsage: {PROGRAM} <command> [options]\n\nCommands:\n  render  {}\n  turntable  {}\n  serve  {}\n  batch  {}\n  validate  {}\n  export  {}\n  bench  {}\n  fontbake  {}\n  render-mesh  {}\n  pick-landmarks  {}\n  fit-scan  {}\n  face-model  {}\n\n{PROGRAM} <command> --help lists a command's options.\nExit codes: 0 success, 2 usage, 3 data, 4 GPU, 5 render, 6 file, 7 project, 8 job file,\n9 failed steps or checks, 10 agent server.\n",
         render::RENDER.summary,
         turntable::TURNTABLE.summary,
         serve::SERVE.summary,
         batch::BATCH.summary,
         validate::VALIDATE.summary,
+        export::EXPORT.summary,
         bench::BENCH.summary,
         fontbake::FONTBAKE.summary,
         scan::RENDER_MESH.summary,
@@ -102,6 +104,21 @@ fn run(args: &[String]) -> Result<(), CliError> {
             let findings = validate::run(&job);
             print!("{}", validate::report(&findings, job.json)?);
             validate::verdict(&findings)
+        }
+        Some("export") => {
+            let Some(parsed) = command(&export::EXPORT, args)? else { return Ok(()) };
+            let job = export::ExportJob::from_args(&parsed)?;
+            let r = export::run(&job)?;
+            println!(
+                "wrote {}: {} primitives, {} vertices, {} triangles, {} joints, {} morph targets",
+                job.out.display(),
+                r.primitives,
+                r.vertices,
+                r.triangles,
+                r.joints,
+                r.targets
+            );
+            Ok(())
         }
         Some("bench") => {
             let Some(parsed) = command(&bench::BENCH, args)? else { return Ok(()) };

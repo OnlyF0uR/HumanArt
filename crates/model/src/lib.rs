@@ -12,6 +12,7 @@
 //! - [`skeleton`]: joints, rest transforms, limits and the joint regressor `[MOD-07]`.
 //! - [`skin`]: fixed-count normalised skin weights and the dual-quaternion region map `[SKIN-01]`.
 //! - [`delta`]: sparse f16 delta bases sorted by region `[EVAL-02]`.
+//! - [`export`]: the character as glTF 2.0: rest shape, skeleton, skin, morph targets `[EXP-P1]`.
 //! - [`expression`]: expression targets, combination and pose-space correctives `[EXP-01]`
 //!   `[EXP-02]` `[SKIN-02]`.
 //! - [`identity`]: the authored identity axes, semantic and asymmetry components with their
@@ -28,6 +29,7 @@
 pub mod delta;
 pub mod error;
 pub mod eval;
+pub mod export;
 pub mod expression;
 pub mod eye;
 pub mod generate;

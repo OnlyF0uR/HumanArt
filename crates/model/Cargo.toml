@@ -10,7 +10,7 @@ license.workspace = true
 [dependencies]
 humanart-core.workspace = true
 humanart-math = { workspace = true, features = ["linalg", "solve"] }
-humanart-io = { workspace = true, features = ["json", "lz", "obj", "ply"] }
+humanart-io = { workspace = true, features = ["json", "lz", "obj", "ply", "gltf"] }
 
 [dev-dependencies]
 # why: the template generator's test previews write PNGs.
