@@ -99,8 +99,8 @@ forms) are checked and in use; FLAME is out (owner, 2026-11-20).
    `Evaluator`, catchlights, iris depth, caruncle, tear line, meniscus, vessels, lid and lash shadow;
    cost +0.55 ms for an eye close-up at 1440p. Still to do: the eye looks computer-made next to a
    photo (mostly lashes and lid skin, items 1.4 and 1.7); a flat light patch at the outer corner in
-   three-quarter view; parameter-driven eyeball size; rerun the shaders' own naga tests after the
-   last shader changes.
+   three-quarter view; parameter-driven eyeball size. (The shaders' naga tests pass after the last
+   shader changes, 2026-11-23.)
 6. **Mouth interior.** Done: lit cavity, wetter tongue, lower molars clear of the cheeks (0.84 mm) at
    every jaw opening. Still to do: the teeth read as flat tiles (enamel translucency, gums), the
    inside is still very dark, parameter-driven teeth.
