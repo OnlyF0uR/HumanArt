@@ -74,9 +74,8 @@ pub struct SurfaceSettings {
     pub fuzz_width: f32,
     /// Seed of the anti-tiling offsets.
     pub seed: u32,
-    /// Strength of the photographed skin colour detail, 0..=2 (1: the tile as photographed; the
-    /// default 1.5 makes up for the softening of photogrammetry, an artistic choice;
-    /// [`SkinSurface::set_albedo_detail`]).
+    /// Strength of the photographed skin colour detail, 0..=2 (1, the default: the tile as
+    /// photographed; 1.5 read as speckles at portrait distance; [`SkinSurface::set_albedo_detail`]).
     pub albedo_detail: f32,
 }
 
@@ -95,7 +94,7 @@ impl Default for SurfaceSettings {
             fuzz: 0.15,
             fuzz_width: 0.4,
             seed: 0x5eed_0001,
-            albedo_detail: 1.5,
+            albedo_detail: 1.0,
         }
     }
 }

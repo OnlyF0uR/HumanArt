@@ -958,8 +958,8 @@ Amends ADR-002 (profiles).
   group 3 binding 10, `SurfaceParams.misc.zw`) samples it anti-tiled like the micro-detail
   exemplar at 19.2 mm per tile and multiplies the albedo by `exp(strength · l)` after the
   compositor, before the subsurface composite (which applies the albedo after the scatter, so the
-  detail stays sharp). Default strength 1.5 (`SurfaceSettings::albedo_detail`): photogrammetry
-  averages 112 cameras and softens the detail (artistic).
+  detail stays sharp). Default strength 1, the tile as photographed (`SurfaceSettings::albedo_detail`;
+  1.5 read as speckles at portrait distance).
 - **Alternatives.** The scan's whole texture transferred onto the template (`fit-scan` does this):
   her hair over the cheeks, her lips and lids transfer wrongly, and it carries her likeness;
   procedural colour noise: what we had, and it reads as wax.
