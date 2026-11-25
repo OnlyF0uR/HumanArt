@@ -8,19 +8,18 @@
    "hair": "medium-straight",
    "params": {
     "identity.sex": -1.0,
-    "identity.mass": -0.3,
-    "identity.muscularity": 0.8,
-    "identity.sex_shape": -0.6,
+    "identity.mass": -0.1,
+    "identity.muscularity": 1.2,
+    "identity.sex_shape": -0.3,
     "identity.height": 0.3,
-    "body.torso.bust_size": 1.0,
-    "body.torso.breast_projection": 0.5,
-    "body.torso.breast_ptosis": -0.4,
-    "body.torso.waist_width": -0.5,
-    "body.torso.glute_size": 1.0,
+    "body.torso.bust_size": 2.0,
+    "body.torso.breast_projection": 0.8,
+    "body.torso.breast_ptosis": -1.0,
+    "body.torso.glute_size": 1.5,
     "body.legs.hip_flank": 0.2,
-    "body.legs.thigh_fullness": 0.2,
+    "body.legs.thigh_fullness": 0.6,
     "body.proportions.leg_length": 0.6,
-    "body.proportions.hip_width": 0.2,
+    "body.proportions.hip_width": 0.6,
     "face.eyes.size": -1.6,
     "face.eyes.canthal_tilt": 1.5,
     "face.eyelids.crease_height": 0.5,
@@ -70,7 +69,8 @@
     "skin.surface.wetness": 0.15,
     "eyes.eyeball.size": 1.5,
     "face.mouth.protrusion": -0.8,
-    "face.cheeks.cheekbone_prominence": 1.0
+    "face.cheeks.cheekbone_prominence": 1.0,
+    "body.proportions.shoulder_width": 0.6
    }
   },
   {
