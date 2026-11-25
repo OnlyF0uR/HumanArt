@@ -943,3 +943,27 @@ Amends ADR-002 (profiles).
   artistic, nothing is measured. The sculpt's amounts are an authored model choice `[ID-07]`;
   it folds no triangle in its range (-1 .. 2, test `todo_1_face_sculpt_narrows_the_jaw_and_holds_the_features`).
 - Source: the lead, 2026-11-25 (todo 1, the quality bar).
+
+## ADR-059: Skin colour detail is photographed, not procedural
+
+- **Context.** The owner (2026-11-25): "it still does not look photorealistic". Rendering an HSRD-100
+  scan with its own photographed texture through our renderer looked real at once; our character,
+  same lights and shading, looked like wax. The difference is the colour detail below a few
+  millimetres (pores, blotchy redness, faint freckles), which the pigment model and the 1 mm
+  compositor texels cannot carry.
+- **Decision.** A small tile of real skin's colour variation (`skin_appearance::albedo_detail`,
+  `data/template/skin/albedo-detail.png`, made by `humanart-cli skin-detail` from cheek skin of
+  HSR0015-Body-023): high-passed (log of each channel over its Gaussian blur of 4.8 mm), made
+  periodic, stored as 8-bit log ratios with mips; the skin shader (`render/skin_surface.wgsl`,
+  group 3 binding 10, `SurfaceParams.misc.zw`) samples it anti-tiled like the micro-detail
+  exemplar at 19.2 mm per tile and multiplies the albedo by `exp(strength · l)` after the
+  compositor, before the subsurface composite (which applies the albedo after the scatter, so the
+  detail stays sharp). Default strength 1.5 (`SurfaceSettings::albedo_detail`): photogrammetry
+  averages 112 cameras and softens the detail (artistic).
+- **Alternatives.** The scan's whole texture transferred onto the template (`fit-scan` does this):
+  her hair over the cheeks, her lips and lids transfer wrongly, and it carries her likeness;
+  procedural colour noise: what we had, and it reads as wax.
+- **Consequences.** One tile everywhere on the body (cheek skin; the lips, palms and scalp have their
+  own textures in reality): region-specific tiles (forehead, nose, lips, body) are the next step.
+  The tile is a piece of one consenting person's skin under CC BY 4.0 (ADR-056).
+- Source: the lead, 2026-11-25.

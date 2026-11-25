@@ -20,6 +20,7 @@
 //! - [`resolve`]: attributes to resolved channels, the reference of the GPU resolve.
 //! - [`microdetail`]: the detail exemplar (pores, fine lines, relief, age), horizon map,
 //!   micro-shadowing and vellus `[SKN-20]` `[SKN-21]` `[SKN-22]`.
+//! - [`albedo_detail`]: the photographed skin colour detail tile the shader multiplies in (todo 1).
 //! - [`antitile`]: histogram-preserving tiling and blending (Heitz & Neyret 2018).
 //! - [`spectrum`]: FFT, power spectra, autocorrelation and the tiling detector `[AC-WP13-2]`.
 //! - [`features`]: the procedural skin features library `[OTH-02]`.
@@ -35,6 +36,7 @@
 //! - [`baked`]: baked thickness and occlusion to the compositor's input bytes (todo 1.4).
 //! - [`error`]: the error enum, [`SkinError`].
 
+pub mod albedo_detail;
 pub mod antitile;
 pub mod baked;
 pub mod channels;

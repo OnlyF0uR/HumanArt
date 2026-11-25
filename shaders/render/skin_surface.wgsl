@@ -47,7 +47,8 @@ struct SurfaceParams {
     // Vellus strength at a full fuzz zone, fuzz width (sheen roughness), lip roughness scale,
     // 1 / the measured profile's mean RMS radius in mm (crate::sss::reference_radius_mm).
     fuzz: vec4<f32>,
-    // Anti-tiling seed, wrinkle maps bound (0 / 1), -, -.
+    // Anti-tiling seed, wrinkle maps bound (0 / 1), colour detail tile side mm (f32 bits; 0: none),
+    // colour detail strength (f32 bits).
     misc: vec4<u32>,
 }
 
@@ -162,6 +163,29 @@ fn micro_detail(p_mm: vec2<f32>, dpx_mm: vec2<f32>, dpy_mm: vec2<f32>, line: vec
     out.variance = variance;
     out.cavity = cavity;
     return out;
+}
+
+// Range of the colour detail tile's stored log ratio (humanart_model::skin_appearance::albedo_detail).
+const ALBEDO_DETAIL_LOG_RANGE: f32 = 1.0;
+
+// The photographed skin colour detail at `p_mm` (skin millimetres in the UV frame): the tile's log
+// ratios blended over the anti-tiling triangle with the variance-preserving operator (as the
+// micro-detail), raised to `strength`, as a factor on the albedo (1 on average).
+fn albedo_detail(p_mm: vec2<f32>, dpx_mm: vec2<f32>, dpy_mm: vec2<f32>, side: f32, strength: f32, seed: u32) -> vec3<f32> {
+    let u = p_mm / side;
+    let cell = antitile_triangle(u);
+    let size = f32(textureDimensions(skin_albedo_detail).x);
+    let lod = mip_level(dpx_mm * (size / side), dpy_mm * (size / side));
+    var vertices = array<vec2<i32>, 3>(cell.v1, cell.v2, cell.v3);
+    let weights = cell.weights;
+    var l = vec3<f32>(0.0);
+    for (var i = 0u; i < 3u; i++) {
+        let q = u - antitile_vertex_position(vertices[i]) + antitile_offset(vertices[i], seed + 977u);
+        let c = textureSampleLevel(skin_albedo_detail, repeat_sampler, q, lod).rgb;
+        l += weights[i] * (c - vec3<f32>(0.5)) * ALBEDO_DETAIL_LOG_RANGE;
+    }
+    l *= inverseSqrt(max(dot(weights, weights), 1e-6));
+    return exp(l * strength);
 }
 
 // The wrinkle activations of a driver + 1 (0: empty slot).
@@ -297,6 +321,13 @@ fn skin_surface(
         slope += strength * m.slope;
         s.alpha_widen = strength * strength * m.variance;
         s.micro_cavity = clamp(1.0 + surface.detail.z * strength * (m.cavity - 1.0), 0.0, 1.0);
+    }
+    // Photographed colour detail (todo 1): pores, mottling and redness of real skin.
+    let albedo_side = bitcast<f32>(surface.misc.z);
+    let albedo_strength = bitcast<f32>(surface.misc.w);
+    if (albedo_side > 0.0 && albedo_strength > 0.0) {
+        s.albedo = s.albedo
+            * albedo_detail(local * info.x, duvx * info.x, duvy * info.x, albedo_side, albedo_strength, surface.misc.x);
     }
     if (frame.valid) {
         let bent = n - slope.x * frame.t - slope.y * frame.b;

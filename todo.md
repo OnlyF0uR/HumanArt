@@ -46,6 +46,14 @@ what closes the gap most:
 6. **Clothing and jewellery**: every reference wears them; HumanArt has attachments (rigid or skinned
    meshes) but no garments. For the owner: in scope, and how (imported garments, a cloth tool)?
 
+**Photographed skin detail (2026-11-25, ADR-059).** An HSRD-100 scan drawn with its own photo
+texture through our renderer looked real; our character, same lights, looked like wax: the
+difference is colour detail below a few millimetres. A 19 mm tile of a real cheek's colour
+variation (`data/template/skin/albedo-detail.png`, `humanart-cli skin-detail`) is now multiplied into
+the skin albedo everywhere, anti-tiled; close-ups show pores, blotchy redness and faint freckles
+(`target/review/makeup/detail2-nose.png`). Next: tiles per region (forehead, nose, lips, body), the
+scan's fine geometry as normal detail, and specular breakup.
+
 Done 2026-11-25 toward it (ADR-058, lavapipe renders): **makeup** (`skin.makeup.*`,
 `skin_appearance::makeup`): winged liner, lower lash line, smoked shadow, lipstick with liner and
 gloss, blush, contour and highlight, placed from the landmarks and generated into the skin

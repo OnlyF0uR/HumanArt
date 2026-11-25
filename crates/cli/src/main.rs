@@ -19,6 +19,7 @@ mod host;
 mod render;
 mod scan;
 mod serve;
+mod skin_detail;
 mod turntable;
 mod validate;
 
@@ -37,7 +38,7 @@ static ALLOCATOR: humanart_core::alloc::CountingAllocator = humanart_core::alloc
 
 fn usage() -> String {
     format!(
-        "{PROGRAM}: the headless HumanArt command line.\n\nUsage: {PROGRAM} <command> [options]\n\nCommands:\n  render  {}\n  turntable  {}\n  serve  {}\n  batch  {}\n  validate  {}\n  export  {}\n  bench  {}\n  fontbake  {}\n  render-mesh  {}\n  pick-landmarks  {}\n  fit-scan  {}\n  face-model  {}\n\n{PROGRAM} <command> --help lists a command's options.\nExit codes: 0 success, 2 usage, 3 data, 4 GPU, 5 render, 6 file, 7 project, 8 job file,\n9 failed steps or checks, 10 agent server.\n",
+        "{PROGRAM}: the headless HumanArt command line.\n\nUsage: {PROGRAM} <command> [options]\n\nCommands:\n  render  {}\n  turntable  {}\n  serve  {}\n  batch  {}\n  validate  {}\n  export  {}\n  bench  {}\n  fontbake  {}\n  render-mesh  {}\n  pick-landmarks  {}\n  fit-scan  {}\n  face-model  {}\n  skin-detail  {}\n\n{PROGRAM} <command> --help lists a command's options.\nExit codes: 0 success, 2 usage, 3 data, 4 GPU, 5 render, 6 file, 7 project, 8 job file,\n9 failed steps or checks, 10 agent server.\n",
         render::RENDER.summary,
         turntable::TURNTABLE.summary,
         serve::SERVE.summary,
@@ -49,7 +50,8 @@ fn usage() -> String {
         scan::RENDER_MESH.summary,
         scan::PICK_LANDMARKS.summary,
         scan::FIT_SCAN.summary,
-        scan::FACE_MODEL.summary
+        scan::FACE_MODEL.summary,
+        skin_detail::SKIN_DETAIL.summary
     )
 }
 
@@ -139,6 +141,20 @@ fn run(args: &[String]) -> Result<(), CliError> {
         Some("pick-landmarks") => scan::pick_command(PROGRAM, args.get(1..).unwrap_or(&[])),
         Some("fit-scan") => scan::fit_command(PROGRAM, args.get(1..).unwrap_or(&[])),
         Some("face-model") => scan::face_model_command(PROGRAM, args.get(1..).unwrap_or(&[])),
+        Some("skin-detail") => {
+            let Some(parsed) = command(&skin_detail::SKIN_DETAIL, args)? else { return Ok(()) };
+            let job = skin_detail::SkinDetailJob::from_args(&parsed)?;
+            let sd = skin_detail::run(&job)?;
+            println!(
+                "wrote {} ({}² texels; log-ratio SD r {:.3}, g {:.3}, b {:.3})",
+                job.out.display(),
+                job.rect[2],
+                sd[0],
+                sd[1],
+                sd[2]
+            );
+            Ok(())
+        }
         Some(other) => Err(CliError::Usage(args::UsageError(format!("unknown command '{other}'; try --help")))),
     }
 }

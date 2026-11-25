@@ -71,6 +71,28 @@ pub const SKIN_TILE_SIZE: u32 = 512;
 pub const SKIN_ATLAS_SIZE: u32 = 2048;
 /// Texels the zone masks are dilated past the UV islands.
 pub const ZONE_DILATE: u32 = 8;
+/// The photographed skin colour detail tile (`skin_appearance::albedo_detail`, made by
+/// `humanart-cli skin-detail` from cheek skin of HSRD-100 HSR0015-Body-023, CC BY 4.0).
+const ALBEDO_DETAIL_PNG: &[u8] = include_bytes!("../../../../data/template/skin/albedo-detail.png");
+/// Skin the tile covers, mm (256 texels of the scan's 0.075 mm).
+pub const ALBEDO_DETAIL_MM: f32 = 19.2;
+
+/// The colour detail tile's side and mip chain, decoded once.
+fn albedo_detail_levels() -> Result<(u32, Vec<Vec<u8>>), EngineError> {
+    let image = humanart_io::png::decode(ALBEDO_DETAIL_PNG, &humanart_io::Limits::DEFAULT)
+        .map_err(|_| EngineError::Invalid { what: "the skin colour detail tile does not decode" })?;
+    let samples = image.as_u8().ok_or(EngineError::Invalid { what: "the skin colour detail tile is not 8-bit" })?;
+    let rgba: Vec<u8> = match image.channels {
+        4 => samples.to_vec(),
+        3 => samples.as_chunks::<3>().0.iter().flat_map(|c| [c[0], c[1], c[2], 255]).collect(),
+        _ => return Err(EngineError::Invalid { what: "the skin colour detail tile is not RGB" }),
+    };
+    if image.width != image.height {
+        return Err(EngineError::Invalid { what: "the skin colour detail tile is not square" });
+    }
+    let levels = humanart_model::skin_appearance::albedo_detail::mips(&rgba, image.width)?;
+    Ok((image.width, levels))
+}
 
 /// The material of surfaced skin: the albedo comes from the compositor, so `base_color` only shows
 /// where the surface has no compositor bound; roughness and `f0` are the skin specular defaults of
@@ -673,6 +695,8 @@ impl SkinLook {
         surface.set_settings(gpu, self.settings)?;
         surface.bind_compositor(gpu, &self.compositor)?;
         surface.set_micro_detail(gpu, &self.plan)?;
+        let (side, levels) = albedo_detail_levels()?;
+        surface.set_albedo_detail(gpu, side, ALBEDO_DETAIL_MM, &levels)?;
         Ok(())
     }
 
@@ -1208,5 +1232,19 @@ mod tests {
         assert!(lip > 1.5 * noise.max(0.01), "{lip} vs {noise}");
         assert!(lines > 1.5 * neck_noise.max(0.01), "{lines} vs {neck_noise}");
         assert!(line_rows >= noise_rows + 12, "{line_rows} vs {noise_rows}");
+    }
+
+    /// todo 1 (ADR-059): the embedded photographed colour detail tile decodes to a square
+    /// power-of-two tile with its full mip chain, centred near a log ratio of 0.
+    #[test]
+    fn todo_1_albedo_detail_tile_decodes_with_mips() {
+        let (side, levels) = albedo_detail_levels().unwrap();
+        assert!(side.is_power_of_two());
+        assert_eq!(levels.len(), (32 - side.leading_zeros()) as usize);
+        let top = levels.last().unwrap();
+        for c in 0..3 {
+            let l = humanart_model::skin_appearance::albedo_detail::decode(top[c]);
+            assert!(l.abs() < 0.05, "channel {c} mean log ratio {l}");
+        }
     }
 }

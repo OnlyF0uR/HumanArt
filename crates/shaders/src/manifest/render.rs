@@ -92,13 +92,14 @@ static LIBRARIES: &[Library] = &[
     },
     Library {
         path: "render/skin_surface.wgsl",
-        summary: "surfaced skin at group 3: resolved set and zone masks, Langer-oriented anti-tiled micro-detail, wrinkles, coat, sheen, meso mottling [SKN-20] [SKN-30] [SHD-06..09]",
+        summary: "surfaced skin at group 3: resolved set and zone masks, Langer-oriented anti-tiled micro-detail, wrinkles, coat, sheen, meso mottling, photographed colour detail [SKN-20] [SKN-30] [SHD-06..09]",
         functions: &[
             "surface_frame",
             "langer_direction",
             "antitile_vertex_position",
             "mip_level",
             "micro_detail",
+            "albedo_detail",
             "wrinkle_activation",
             "wrinkle_at",
             "plain_surface",

@@ -18,6 +18,13 @@ template's vertices. It contains no scan mesh, texture, photograph or participan
 card states that all participants gave informed consent. HSRD-100's own licence applies to this file;
 HumanArt's licence does not replace it.
 
+`data/template/skin/albedo-detail.png`, the photographed skin colour detail (embedded in
+`humanart-agent`), is derived from the same dataset: a 256 × 256 texel patch (about 19 mm) of cheek
+skin of scan HSR0015-Body-023's colour texture, high-passed (each channel over its Gaussian blur,
+so the capture's light and the person's base colour drop out), made periodic and stored as log
+ratios (`humanart-cli skin-detail`). It holds no face, feature or name; HSRD-100's licence applies to
+it.
+
 ## ISSA (CC BY 4.0)
 
 `data/test-scenes/skin-reference.json` holds summary values computed from: Lu Y. et al. 2025, "The

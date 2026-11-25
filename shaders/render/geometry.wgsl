@@ -77,6 +77,7 @@
 @group(3) @binding(7) var clamp_sampler: sampler;
 @group(3) @binding(8) var repeat_sampler: sampler;
 @group(3) @binding(9) var<uniform> surface: SurfaceParams;
+@group(3) @binding(10) var skin_albedo_detail: texture_2d<f32>;
 
 override SHADOW_TAPS: u32 = 16u;
 override SSS_MODE: u32 = 0u;

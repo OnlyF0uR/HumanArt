@@ -1017,6 +1017,23 @@ mod template_tests {
 
     #[test]
     #[ignore = "diagnostic"]
+    fn diag_landmark_uvs() {
+        let t = template(&Options { lods: false, ..Options::default() }).unwrap().template;
+        let uvs = t.mesh().uvs();
+        for l in t.landmarks().iter().filter(|l| {
+            ["L.cheek.malar", "R.cheek.malar", "forehead.glabella", "chin.mid", "L.zygion", "nose.tip", "L.brow.03"]
+                .contains(&l.name.as_str())
+        }) {
+            let mut uv = humanart_math::Vec2::ZERO;
+            for (&v, &w) in l.vertices.iter().zip(&l.weights) {
+                uv += uvs[v as usize] * w;
+            }
+            println!("{} {:.4} {:.4}", l.name, uv.x, uv.y);
+        }
+    }
+
+    #[test]
+    #[ignore = "diagnostic"]
     fn diag_liner_coverage_per_tile() {
         let t = template(&Options { lods: false, ..Options::default() }).unwrap().template;
         let canvas = MakeupCanvas::new(&t, 512, |_, _, _| 0.0).unwrap().unwrap();

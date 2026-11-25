@@ -74,6 +74,10 @@ pub struct SurfaceSettings {
     pub fuzz_width: f32,
     /// Seed of the anti-tiling offsets.
     pub seed: u32,
+    /// Strength of the photographed skin colour detail, 0..=2 (1: the tile as photographed; the
+    /// default 1.5 makes up for the softening of photogrammetry, an artistic choice;
+    /// [`SkinSurface::set_albedo_detail`]).
+    pub albedo_detail: f32,
 }
 
 impl Default for SurfaceSettings {
@@ -91,6 +95,7 @@ impl Default for SurfaceSettings {
             fuzz: 0.15,
             fuzz_width: 0.4,
             seed: 0x5eed_0001,
+            albedo_detail: 1.5,
         }
     }
 }
@@ -114,6 +119,7 @@ impl SurfaceSettings {
             return Err(RenderError::InvalidParameter { what: "skin surface: mm per UV must be finite and >= 0" });
         }
         if !(0.0..=2.0).contains(&self.detail_strength)
+            || !(0.0..=2.0).contains(&self.albedo_detail)
             || ![
                 self.micro_shadowing,
                 self.flush,
@@ -134,7 +140,7 @@ impl SurfaceSettings {
     }
 
     /// `SurfaceParams` of `render/skin_surface.wgsl`.
-    fn bytes(&self, exemplar_mm: f32, resolved_tiles: u32, wrinkles: bool) -> [u8; PARAMS_BYTES] {
+    fn bytes(&self, exemplar_mm: f32, albedo_mm: f32, resolved_tiles: u32, wrinkles: bool) -> [u8; PARAMS_BYTES] {
         let mut out = [0_u8; PARAMS_BYTES];
         let mut words = [0_u32; PARAMS_BYTES / 4];
         for (t, mm) in self.mm_per_uv.iter().enumerate() {
@@ -164,6 +170,9 @@ impl SurfaceSettings {
         }
         words[start + 12] = self.seed;
         words[start + 13] = u32::from(wrinkles);
+        // The colour detail tile's side in mm (0: none) and its strength.
+        words[start + 14] = albedo_mm.to_bits();
+        words[start + 15] = self.albedo_detail.to_bits();
         for (chunk, w) in out.as_chunks_mut::<4>().0.iter_mut().zip(words) {
             *chunk = w.to_le_bytes();
         }
@@ -189,6 +198,7 @@ struct Sources {
     inputs: wgpu::TextureView,
     detail: wgpu::TextureView,
     wrinkle_maps: wgpu::TextureView,
+    albedo_detail: wgpu::TextureView,
     activations: wgpu::Buffer,
     tile_slots: wgpu::Buffer,
 }
@@ -209,6 +219,9 @@ pub struct SkinSurface {
     resolved_tiles: u32,
     wrinkles: bool,
     detail_texture: Option<wgpu::Texture>,
+    /// Side of the bound colour detail tile, mm (0: none).
+    albedo_mm: f32,
+    albedo_texture: Option<wgpu::Texture>,
 }
 
 impl std::fmt::Debug for SkinSurface {
@@ -310,6 +323,7 @@ impl SkinSurface {
                         min_binding_size: None,
                     },
                 ),
+                layout_entry(10, texture_type(d2)),
             ],
         });
         let mut cache = PipelineCache::new(gpu);
@@ -413,6 +427,14 @@ impl SkinSurface {
                 &zero16,
                 array,
             ),
+            albedo_detail: neutral_texture(
+                gpu,
+                "skin surface colour detail",
+                wgpu::TextureFormat::Rgba8Unorm,
+                1,
+                &[128, 128, 128, 255],
+                d2,
+            ),
             activations: storage("skin surface activations", &[0, 0]),
             tile_slots: storage("skin surface wrinkle slots", &[u32::MAX; MAX_UV_TILES]),
         };
@@ -432,6 +454,8 @@ impl SkinSurface {
             resolved_tiles: 0,
             wrinkles: false,
             detail_texture: None,
+            albedo_mm: 0.0,
+            albedo_texture: None,
         };
         surface.write_params(gpu);
         Ok(surface)
@@ -460,6 +484,7 @@ impl SkinSurface {
                 wgpu::BindGroupEntry { binding: 7, resource: wgpu::BindingResource::Sampler(clamp) },
                 wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::Sampler(repeat) },
                 wgpu::BindGroupEntry { binding: 9, resource: params.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 10, resource: view(&s.albedo_detail) },
             ],
         })
     }
@@ -473,7 +498,7 @@ impl SkinSurface {
         gpu.queue.write_buffer(
             &self.params,
             0,
-            &self.settings.bytes(self.exemplar_mm, self.resolved_tiles, self.wrinkles),
+            &self.settings.bytes(self.exemplar_mm, self.albedo_mm, self.resolved_tiles, self.wrinkles),
         );
     }
 
@@ -634,6 +659,66 @@ impl SkinSurface {
         Ok(())
     }
 
+    /// Binds the photographed skin colour detail tile
+    /// (`humanart_model::skin_appearance::albedo_detail`): `levels` is its RGBA8 mip chain (level
+    /// 0 `side`², each next level half, down to 1 × 1) of encoded log ratios, `side_mm` the skin
+    /// it covers. Editor-time: allocates the texture.
+    ///
+    /// # Errors
+    /// [`RenderError::InvalidParameter`] for a side that is not a power of two, levels that do not
+    /// halve to 1 × 1, or a non-positive size in mm.
+    pub fn set_albedo_detail(
+        &mut self,
+        gpu: &Gpu,
+        side: u32,
+        side_mm: f32,
+        levels: &[Vec<u8>],
+    ) -> Result<(), RenderError> {
+        let bad = RenderError::InvalidParameter { what: "skin surface: colour detail mips do not match the side" };
+        if !side.is_power_of_two() || side > 4096 || !(side_mm > 0.0 && side_mm.is_finite()) {
+            return Err(bad);
+        }
+        let count = 32 - side.leading_zeros();
+        if levels.len() != count as usize {
+            return Err(bad);
+        }
+        for (mip, level) in levels.iter().enumerate() {
+            let s = (side >> mip).max(1) as usize;
+            if level.len() != s * s * 4 {
+                return Err(bad);
+            }
+        }
+        let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("skin colour detail"),
+            size: wgpu::Extent3d { width: side, height: side, depth_or_array_layers: 1 },
+            mip_level_count: count,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        for (mip, level) in levels.iter().enumerate() {
+            let s = (side >> mip).max(1);
+            gpu.queue.write_texture(
+                wgpu::TexelCopyTextureInfo {
+                    texture: &texture,
+                    mip_level: mip as u32,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                level,
+                wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(s * 4), rows_per_image: Some(s) },
+                wgpu::Extent3d { width: s, height: s, depth_or_array_layers: 1 },
+            );
+        }
+        self.sources.albedo_detail = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        self.albedo_texture = Some(texture);
+        self.albedo_mm = side_mm;
+        self.rebind(gpu);
+        Ok(())
+    }
+
     /// Unbinds the micro-detail.
     pub fn clear_micro_detail(&mut self, gpu: &Gpu) {
         self.sources.detail = self.neutral.detail.clone();
@@ -699,7 +784,7 @@ mod tests {
         let mut s = SurfaceSettings::default();
         s.mm_per_uv[1] = 500.0;
         s.seed = 7;
-        let bytes = s.bytes(10.24, 2, true);
+        let bytes = s.bytes(10.24, 19.2, 2, true);
         let word = |i: usize| u32::from_le_bytes([bytes[4 * i], bytes[4 * i + 1], bytes[4 * i + 2], bytes[4 * i + 3]]);
         let float = |i: usize| f32::from_bits(word(i));
         // tiles[1] = (500, 1, 0, 0); tiles[2] has no resolved tile.
@@ -714,5 +799,8 @@ mod tests {
         assert!(float(75) > 0.0);
         assert_eq!(word(76), 7);
         assert_eq!(word(77), 1);
+        // misc.z, misc.w: the colour detail tile's side and strength.
+        assert_eq!(float(78), 19.2);
+        assert_eq!(float(79), s.albedo_detail);
     }
 }
