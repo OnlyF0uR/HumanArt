@@ -121,6 +121,7 @@ pub const BINDINGS: &[(&str, &str)] = &[
     ("face.cheeks.cheekbone_prominence", "semantic.cheekbone-prominence"),
     ("face.cheeks.fullness", "semantic.cheek-fullness"),
     ("face.shape.sculpt", "semantic.face-sculpt"),
+    ("face.shape.width", "semantic.face-width"),
     ("face.ears.size", "semantic.ear-size"),
     ("face.ears.protrusion", "semantic.ear-protrusion"),
     ("face.ears.lobe_size", "semantic.earlobe-size"),

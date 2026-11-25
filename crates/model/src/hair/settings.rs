@@ -8,6 +8,9 @@
 //! - brow and lash density `v`: `2 v` times the default hair count (0 none, 0.5 default, 1 double);
 //! - brow, lash and stubble length `v`: `0.2 + 1.6 v` times the default length (0.5 default);
 //! - lash curl `v`: `2 v` times the default curl;
+//! - brow thickness `v`: `0.5 + v` times the brow band's height, with the hair count in step (0.5
+//!   default);
+//! - lash thickness `v` (mascara): `1 + 1.5 v` times the default fibre diameter (0 is bare lashes);
 //! - body hair density `v`: `v / 0.2` times the default (the registry default is 0.2);
 //! - stubble, beard and moustache density: the share of the style's full density (0 grows none).
 //!
@@ -39,10 +42,14 @@ pub enum GroomTarget {
     BeardDensity = 8,
     /// `moustache.density`.
     MoustacheDensity = 9,
+    /// `lashes.thickness`.
+    LashThickness = 10,
+    /// `brows.thickness`.
+    BrowThickness = 11,
 }
 
 /// Number of [`GroomTarget`]s.
-pub const GROOM_TARGETS: usize = 10;
+pub const GROOM_TARGETS: usize = 12;
 
 /// The registry default of `hair.body.density`, the value that gives the default body hair.
 pub const DEFAULT_BODY_DENSITY: f32 = 0.2;
@@ -61,6 +68,8 @@ impl GroomTarget {
             "stubble.length" => Self::StubbleLength,
             "beard.density" => Self::BeardDensity,
             "moustache.density" => Self::MoustacheDensity,
+            "lashes.thickness" => Self::LashThickness,
+            "brows.thickness" => Self::BrowThickness,
             _ => return None,
         })
     }
@@ -76,7 +85,7 @@ pub struct GroomSettings {
 impl Default for GroomSettings {
     /// The registry's defaults (`data/template/params/hair.json`).
     fn default() -> Self {
-        Self { values: [DEFAULT_BODY_DENSITY, 0.5, 0.5, 0.5, 0.5, 0.5, 0.0, 0.5, 0.0, 0.0] }
+        Self { values: [DEFAULT_BODY_DENSITY, 0.5, 0.5, 0.5, 0.5, 0.5, 0.0, 0.5, 0.0, 0.0, 0.0, 0.5] }
     }
 }
 
@@ -104,6 +113,8 @@ impl GroomSettings {
         spec.lash_density = 2.0 * v(GroomTarget::LashDensity);
         spec.lash_length = length(GroomTarget::LashLength);
         spec.lash_curl = 2.0 * v(GroomTarget::LashCurl);
+        spec.lash_thickness = 1.0 + 1.5 * v(GroomTarget::LashThickness);
+        spec.brow_thickness = 0.5 + v(GroomTarget::BrowThickness);
         spec.body_density = v(GroomTarget::BodyDensity) / DEFAULT_BODY_DENSITY;
         spec.stubble = v(GroomTarget::StubbleDensity);
         spec.stubble_length = length(GroomTarget::StubbleLength);
@@ -132,6 +143,8 @@ mod tests {
             ("stubble.length", GroomTarget::StubbleLength),
             ("beard.density", GroomTarget::BeardDensity),
             ("moustache.density", GroomTarget::MoustacheDensity),
+            ("lashes.thickness", GroomTarget::LashThickness),
+            ("brows.thickness", GroomTarget::BrowThickness),
         ];
         assert_eq!(targets.len(), GROOM_TARGETS);
         for (name, t) in targets {

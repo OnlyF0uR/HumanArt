@@ -64,6 +64,20 @@ nose-length axis folded the alar groove with the man's face (smoothed, longer ra
 the renders: small eyes under puffy lids, the liner mostly hidden under the lash roots, lashes that turn
 pale at portrait distance (dark in a close-up), a round, childlike face overall.
 
+Compared against the reference images (2026-11-25, crops of their faces next to lavapipe renders;
+`diag_starter_face_proportions` prints the starter's proportions against the neoclassical canons):
+the references' faces are narrower (no axis narrowed the midface: **`face.shape.width`**, 3 mm a
+side per unit outside the eyes; the woman at -2, bizygomatic 122.5 mm), with relaxed almond eyes
+(ours stared: opening 12 mm, now 10.8 with `eyes.size` -1.6), low, bold, filled brows
+(**`brows_lashes.brows.thickness`**, **brow pencil** makeup), dark lash lines (**mascara**,
+`brows_lashes.lashes.thickness`), lighter irises (hazel), a mouth about 50 mm wide (the starter's
+had grown to 54), and a jaw at about 0.5 of the face breadth (the sculpt at 1.4 had taken it to
+0.43, gaunt; now 0.7). Still behind them: the forehead is bare and high (their hair falls across it;
+a swept fringe from the guides alone gave a thin veil, it needs a denser styled preset), the ears
+show, the skin is matte (the highlight is stronger now), the eye framing is lighter than their
+heavy liner, hair strands in front of the cheek show dashed shading in three-quarter view (deep
+opacity banding?), and the lower face is still soft.
+
 Done 2026-11-24 toward it: starter characters (`data/template/characters.json`, `humanart_doc::starter`):
 a new character is the `woman` starter (the references' build and face direction, medium straight
 hair; the CLI's `--character woman|man|average`, the editor's sample character, the agent host);

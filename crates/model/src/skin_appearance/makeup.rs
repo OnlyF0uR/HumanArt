@@ -19,11 +19,12 @@
 //! - **blush**: an elliptical Gaussian on the cheek apple, swept up toward the temple;
 //! - **contour**: a soft band under the cheekbone from the ear toward the mouth corner, along the
 //!   jaw and down the sides of the nose;
+//! - **brow pencil**: a band along the brow, widest at the head and tapering to the tail;
 //! - **highlight**: the top of the cheekbone, the nose bridge, the cupid's bow and the chin, a
 //!   paler colour with a sheen.
 //!
 //! **Compositing.** The products are composited over each other per texel (premultiplied,
-//! bottom to top: contour, blush, highlight, shadow, lipstick, lip liner, lower liner, liner) into
+//! bottom to top: contour, blush, highlight, brow pencil, shadow, lipstick, lip liner, lower liner, liner) into
 //! one colour, coverage, roughness and specular. Two layers carry that into the compositor
 //! ([`MakeupCanvas::layers`]): the first mixes the colour override fully wherever any makeup is
 //! (so the override colour is the makeup's own, not a mix with an unset override), the second
@@ -72,10 +73,12 @@ pub enum MakeupInput {
     Contour = 9,
     /// Highlight opacity, 0..1.
     Highlight = 10,
+    /// Brow pencil opacity, 0..1.
+    Brows = 11,
 }
 
 /// Scalar makeup inputs.
-pub const MAKEUP_INPUTS: usize = 11;
+pub const MAKEUP_INPUTS: usize = 12;
 
 impl MakeupInput {
     /// Every input, in order.
@@ -91,6 +94,7 @@ impl MakeupInput {
         Self::Blush,
         Self::Contour,
         Self::Highlight,
+        Self::Brows,
     ];
 
     /// The registry material target (`makeup.liner`, ...).
@@ -107,6 +111,7 @@ impl MakeupInput {
             Self::Blush => "makeup.blush",
             Self::Contour => "makeup.contour",
             Self::Highlight => "makeup.highlight",
+            Self::Brows => "makeup.brows",
         }
     }
 
@@ -157,6 +162,8 @@ pub const DEFAULT_COLORS: [[f32; 3]; 4] =
 pub const CONTOUR_COLOR: [f32; 3] = [0.2, 0.12, 0.095];
 /// The highlight colour, linear: a pale champagne.
 pub const HIGHLIGHT_COLOR: [f32; 3] = [0.78, 0.63, 0.5];
+/// The brow pencil colour, linear: a dark brown.
+pub const BROW_COLOR: [f32; 3] = [0.045, 0.03, 0.022];
 
 /// The document's makeup: amounts and shapes ([`MakeupInput`]) and colours ([`MakeupColor`]).
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -218,6 +225,7 @@ impl Makeup {
             MakeupInput::Blush,
             MakeupInput::Contour,
             MakeupInput::Highlight,
+            MakeupInput::Brows,
         ]
         .iter()
         .all(|&i| self.get(i) <= 0.0)
@@ -339,6 +347,8 @@ pub struct Placement {
     bridge: Option<Polyline>,
     cupid: Option<Vec3>,
     chin: Option<Vec3>,
+    /// The brows, head (inner end) to tail.
+    brows: Vec<Polyline>,
 }
 
 /// Millimetres in metres.
@@ -366,7 +376,15 @@ impl Placement {
         };
         let mut eyes = Vec::new();
         let mut cheeks = Vec::new();
+        let mut brows = Vec::new();
         for side in ["L", "R"] {
+            if let Some(mut points) = run(&format!("{side}.brow"), 5) {
+                // Head (nearest the midline) first.
+                if points.first().is_some_and(|f| f.x.abs() > points.last().map_or(0.0, |l| l.x.abs())) {
+                    points.reverse();
+                }
+                brows.extend(Polyline::new(points));
+            }
             let canthi = (find(&format!("{side}.eye.canthus.medial")), find(&format!("{side}.eye.canthus.lateral")));
             if let (Some(medial), Some(lateral)) = canthi {
                 let line = |name: &str, ends: bool| {
@@ -416,7 +434,7 @@ impl Placement {
         };
         let cupid = find("lip.upper.outer.06").map(|p| p + Vec3::Y * (1.5 * MM));
         let chin = find("chin.mid");
-        Self { eyes, cheeks, lips, bridge, cupid, chin }
+        Self { eyes, cheeks, lips, bridge, cupid, chin, brows }
     }
 
     /// Products that can be placed: (eyes, cheeks, lip contour).
@@ -483,7 +501,7 @@ const POWDER: (f32, f32) = (0.55, 0.7);
 /// Roughness and specular of the liner (satin).
 const LINER: (f32, f32) = (0.35, 0.9);
 /// Roughness and specular of the highlight (a sheen).
-const SHEEN: (f32, f32) = (0.24, 1.8);
+const SHEEN: (f32, f32) = (0.16, 2.6);
 /// Roughness of matte and glossy lipstick, and their specular.
 const LIPSTICK: [(f32, f32); 2] = [(0.5, 0.8), (0.1, 1.6)];
 /// Widest the upper liner gets at the outer corner, at width 0 and 1.
@@ -544,7 +562,7 @@ fn sample(placement: &Placement, wings: &[Option<Polyline>], makeup: &Makeup, p:
             let a = cheek.malar + up * (7.0 * MM);
             let b = cheek.malar.lerp(cheek.zygion, 0.75) + up * (6.0 * MM);
             let w = Polyline::new(vec![a, b]).map_or(0.0, |l| band(&l, p, 4.0 * MM, 0.4));
-            over.lay(HIGHLIGHT_COLOR, 0.3 * highlight * w, SHEEN.0, SHEEN.1);
+            over.lay(HIGHLIGHT_COLOR, 0.45 * highlight * w, SHEEN.0, SHEEN.1);
         }
     }
     let highlight = v(MakeupInput::Highlight);
@@ -559,7 +577,17 @@ fn sample(placement: &Placement, wings: &[Option<Polyline>], makeup: &Makeup, p:
         if let Some(c) = placement.chin {
             w = w.max(0.7 * (-0.5 * (p.distance(c) / (4.5 * MM)).powi(2)).exp());
         }
-        over.lay(HIGHLIGHT_COLOR, 0.3 * highlight * w, SHEEN.0, SHEEN.1);
+        over.lay(HIGHLIGHT_COLOR, 0.45 * highlight * w, SHEEN.0, SHEEN.1);
+    }
+    // Brow pencil: a band along the brow, widest at the head, a point at the tail.
+    let pencil = v(MakeupInput::Brows);
+    if pencil > 0.0 {
+        for brow in &placement.brows {
+            let n = brow.nearest(p);
+            let half = (3.2 - 2.4 * n.s) * MM;
+            let w = 1.0 - smoothstep(half - 0.6 * MM, half + 0.6 * MM, n.distance);
+            over.lay(BROW_COLOR, 0.6 * pencil * w, POWDER.0, POWDER.1);
+        }
     }
     // Eyes.
     for (eye, wing) in placement.eyes.iter().zip(wings) {
@@ -898,7 +926,15 @@ mod tests {
         let crease = line(&[[0.0, 0.008, 0.0], [0.015, 0.01, 0.0], [0.03, 0.008, 0.0]]);
         let lower = line(&[[0.0, 0.0, 0.0], [0.015, -0.009, 0.0], [0.03, 0.0, 0.0]]);
         let eye = Eye { lash, crease, lower, lateral: Vec3::new(0.03, 0.0, 0.0), outward: Vec3::X };
-        Placement { eyes: vec![eye], cheeks: Vec::new(), lips: None, bridge: None, cupid: None, chin: None }
+        Placement {
+            eyes: vec![eye],
+            cheeks: Vec::new(),
+            lips: None,
+            bridge: None,
+            cupid: None,
+            chin: None,
+            brows: Vec::new(),
+        }
     }
 
     #[test]
@@ -910,8 +946,8 @@ mod tests {
         let at = |x: f32, y: f32| sample(&p, &[None], &m, Vec3::new(x, y, 0.0), 0.0).alpha;
         // On the line: covered everywhere.
         assert!(at(0.0075, 0.001) > 0.99 && at(0.0225, 0.001) > 0.99);
-        // 1.2 mm above: the inner corner's thin line has ended, the outer corner's band holds.
-        assert!(at(0.003, 0.0012) < 0.05, "{}", at(0.003, 0.0012));
+        // 1.5 mm above: the inner corner's thin line has ended, the outer corner's band holds.
+        assert!(at(0.003, 0.0015) < 0.05, "{}", at(0.003, 0.0015));
         assert!(at(0.028, 0.0012) > 0.95, "{}", at(0.028, 0.0012));
         // Well below the lash line nothing (the lid margin and the eye).
         assert!(at(0.015, -0.002) < 0.01);

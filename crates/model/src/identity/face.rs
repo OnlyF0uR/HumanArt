@@ -23,6 +23,7 @@
 //! | jaw width / angle | 4 % across at the angle / 1.2 mm out and down at the angle |
 //! | chin projection / height / width | 2 mm forward / 6 % longer / 10 % across |
 //! | cheekbones / cheek fullness | 1.5 mm out / 2 mm out |
+//! | face width | the head 3 mm wider on each side outside the eyes ([`face_width`]) |
 //! | sculpted face | jaw angle 7 mm in and 3 mm up, jaw line 2 to 5 mm in, lower cheek 6 mm in, cheek hollow 6 mm in, cheekbone 1 mm forward and up, chin 1.5 mm forward and 2 mm longer, the skin under the jaw 4 mm up, alae 0.8 mm in, brow tail 1.2 mm up; one smooth field ([`face_sculpt`]) |
 //! | ear size / protrusion / lobe | scaled about the ear, one SD of ANSUR II `earlength` / 0.08 rad / lobe 12 % |
 //! | neck width / length | out all around, one SD of ANSUR II `neckcircumference` / neck bones 4.5 % longer |
@@ -186,6 +187,7 @@ pub fn recipe(kit: &Kit<'_, '_>, name: &str) -> IdResult<Option<IdentityComponen
         "semantic.cheekbone-prominence" => (cheekbones(kit, true)?, Symmetry::Mirror),
         "semantic.cheek-fullness" => (cheek_fullness(kit)?, Symmetry::Mirror),
         "semantic.face-sculpt" => (face_sculpt(kit)?, Symmetry::Mirror),
+        "semantic.face-width" => (face_width(kit)?, Symmetry::Mirror),
         "semantic.ear-size" => (ear_scale(kit, Vec3::splat(0.05))?, Symmetry::Mirror),
         "semantic.ear-protrusion" => (ear_protrusion(kit)?, Symmetry::Mirror),
         "semantic.earlobe-size" => (earlobes(kit)?, Symmetry::Mirror),
@@ -809,6 +811,47 @@ pub(crate) fn face_sculpt(kit: &Kit<'_, '_>) -> IdResult<Raw> {
     });
     s.smooth_field(&mut disp, 3, &FACE_SKIN)?;
     Raw::confined(s, FACE_SKIN, Symmetry::Mirror, disp, Vec::new())
+}
+
+/// The head and neck without the eyeballs, tear lines and the inside of the mouth.
+pub const HEAD_SKIN: Reach<'static> = Reach {
+    regions: &["head", "neck"],
+    except: &[
+        "eyeball-L",
+        "eyeball-R",
+        "tear-line-L",
+        "tear-line-R",
+        "eye-occlusion-L",
+        "eye-occlusion-R",
+        "mouth-interior",
+        "teeth-upper",
+        "teeth-lower",
+        "gums-upper",
+        "gums-lower",
+        "tongue",
+    ],
+    margin: 0.003,
+};
+
+/// `semantic.face-width`: the head wider outside the eyes, 3 mm on each side per unit at the
+/// zygomatic arches and beyond (temples, the sides of the skull, the ears with them), nothing
+/// inside the outer eye corners (the eyes and the nose keep their place and spacing), fading out
+/// over the neck below the chin. The bizygomatic breadth changes by about 6 mm per unit; no other
+/// axis narrows the midface (the sex switch fits it to ANSUR II's mean). An authored model
+/// choice `[ID-07]`.
+pub(crate) fn face_width(kit: &Kit<'_, '_>) -> IdResult<Raw> {
+    let s = kit.space;
+    let outer = s.landmark("L.eye.canthus.lateral")?.x.abs();
+    let zygion = s.landmark("L.zygion")?.x.abs().max(outer + 0.01);
+    let menton = s.landmark("chin.menton")?.y;
+    let f = move |pt: &Point| {
+        let side = smoothstep(outer + 0.002, zygion + 0.004, pt.p.x);
+        let height = smoothstep(menton - 0.03, menton + 0.02, pt.p.y);
+        Vec3::X * (0.003 * side * height)
+    };
+    let mut disp = s.eval(|pt| s.sym(pt, &f));
+    s.smooth_field(&mut disp, 2, &HEAD_SKIN)?;
+    Raw::confined(s, HEAD_SKIN, Symmetry::Mirror, disp, Vec::new())
 }
 
 /// Scales the ears per axis by `k` about the tragion (both sides).

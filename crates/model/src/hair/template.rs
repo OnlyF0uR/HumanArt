@@ -29,7 +29,7 @@ use humanart_math::Vec3;
 use super::collide::{MAX_GRID_AXIS, SdfGrid, TriangleGrid};
 use super::error::{HairError, HairResult};
 use super::facial::{BodyHairSpec, FaceAnchors, body_hair, body_region, facial_groom};
-use super::features::{BROW_SHAPES, BrowSpec, Eyeball, FeatureGroom, LashSpec, brow_groom, lash_groom};
+use super::features::{BROW_SHAPES, BrowShape, BrowSpec, Eyeball, FeatureGroom, LashSpec, brow_groom, lash_groom};
 use super::params::{GroomMaps, GroomParams};
 use super::placement::{GroomLayout, ScalpMask, place, place_parted};
 use super::presets::preset_groom;
@@ -489,6 +489,10 @@ pub struct GroomSetSpec {
     pub lash_length: f32,
     /// Lash curl relative to the default.
     pub lash_curl: f32,
+    /// Lash fibre diameter relative to the default (mascara thickens them), 1 to 2.5.
+    pub lash_thickness: f32,
+    /// Brow band height relative to the default shape (the hair count follows), 0.5 to 1.5.
+    pub brow_thickness: f32,
     /// Body hair density relative to the default (1 = a third of the arm preset's).
     pub body_density: f32,
     /// Share of unpigmented (grey) strands in the scalp, brow, facial and body hair, 0..1.
@@ -521,6 +525,8 @@ impl Default for GroomSetSpec {
             lash_density: 1.0,
             lash_length: 1.0,
             lash_curl: 1.0,
+            lash_thickness: 1.0,
+            brow_thickness: 1.0,
             body_density: 1.0,
             grey_fraction: 0.0,
             stubble: 0.0,
@@ -637,8 +643,10 @@ pub fn character_grooms(hair: &TemplateHair, spec: &GroomSetSpec) -> HairResult<
                 }
             }
         }
+        let thick = if kind == GroomKind::Lashes { factor(spec.lash_thickness).max(0.1) } else { 1.0 };
         let params = GroomParams {
             strand_count: guides.len() as f32,
+            thickness: (first.params.thickness * thick).min(0.000_5),
             eumelanin: colour(kind).0,
             pheomelanin: colour(kind).1,
             color_variation: 0.05,
@@ -648,9 +656,12 @@ pub fn character_grooms(hair: &TemplateHair, spec: &GroomSetSpec) -> HairResult<
         let layout = GroomLayout::one_per_guide(&guides, surface, &maps, spec.seed ^ kind as u64)?;
         Ok(Some(groom(kind, guides, params, layout)))
     };
-    let brow = BrowSpec { shape: BROW_SHAPES[1], ..BrowSpec::default() };
+    let band = factor(spec.brow_thickness).clamp(0.25, 2.0);
+    let shape = BROW_SHAPES[1];
+    let shape = BrowShape { head: shape.head * band, body: shape.body * band, tail: shape.tail * band, ..shape };
+    let brow = BrowSpec { shape, ..BrowSpec::default() };
     let brow = BrowSpec {
-        count: (brow.count as f32 * factor(spec.brow_density)).round() as usize,
+        count: (brow.count as f32 * factor(spec.brow_density) * band).round() as usize,
         length: brow.length * factor(spec.brow_length).max(0.1),
         ..brow
     };

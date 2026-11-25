@@ -379,6 +379,10 @@
     {"id": "skin.makeup.highlight.amount", "display_name": "Highlight", "group": "skin/makeup", "default": 0.0, "provisional": "Artistic shape and strength (humanart_model::skin_appearance::makeup); nothing is measured.",
      "tags": ["makeup", "highlight", "glow", "sheen"],
      "description": "Opacity of a paler sheen on the tops of the cheekbones, the nose bridge, the cupid's bow and the chin; 0 is none.",
-     "evaluation": {"kind": "material", "target": "makeup.highlight"}}
+     "evaluation": {"kind": "material", "target": "makeup.highlight"}},
+    {"id": "skin.makeup.brows.amount", "display_name": "Brow pencil", "group": "skin/makeup", "default": 0.0, "provisional": "Artistic shape and strength (humanart_model::skin_appearance::makeup); nothing is measured.",
+     "tags": ["makeup", "brows", "eyebrows", "pencil", "fill"],
+     "description": "Opacity of dark brown brow pencil filling the brows under the hairs, widest at the inner end; 0 is none.",
+     "evaluation": {"kind": "material", "target": "makeup.brows"}}
   ]
 }

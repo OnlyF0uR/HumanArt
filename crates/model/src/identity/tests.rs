@@ -83,7 +83,7 @@ fn reg_01_bindings_match_the_registry_files() {
     let ours: BTreeSet<(String, String)> =
         BINDINGS.iter().chain(scan::SCAN_BINDINGS).map(|&(p, c)| (p.to_owned(), c.to_owned())).collect();
     assert_eq!(ours, registry, "BINDINGS and SCAN_BINDINGS differ from data/template/params");
-    assert_eq!(BINDINGS.len(), 74);
+    assert_eq!(BINDINGS.len(), 75);
     assert_eq!(scan::SCAN_BINDINGS.len(), 7);
 }
 
@@ -268,7 +268,8 @@ fn id_02_no_normal_discontinuity_at_region_borders() {
     let rest = tri_normals(t.mesh().positions(), &tris);
     let index: Vec<usize> = BINDINGS.iter().map(|&(_, c)| t.deltas().find(c).unwrap() as usize).collect();
     let mut rng = Rng::new(0x1d02);
-    // Its own sequence, so the other components' draws stay those of the samples before it.
+    // The face-shape axes' own sequence, so the other components' draws stay those of the
+    // samples before them.
     let mut sculpt_rng = Rng::new(0x5c01);
     let mut lines = Vec::new();
     let mut failures = Vec::new();
@@ -290,8 +291,8 @@ fn id_02_no_normal_discontinuity_at_region_borders() {
         for (&i, &(_, name)) in index.iter().zip(BINDINGS) {
             w[i] = match name {
                 "asymmetry.global" => rng.range_f32(0.0, 1.0),
-                // Drawn below from its own sequence.
-                "semantic.face-sculpt" => 0.0,
+                // Drawn below from their own sequence.
+                "semantic.face-sculpt" | "semantic.face-width" => 0.0,
                 sex::SWITCH => {
                     alone[i] = if rng.range_f32(-1.0, 1.0) < 0.0 { -1.0 } else { 1.0 };
                     alone[i]
@@ -299,9 +300,11 @@ fn id_02_no_normal_discontinuity_at_region_borders() {
                 _ => rng.range_f32(-2.0, 2.0),
             };
         }
-        // The sculpt within its registry range.
-        if let Some(c) = t.deltas().find("semantic.face-sculpt") {
-            w[c as usize] = sculpt_rng.range_f32(-1.0, 2.0);
+        // The face-shape axes within their registry ranges.
+        for (name, lo, hi) in [("semantic.face-sculpt", -1.0, 2.0), ("semantic.face-width", -2.0, 2.0)] {
+            if let Some(c) = t.deltas().find(name) {
+                w[c as usize] = sculpt_rng.range_f32(lo, hi);
+            }
         }
         let rest = tri_normals(&t.deformed_positions(&alone), &tris);
         let now = tri_normals(&t.deformed_positions(&w), &tris);
@@ -1624,6 +1627,8 @@ fn diag_face_axes_change_height_and_width() {
         "semantic.jaw-width",
         "semantic.chin-height",
         "semantic.cheekbone-prominence",
+        "semantic.face-sculpt",
+        "semantic.face-width",
         "global.mass",
     ];
     for name in names {
@@ -1675,5 +1680,83 @@ fn todo_1_face_sculpt_narrows_the_jaw_and_holds_the_features() {
     for w in [lo, -0.5, 0.5, 1.0, 1.5, hi] {
         let now = posed(t, &[("semantic.face-sculpt", w)]);
         assert_eq!(folded(rest, &now, &tris), 0, "folds at {w}");
+    }
+}
+
+/// todo 1 (the quality bar): `semantic.face-width` moves the zygion 3 mm per unit and the eyes
+/// not at all, and folds no triangle in its registry range.
+#[test]
+fn todo_1_face_width_moves_the_cheekbones_not_the_eyes() {
+    let t = &*fixture().full;
+    let tris = t.mesh().triangulate().indices;
+    let rest = t.mesh().positions();
+    let now = posed(t, &[("semantic.face-width", -1.0)]);
+    let z = landmark_shift(t, &now, "L.zygion");
+    assert!(z.x < -2.0e-3 && z.x > -4.0e-3, "the zygion moves in: {z:?}");
+    for name in ["L.eye.canthus.medial", "L.eye.canthus.lateral", "L.iris.center", "nose.tip", "L.lip.corner"] {
+        let d = landmark_shift(t, &now, name).length();
+        assert!(d < 0.3e-3, "{name} moves {d} m");
+    }
+    let (lo, hi) = registry_range("face.shape.width");
+    for w in [lo, -1.0, 1.0, hi] {
+        assert_eq!(folded(rest, &posed(t, &[("semantic.face-width", w)]), &tris), 0, "folds at {w}");
+    }
+}
+
+/// Prints the face proportions of the woman starter (`data/template/characters.json`) against
+/// the neoclassical canons (eye width = intercanthal width = nose width = a fifth of the face
+/// breadth; mouth width = 1.5 nose widths), to tune the starter's face values.
+#[test]
+#[ignore = "diagnostic"]
+fn diag_starter_face_proportions() {
+    let t = &*fixture().full;
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../data/template/characters.json");
+    let value = humanart_io::json::parse(&std::fs::read(path).unwrap()).unwrap();
+    let root = value.node();
+    let extra: Vec<(String, f32)> = std::env::var("FACE_SET")
+        .unwrap_or_default()
+        .split(',')
+        .filter_map(|kv| kv.split_once('=').map(|(k, v)| (k.to_owned(), v.parse().unwrap())))
+        .collect();
+    for name in ["average", "woman"] {
+        let characters = root.field("characters").unwrap();
+        let starter = characters.elements().unwrap().find(|c| c.field("name").unwrap().str().unwrap() == name).unwrap();
+        let mut weights: Vec<(&str, f32)> = vec![(sex::SWITCH, -1.0)];
+        let mut values: Vec<(String, f32)> = Vec::new();
+        let params = starter.field("params").unwrap();
+        for (id, v) in params.members().unwrap() {
+            if let Ok(x) = v.f64() {
+                values.push((id.to_owned(), x as f32));
+            }
+        }
+        if name == "woman" {
+            values.extend(extra.iter().cloned());
+        }
+        for (id, x) in &values {
+            if let Some(&(_, c)) = BINDINGS.iter().find(|b| b.0 == id) {
+                weights.retain(|w| w.0 != c);
+                weights.push((c, *x));
+            }
+        }
+        let p = posed(t, &weights);
+        let l = |n: &str| t.landmarks().iter().find(|l| l.name == n).unwrap().position(&p).unwrap();
+        let mm = |a: Vec3, b: Vec3| a.distance(b) * 1e3;
+        let face = 2.0 * l("L.zygion").x.abs() * 1e3;
+        let eye = mm(l("L.eye.canthus.medial"), l("L.eye.canthus.lateral"));
+        let inter = mm(l("L.eye.canthus.medial"), l("R.eye.canthus.medial"));
+        let nose = mm(l("L.nose.alare"), l("R.nose.alare"));
+        let mouth = mm(l("L.lip.corner"), l("R.lip.corner"));
+        let jaw = mm(l("jaw.L.01"), l("jaw.R.01"));
+        let mid = (l("nose.root").y - l("nose.subnasale").y) * 1e3;
+        let lower = (l("nose.subnasale").y - l("chin.menton").y) * 1e3;
+        let brow = (l("L.brow.03").y - l("L.eye.upper.04").y) * 1e3;
+        let opening = (l("L.eye.upper.04").y - l("L.eye.lower.04").y) * 1e3;
+        let tilt = (l("L.eye.canthus.lateral").y - l("L.eye.canthus.medial").y) * 1e3;
+        println!(
+            "{name}: face {face:.1} | eye {eye:.1} (face/5 {:.1}) | intercanthal {inter:.1} | nose {nose:.1} | mouth {mouth:.1} (1.5 nose {:.1}) | jaw {jaw:.1} (jaw/face {:.2}) | nasion-subnasale {mid:.1} subnasale-menton {lower:.1} | brow above lid {brow:.1} | opening {opening:.1} tilt {tilt:+.1}",
+            face / 5.0,
+            1.5 * nose,
+            jaw / face
+        );
     }
 }
