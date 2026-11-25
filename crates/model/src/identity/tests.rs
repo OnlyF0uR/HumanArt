@@ -316,6 +316,11 @@ fn id_02_no_normal_discontinuity_at_region_borders() {
         for (z, zone) in zones.iter().enumerate() {
             let (b, i) = dihedral_quantile(zone, &rest, &now, 0.999);
             lines.push(format!("  {}: 99.9 % quantile border {b:.2} deg, interior {i:.2} deg", ["head", "body"][z]));
+            if z == 0 {
+                for (d, c) in worst_border_edges(zone, &tris, t.mesh().positions(), &rest, &now, 3) {
+                    lines.push(format!("    head border edge {d:.1} deg at ({:.3}, {:.3}, {:.3})", c.x, c.y, c.z));
+                }
+            }
             worst[z] = (worst[z].0.max(b), worst[z].1.max(i));
         }
     }

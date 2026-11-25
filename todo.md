@@ -57,8 +57,11 @@ the jaw and a crease beside the nose. Her lashes are shorter and sparser (they r
 brooms). Found on the way: the compositor draws every UV tile at 512² (`SKIN_TILE_SIZE`), so the
 face tile (8192² hero texels over 819 mm) is coloured at **1.6 mm per texel**: lip liner, contour,
 freckles and moles are blurred by it (the lids, on the eyes tile, get 0.4 mm); a per-tile size or a
-denser face tile is the fix. Still wrong in the renders: vertical stripes across the lips (the lip
-lines), small eyes under puffy lids, the liner mostly hidden under the lash roots, lashes that turn
+denser face tile is the fix. The lips' vertical stripes and scalloped border were the lip-fullness axes (a weight around 22
+landmark points that dipped between them, pushed along the raw normals, which deepened the lips'
+small ridges): now 1 inside the lip outline and smoothed (`target/review/makeup/mouth2.png`); the
+nose-length axis folded the alar groove with the man's face (smoothed, longer ramp). Still wrong in
+the renders: small eyes under puffy lids, the liner mostly hidden under the lash roots, lashes that turn
 pale at portrait distance (dark in a close-up), a round, childlike face overall.
 
 Done 2026-11-24 toward it: starter characters (`data/template/characters.json`, `humanart_doc::starter`):

@@ -267,10 +267,14 @@ pub fn nose_length(kit: &Kit<'_, '_>) -> IdResult<Raw> {
     )?;
     let lip = s.series_nodes("lip.upper.outer")?;
     let d_lip = s.geodesic(&lip, 0.012);
-    let disp = s.eval(|pt| {
-        let free = smoothstep(0.002, 0.012, d_lip.get(pt.node).copied().unwrap_or(f32::INFINITY));
+    // The ramp up from the lip is long and the field smoothed: with a short ramp the alar groove
+    // between the moving nose base and the still lip folded over (with the man's face and the
+    // nose 1.6 longer).
+    let mut disp = s.eval(|pt| {
+        let free = smoothstep(0.003, 0.016, d_lip.get(pt.node).copied().unwrap_or(f32::INFINITY));
         Vec3::new(0.0, -0.0015, 0.0003) * (at(&w, pt) * free)
     });
+    s.smooth_field(&mut disp, 4, &NOSE)?;
     Raw::confined(s, NOSE, Symmetry::Mirror, disp, Vec::new())
 }
 
@@ -462,7 +466,11 @@ fn forehead(kit: &Kit<'_, '_>, slope: bool) -> IdResult<Raw> {
     Raw::confined(s, FOREHEAD, Symmetry::Mirror, disp, Vec::new())
 }
 
-/// Upper or lower lip fullness: the vermilion outward.
+/// Upper or lower lip fullness: the vermilion outward. The weight is 1 inside the lip's outline
+/// (the outer and inner landmark lines, seen from the front) and falls off over 4 mm outside it,
+/// measured to the outline's segments (a weight around the landmark points alone dipped between
+/// them and scalloped the border); the direction is the skin normal, and the field is smoothed so
+/// it does not deepen the lips' small vertical ridges.
 pub fn lip_fullness(kit: &Kit<'_, '_>, upper: bool) -> IdResult<Raw> {
     let s = kit.space;
     let (outer, inner, reach, lift) = if upper {
@@ -470,22 +478,47 @@ pub fn lip_fullness(kit: &Kit<'_, '_>, upper: bool) -> IdResult<Raw> {
     } else {
         ("lip.lower.outer", "lip.lower.inner", LOWER_LIP, -0.0002)
     };
-    let mut names = series(s, outer)?;
-    names.extend(series(s, inner)?);
-    let w = around(s, &names, 0.0005, 0.005)?;
-    let disp = s.eval(|pt| (pt.n * 0.0006 + Vec3::Y * lift) * at(&w, pt));
+    let mut outline = s.landmark_series(outer)?;
+    let mut inside = s.landmark_series(inner)?;
+    // One closed loop: along the outer line, back along the inner one.
+    if let (Some(&end), Some(&first), Some(&last)) = (outline.last(), inside.first(), inside.last())
+        && end.distance(first) < end.distance(last)
+    {
+        inside.reverse();
+    }
+    outline.extend(inside);
+    let w = move |p: Vec3| {
+        let n = outline.len();
+        let mut d = f32::INFINITY;
+        let mut crossings = 0;
+        for i in 0..n {
+            let (a, b) = (outline[i], outline[(i + 1) % n]);
+            d = d.min(segment_distance(p, a, b));
+            if (a.y > p.y) != (b.y > p.y) && p.x < a.x + (p.y - a.y) / (b.y - a.y) * (b.x - a.x) {
+                crossings += 1;
+            }
+        }
+        if crossings % 2 == 1 { 1.0 } else { falloff(d, 0.0, 0.004) }
+    };
+    let mut disp = s.eval(|pt| (pt.n * 0.0006 + Vec3::Y * lift) * w(pt.p));
+    s.smooth_field(&mut disp, 4, &reach)?;
     Raw::confined(s, reach, Symmetry::Mirror, disp, Vec::new())
 }
 
 /// `semantic.cupids-bow`: the peaks of the upper lip line up, the centre down.
 fn cupids_bow(kit: &Kit<'_, '_>) -> IdResult<Raw> {
     let s = kit.space;
-    let w = around(s, &series(s, "lip.upper.outer")?, 0.0005, 0.003)?;
+    // Around the outline's segments (around its points alone the weight dipped between them).
+    let line = s.landmark_series("lip.upper.outer")?;
+    let w = move |p: Vec3| {
+        let d = line.windows(2).map(|ab| segment_distance(p, ab[0], ab[1])).fold(f32::INFINITY, f32::min);
+        falloff(d, 0.0005, 0.003)
+    };
     let peak = s.landmark("L.philtrum.column")?.x.abs().max(0.002);
     let disp = s.eval(|pt| {
         let x = pt.p.x;
         let g = 0.0006 * (-((x.abs() - peak) / 0.0025).powi(2)).exp() - 0.0004 * (-(x / 0.002).powi(2)).exp();
-        Vec3::Y * (g * at(&w, pt))
+        Vec3::Y * (g * w(pt.p))
     });
     Raw::confined(s, UPPER_LIP, Symmetry::Mirror, disp, Vec::new())
 }
