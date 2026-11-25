@@ -433,6 +433,17 @@ pub fn preset_groom(
                 if let Some(line) = &part {
                     comb += part_comb(line, frame.origin);
                 }
+                // Medium straight: the front of the long side of the parting is combed across
+                // the forehead along the skin and falls at the far temple, framing the face.
+                if spec_name == "medium_straight"
+                    && let Some(line) = &part
+                {
+                    let front = smoothstep(centre.z + 0.2 * (hi.z - centre.z), hi.z - 0.02, frame.origin.z);
+                    let high = smoothstep(lo.y + 0.5 * (hi.y - lo.y), lo.y + 0.7 * (hi.y - lo.y), frame.origin.y);
+                    let long_side = smoothstep(-0.01, 0.02, -line.side(frame.origin));
+                    let sweep = front * high * long_side;
+                    comb += (-Vec3::X * 1.0 - Vec3::Y * 0.35 + Vec3::Z * 0.15) * (3.0 * sweep);
+                }
                 let spec = GrowSpec { length: length * jitter, comb, comb_rate: rate, gravity, offset: 0.004 };
                 let mut world = grow_falling_guide(&frame, &spec, 0.25, points, sdf);
                 if matches!(spec_name, "wavy" | "long_wavy") {
