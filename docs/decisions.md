@@ -937,8 +937,8 @@ Amends ADR-002 (profiles).
   amounts) or a scanned or sculpted target (none exists).
 - **Consequences.** Makeup follows the face through identity, expressions and the UV layout and
   costs nothing per frame. It is drawn at the compositor's resolution: 512² per tile, which is
-  0.4 mm per texel on the eyes tile but 1.6 mm on the face tile (its hero texture is 8192² at
-  10 texels per millimetre), so the lip liner and the contour edges are soft; a colour override
+  0.3 mm per texel on the eyes tile but 1 mm on the face tile (its islands span 506 mm per UV
+  unit, `Template::mm_per_uv`), so the lip liner and the contour edges are soft; a colour override
   below the makeup (a tattoo) shows only through the makeup's coverage. Shapes and colours are
   artistic, nothing is measured. The sculpt's amounts are an authored model choice `[ID-07]`;
   it folds no triangle in its range (-1 .. 2, test `todo_1_face_sculpt_narrows_the_jaw_and_holds_the_features`).

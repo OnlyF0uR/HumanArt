@@ -1003,6 +1003,18 @@ mod template_tests {
     use super::*;
     use crate::generate::build::{Options, template};
 
+    /// `Template::mm_per_uv` measures the layout: the face tile's islands are scaled to fit, so
+    /// the face is about 506 mm per UV unit, not the 819 its resolution and target density give.
+    #[test]
+    fn todo_1_mm_per_uv_is_the_layout_scale() {
+        let t = template(&Options { lods: false, ..Options::default() }).unwrap().template;
+        let scales = t.mm_per_uv();
+        assert_eq!(scales.len(), t.tiles().len());
+        let face = t.tiles().iter().position(|x| x.name == FACE_TILE).unwrap();
+        assert!((400.0..650.0).contains(&scales[face]), "face {} mm per UV", scales[face]);
+        assert!(scales.iter().all(|s| s.is_finite() && *s > 0.0));
+    }
+
     #[test]
     #[ignore = "diagnostic"]
     fn diag_liner_coverage_per_tile() {

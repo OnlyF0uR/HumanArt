@@ -255,10 +255,10 @@ impl SkinWrinkles {
         tiles.sort_unstable();
         tiles.dedup();
         let mut texel_mm = Vec::with_capacity(tiles.len());
+        let scales = template.mm_per_uv();
         for &t in &tiles {
-            let tile =
-                template.tiles().get(t as usize).ok_or(EngineError::Invalid { what: "a wrinkle map's UV tile" })?;
-            texel_mm.push(tile.resolution as f32 / tile.target_texels_per_mm / WRINKLE_SIZE as f32);
+            let mm = scales.get(t as usize).ok_or(EngineError::Invalid { what: "a wrinkle map's UV tile" })?;
+            texel_mm.push(mm / WRINKLE_SIZE as f32);
         }
         let baked = WrinkleMaps::bake(WRINKLE_SIZE, &tiles, &texel_mm, &maps)?;
         let count = |n: usize| u32::try_from(n).map_err(|_| EngineError::Invalid { what: "wrinkle set size" });
@@ -409,12 +409,18 @@ fn skin_gpu(e: SkinGpuError) -> EngineError {
     EngineError::Render(RenderError::Skin(e))
 }
 
-/// The layer settings of the template's surfaced skin: [`SurfaceSettings::for_tiles`] with the
+/// The layer settings of the template's surfaced skin: [`SurfaceSettings::for_tiles`] at the
+/// layout's measured scale (`Template::mm_per_uv`), with the
 /// document's flush, vellus sheen and lip coat (todo 2.3, [`with_values`]); the lips' roughness
 /// comes from the measured zone table (`skin_appearance::regional`), so the shader's extra lip
 /// smoothing is off.
 fn surface_settings(template: &Template, values: &SkinValues) -> SurfaceSettings {
-    with_values(SurfaceSettings { lip_roughness_scale: 1.0, ..SurfaceSettings::for_tiles(template.tiles()) }, values)
+    let mut settings = SurfaceSettings { lip_roughness_scale: 1.0, ..SurfaceSettings::for_tiles(template.tiles()) };
+    // The scale the layout reached, not the one it aimed for (`Template::mm_per_uv`).
+    for (slot, mm) in settings.mm_per_uv.iter_mut().zip(template.mm_per_uv()) {
+        *slot = if mm.is_finite() && mm > 0.0 { mm } else { *slot };
+    }
+    with_values(settings, values)
 }
 
 /// `settings` with the document's flush, vellus sheen ([`SkinValues::fuzz_scale`] times the
@@ -457,6 +463,7 @@ impl SkinLook {
         let mut lips = Vec::new();
         let mut face_tile = None;
         let (weights, report) = vertex_weights(template, &TEMPLATE_ZONES)?;
+        let scales = template.mm_per_uv();
         let baked = baked_inputs_cached(gpu, template, tile_size)?;
         for (tile, layer) in (0..count).zip(baked.iter()) {
             let index = u16::try_from(tile).map_err(|_| EngineError::Invalid { what: "skin tile index" })?;
@@ -470,9 +477,7 @@ impl SkinLook {
                     .map(|(x, y)| masks.weight(slot, x, y))
                     .collect();
             }
-            if spot_area.is_none()
-                && let Some(t) = tiles.get(tile as usize).filter(|t| t.name == "face")
-            {
+            if spot_area.is_none() && tiles.get(tile as usize).is_some_and(|t| t.name == "face") {
                 let sun = |x: u32, y: u32| SUN_ZONES.iter().map(|z| masks.weight(z.slot(), x, y)).fold(0.0, f32::max);
                 let (mut lo, mut hi) = ((tile_size, tile_size), (0, 0));
                 for y in 0..tile_size {
@@ -489,7 +494,7 @@ impl SkinLook {
                         .flat_map(|y| (rect.x..rect.right()).map(move |x| (x, y)))
                         .map(|(x, y)| sun(x, y))
                         .collect();
-                    let texel_mm = t.resolution as f32 / t.target_texels_per_mm / tile_size as f32;
+                    let texel_mm = scales.get(tile as usize).copied().unwrap_or(0.0) / tile_size as f32;
                     spot_area = Some(SpotArea { tile, rect, mask, texel_mm });
                 }
             }

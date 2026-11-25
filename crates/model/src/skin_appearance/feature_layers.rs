@@ -143,8 +143,9 @@ pub fn region_masks(template: &Template, region: Option<&str>, tile_size: u32) -
         return Err(SkinError::Invalid { what: "the region map does not match the mesh" });
     }
     let triangles = mesh.triangulate();
+    let scales = template.mm_per_uv();
     let mut out = Vec::new();
-    for (index, tile) in template.tiles().iter().enumerate() {
+    for (index, _) in template.tiles().iter().enumerate() {
         let index16 = u16::try_from(index).map_err(|_| SkinError::Invalid { what: "UV tile index" })?;
         let masks = bake_tile(mesh, &triangles, &weights, index16, tile_size, MASK_DILATE)?;
         let (mut lo, mut hi) = ((tile_size, tile_size), (0, 0));
@@ -165,7 +166,7 @@ pub fn region_masks(template: &Template, region: Option<&str>, tile_size: u32) -
             .map(|(x, y)| masks.weight(0, x, y))
             .collect();
         #[allow(clippy::cast_precision_loss)] // Tile sizes are far below 2^24.
-        let texel_mm = tile.resolution as f32 / tile.target_texels_per_mm / tile_size as f32;
+        let texel_mm = scales.get(index).copied().unwrap_or(0.0) / tile_size as f32;
         let tile = u32::try_from(index).map_err(|_| SkinError::Invalid { what: "UV tile index" })?;
         out.push(RegionMask { tile, rect, mask, texel_mm, share: 0.0 });
     }

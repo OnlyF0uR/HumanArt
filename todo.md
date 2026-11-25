@@ -55,9 +55,15 @@ per unit, cheek hollowed, chin forward, a crisp line under the jaw), fold-free i
 woman starter uses it at 1.3 instead of the cheek and jaw axes, whose large values left lumps over
 the jaw and a crease beside the nose. Her lashes are shorter and sparser (they read as false-lash
 brooms). Found on the way: the compositor draws every UV tile at 512² (`SKIN_TILE_SIZE`), so the
-face tile (8192² hero texels over 819 mm) is coloured at **1.6 mm per texel**: lip liner, contour,
-freckles and moles are blurred by it (the lids, on the eyes tile, get 0.4 mm); a per-tile size or a
-denser face tile is the fix. The lips' vertical stripes and scalloped border were the lip-fullness axes (a weight around 22
+face tile (its islands span 506 mm per UV unit) is coloured at **1 mm per texel**: lip liner,
+contour, freckles and moles are blurred by it (the lids, on the eyes tile, get 0.3 mm); a per-tile
+size or a denser face tile is the fix. And the shader, the wrinkle maps and the feature layers took
+each tile's millimetres per UV from its resolution over its target density, which the packer does
+not reach (face 819 assumed, 506 drawn; scalp 1024 against 367): pores, fine lines, wrinkles and
+feature sizes on the face were 1.6 times too fine. They take the measured scale now
+(`Template::mm_per_uv`). Pores still do not read at portrait distance: the diffuse light is blurred
+over millimetres by the subsurface scattering, so only the specular can show them, and the skin's
+specular is weak in every rig. The lips' vertical stripes and scalloped border were the lip-fullness axes (a weight around 22
 landmark points that dipped between them, pushed along the raw normals, which deepened the lips'
 small ridges): now 1 inside the lip outline and smoothed (`target/review/makeup/mouth2.png`); the
 nose-length axis folded the alar groove with the man's face (smoothed, longer ramp). Still wrong in

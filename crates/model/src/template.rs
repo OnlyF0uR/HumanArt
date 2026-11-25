@@ -171,6 +171,45 @@ impl Template {
         &self.parts.tiles
     }
 
+    /// Millimetres of skin per unit of UV, per UV tile, as the layout drew them: the median over
+    /// the tile's edges of the rest length over the UV length. A tile's `resolution /
+    /// target_texels_per_mm` is the scale the packer aimed for, not the one it reached (the face
+    /// tile's islands are scaled to fit: 506 mm per UV, not 819); the aim stands in for a tile
+    /// without edges.
+    #[must_use]
+    pub fn mm_per_uv(&self) -> Vec<f32> {
+        let mesh = self.mesh();
+        let (positions, uvs, face_tiles) = (mesh.positions(), mesh.uvs(), mesh.face_tiles());
+        let mut ratios: Vec<Vec<f32>> = vec![Vec::new(); self.tiles().len()];
+        for f in 0..mesh.face_count() {
+            let corners = mesh.face(f);
+            let Some(list) = face_tiles.get(f).and_then(|&t| ratios.get_mut(usize::from(t))) else { continue };
+            for (k, &a) in corners.iter().enumerate() {
+                let b = corners[(k + 1) % corners.len()];
+                let (Some(pa), Some(pb), Some(ua), Some(ub)) =
+                    (positions.get(a as usize), positions.get(b as usize), uvs.get(a as usize), uvs.get(b as usize))
+                else {
+                    continue;
+                };
+                let d = ua.distance(*ub);
+                if d > 1e-6 {
+                    list.push(pa.distance(*pb) * 1000.0 / d);
+                }
+            }
+        }
+        self.tiles()
+            .iter()
+            .zip(&mut ratios)
+            .map(|(tile, list)| {
+                list.retain(|r| r.is_finite());
+                list.sort_unstable_by(f32::total_cmp);
+                #[allow(clippy::cast_precision_loss)] // Resolutions are far below 2^24.
+                let aim = tile.resolution as f32 / tile.target_texels_per_mm;
+                list.get(list.len() / 2).copied().unwrap_or(aim)
+            })
+            .collect()
+    }
+
     /// The region map.
     #[must_use]
     pub const fn regions(&self) -> &RegionMap {

@@ -97,7 +97,7 @@ impl MicroDetailParams {
             line_depth_mm: 0.003 + 0.02 * c(line_depth),
             line_spacing_mm: 0.25 + 0.5 * c(line_scale),
             line_width_mm: 0.02 + 0.02 * c(line_scale),
-            relief_mm: 0.004,
+            relief_mm: 0.012,
             age: c(age),
             seed,
         }
