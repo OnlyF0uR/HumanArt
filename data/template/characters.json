@@ -84,8 +84,6 @@
     "body.proportions.shoulder_width": 0.5,
     "body.proportions.leg_length": 0.3,
     "body.torso.waist_width": -0.4,
-    "face.cheeks.cheekbone_prominence": 1.2,
-    "face.cheeks.fullness": -1.8,
     "face.jaw.width": 0.6,
     "face.jaw.angle": 0.8,
     "face.chin.projection": 0.8,
@@ -93,7 +91,8 @@
     "face.brow.ridge": 0.6,
     "face.nose.bridge_height": 0.4,
     "face.eyes.canthal_tilt": 0.3,
-    "face.neck.width": 0.3
+    "face.neck.width": 0.3,
+    "face.shape.sculpt": 0.5
    }
   },
   {

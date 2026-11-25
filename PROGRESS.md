@@ -57,6 +57,37 @@ sh tools/check-tree.sh && sh tools/check-deps.sh && sh tools/check-tree-selftest
 | 39 | Final integration and soak | open | |
 | 40 | Completion audit | open | |
 
+## Quality-bar round, 2026-11-25 (`todo.md` 1)
+
+Measured against the owner's reference images (crops of their faces next to lavapipe renders;
+stills in `target/review/makeup/`, the references kept out of the repository):
+
+- **Makeup** (ADR-058): `skin_appearance::makeup`, registry `skin.makeup.*` (liner with wing,
+  lower lash line, shadow, lipstick with liner and gloss, blush, contour, highlight, brow pencil);
+  tests `makeup::tests::*` (6: placement geometry, compositing, targets) and
+  `todo_1_mm_per_uv_is_the_layout_scale`; render evidence `target/review/makeup/eye-max.png`
+  (liner and wing at full strength), `mouth2.png`.
+- **Face shape:** `face.shape.sculpt` (RBF field) and `face.shape.width`; tests
+  `todo_1_face_sculpt_narrows_the_jaw_and_holds_the_features`,
+  `todo_1_face_width_moves_the_cheekbones_not_the_eyes` (fold-free in their ranges), `id_02`
+  (border creases, both drawn from their own random sequence). `diag_starter_face_proportions`
+  prints the starter against the neoclassical canons.
+- **Fixes found by the comparison:** lip fullness scalloped the vermilion border and deepened the
+  lips' ridges (now 1 inside the outline, smoothed); nose length folded the alar groove with the
+  man's face; the skin shader, wrinkle maps and feature layers used each tile's aimed, not drawn,
+  millimetres per UV (face 819 against 506: detail 1.6 times too fine; `Template::mm_per_uv`);
+  the breast's upper pole read as a cone (exponent 1.6 -> 1.2, fold-free with
+  `todo_1_3_sex_switch_is_fold_free`).
+- **Starter woman** (`data/template/characters.json`): narrower face, relaxed almond eyes, bold
+  filled brows, mascara, hazel iris, a 50 mm mouth, cheekbones over hollows, broader shoulders,
+  fuller bust, hips and thighs, dewy skin. Still short of the references (`todo.md` 1).
+- **Workspace run on lavapipe** (2026-11-25, `cargo test --release`, 2 threads): every crate's
+  tests pass except the GPU timing tests (`ac_wp14_3`, `ac_wp16_3`, `ac_wp17_2`,
+  `perf_surfaced_skin_geometry_at_1440p`, `perf_r6_core_pass_timings_*`: software rendering), the
+  tiled 8K still (`ac_wp11_3`, open, `todo.md` 1.9) and the UI text golden (`ac_wp12_3`: 485
+  pixels differ by up to 5 codes from the RTX 4060 golden under software rasterisation; the UI
+  is unchanged today).
+
 ## Open issues
 
 - **Two `block_on`s.** `humanart-gpu` has its own thread-park `block_on` in `crates/gpu/src/device.rs`;
