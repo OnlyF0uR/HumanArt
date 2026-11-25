@@ -84,8 +84,11 @@ cheekbone more, so the three-quarter view shows a cheekbone over a hollow). A de
 behind them: the forehead is bare and high (their hair falls across it;
 a swept fringe from the guides alone gave a thin veil, it needs a denser styled preset), the ears
 show, the skin is matte (the highlight is stronger now), the eye framing is lighter than their
-heavy liner, hair strands in front of the cheek show dashed shading in three-quarter view (deep
-opacity banding?), and the lower face is still soft.
+heavy liner, and the lower face is still soft. **Renderer bug** (2026-11-25): in three-quarter
+views the scalp hair's edge at the temple shows square, stair-stepped blocks about 4 px wide
+(`target/review/makeup/vL-34.png`); only with scalp hair (not bald), and the same with
+`--occlusion off`, `--frames 1` and `--skin plain`, so it is in the hair raster or resolve, not
+the AO, TAA or skin passes; the deep opacity and density-grid lookups are already filtered.
 
 Done 2026-11-24 toward it: starter characters (`data/template/characters.json`, `humanart_doc::starter`):
 a new character is the `woman` starter (the references' build and face direction, medium straight
