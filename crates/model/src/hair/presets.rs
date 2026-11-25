@@ -422,7 +422,10 @@ pub fn preset_groom(
                 // temples), straight down over the back of the head (where `back` is nearly the
                 // skin normal, so its tangent part alone would point anywhere).
                 let down = 0.9 * outward.x.abs() + 1.5 * (-outward.z).max(0.0);
-                let mut comb = Vec3::new(outward.x, 0.0, outward.z) * 0.3 + back + (-Vec3::Y) * down;
+                // Medium straight hair falls straight down at the sides, over the ears and temples
+                // (combed back there, it left the ears and the corners of the forehead bare).
+                let back_share = if spec_name == "medium_straight" { 1.0 - 0.75 * outward.x.abs() } else { 1.0 };
+                let mut comb = Vec3::new(outward.x, 0.0, outward.z) * 0.3 + back * back_share + (-Vec3::Y) * down;
                 // Away from the parting on both sides of it.
                 if let Some(line) = &part {
                     comb += part_comb(line, frame.origin);

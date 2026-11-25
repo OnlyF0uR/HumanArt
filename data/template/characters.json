@@ -21,7 +21,7 @@
     "body.legs.thigh_fullness": 0.2,
     "body.proportions.leg_length": 0.6,
     "body.proportions.hip_width": 0.2,
-    "face.eyes.size": -1.6,
+    "face.eyes.size": -2.2,
     "face.eyes.canthal_tilt": 1.5,
     "face.eyelids.crease_height": 0.5,
     "face.brow.height": -1.5,
@@ -38,7 +38,7 @@
     "face.nose.length": 1.2,
     "face.forehead.height": -2.0,
     "brows_lashes.lashes.length": 0.55,
-    "brows_lashes.lashes.density": 0.7,
+    "brows_lashes.lashes.density": 0.6,
     "brows_lashes.lashes.curl": 0.65,
     "brows_lashes.brows.density": 0.9,
     "skin.makeup.liner.amount": 0.85,
@@ -53,7 +53,7 @@
     "skin.makeup.blush.amount": 0.4,
     "skin.makeup.contour.amount": 0.55,
     "skin.makeup.highlight.amount": 0.5,
-    "brows_lashes.lashes.thickness": 1.0,
+    "brows_lashes.lashes.thickness": 0.5,
     "face.nose.bridge_height": 1.0,
     "face.chin.height": 1.2,
     "face.shape.width": -2.0,
@@ -61,9 +61,12 @@
     "skin.makeup.brows.amount": 0.7,
     "face.chin.width": -0.6,
     "skin.makeup.shadow.color": [0.075, 0.05, 0.042],
-    "eyes.iris.color.l": [0.2, 0.12, 0.05],
-    "eyes.iris.color.r": [0.2, 0.12, 0.05],
-    "skin.surface.oiliness": 0.5
+    "eyes.iris.color.l": [0.32, 0.2, 0.09],
+    "eyes.iris.color.r": [0.32, 0.2, 0.09],
+    "skin.surface.oiliness": 0.5,
+    "eyes.pupil.dilation": 0.3,
+    "eyes.iris.fibre_contrast": 0.7,
+    "eyes.iris.limbal_ring_darkness": 0.7
    }
   },
   {

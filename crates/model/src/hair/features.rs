@@ -110,7 +110,8 @@ impl Default for BrowSpec {
 /// Settings of [`lash_groom`].
 ///
 /// The defaults follow the anatomy texts' lash counts and lengths (upper lid about 90 to 160
-/// lashes in 3 to 6 irregular rows, 8 to 12 mm long; lower lid about 75 to 80, 6 to 8 mm); the
+/// lashes in 3 to 6 irregular rows, 8 to 12 mm long; lower lid about 75 to 80, 6 to 8 mm; the
+/// lower defaults sit at the short, sparse end, 60 of 6 mm, as lower lashes read thin); the
 /// angles, the curl, the fan and the share of growing lashes are styling choices.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct LashSpec {
@@ -164,12 +165,12 @@ impl LashSpec {
     pub const fn lower() -> Self {
         Self {
             upper: false,
-            count: 75,
+            count: 60,
             rows: 2,
-            length: 0.006_8,
-            length_variation: 0.25,
+            length: 0.006,
+            length_variation: 0.3,
             tilt: 0.05,
-            curl: 0.4,
+            curl: 0.3,
             curl_variation: 0.35,
             fan: 0.6,
             growing: 0.25,

@@ -11,7 +11,8 @@
 //! - **liner**: a band above the upper lash line, thin at the inner corner and widest at the
 //!   outer one (0.8 to 3.0 mm with the width), with a wing that leaves the outer corner up and out
 //!   (up to 12 mm) and tapers to a point;
-//! - **lower liner**: a soft 1 mm band along the lower lash line, stronger toward the outer corner;
+//! - **lower liner**: a smudged band along the lower lash line, 1 to 2 mm and stronger toward the
+//!   outer corner;
 //! - **shadow**: the lid from the lash line, smoked out to about twice the crease's height and past
 //!   the outer corner, deepest there;
 //! - **lipstick**: the lips zone of the compositor (the vermilion), with a darker liner along the
@@ -614,8 +615,9 @@ fn sample(placement: &Placement, wings: &[Option<Polyline>], makeup: &Makeup, p:
         let lower = v(MakeupInput::LowerLiner);
         if lower > 0.0 {
             let m = eye.lower.nearest(p);
-            let width = (0.7 + 0.6 * m.s) * MM;
-            let w = 1.0 - smoothstep(0.3 * width, width + 0.6 * MM, m.distance);
+            // Smudged: soft from the lash line out to about 2 mm at the outer corner.
+            let width = (1.0 + 1.0 * m.s) * MM;
+            let w = 1.0 - smoothstep(0.2 * width, width + 1.0 * MM, m.distance);
             over.lay(makeup.color(MakeupColor::Liner), 0.8 * lower * w * (0.5 + 0.5 * m.s), LINER.0, LINER.1);
         }
         let liner = v(MakeupInput::Liner);
