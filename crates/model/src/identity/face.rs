@@ -24,7 +24,7 @@
 //! | chin projection / height / width | 2 mm forward / 6 % longer / 10 % across |
 //! | cheekbones / cheek fullness | 1.5 mm out / 2 mm out |
 //! | face width | the head 3 mm wider on each side outside the eyes ([`face_width`]) |
-//! | sculpted face | jaw angle 7 mm in and 3 mm up, jaw line 2 to 5 mm in, lower cheek 6 mm in, cheek hollow 6 mm in, cheekbone 1 mm forward and up, chin 1.5 mm forward and 2 mm longer, the skin under the jaw 4 mm up, alae 0.8 mm in, brow tail 1.2 mm up; one smooth field ([`face_sculpt`]) |
+//! | sculpted face | jaw angle 3.5 mm in and 2 mm up, jaw line 1 to 2.5 mm in, lower cheek 5 mm in, cheek hollow 7 mm in, cheekbone 2 mm forward, 1.5 mm up and 1 mm out, chin 1.5 mm forward and 2 mm longer, the skin under the jaw 4 mm up, alae 0.8 mm in, brow tail 1.2 mm up; one smooth field ([`face_sculpt`]) |
 //! | ear size / protrusion / lobe | scaled about the ear, one SD of ANSUR II `earlength` / 0.08 rad / lobe 12 % |
 //! | neck width / length | out all around, one SD of ANSUR II `neckcircumference` / neck bones 4.5 % longer |
 //! | eyeball size | 4 % about the eye centre, lids pushed with it |
@@ -715,7 +715,7 @@ fn wendland(r: f32, radius: f32) -> f32 {
 ///
 /// One smooth field instead of a sum of confined bumps (the cheek and jaw axes at large weights
 /// leave ridges where their regions end): a radial basis interpolation (Wendland kernel, 35 mm
-/// support, a small ridge) of the controls' displacements, mirrored, evaluated over the face and
+/// support, a small ridge) of the controls' displacements, mirrored, evaluated over the head and
 /// neck skin and smoothed. The amounts are an artistic model choice, not measurements `[ID-07]`.
 pub(crate) fn face_sculpt(kit: &Kit<'_, '_>) -> IdResult<Raw> {
     let s = kit.space;
@@ -734,14 +734,14 @@ pub(crate) fn face_sculpt(kit: &Kit<'_, '_>) -> IdResult<Raw> {
     let n = jaw.len().max(2) - 1;
     for (i, &p) in jaw.iter().enumerate() {
         let t = i as f32 / n as f32;
-        controls.push((p, mm(-7.0 + 5.0 * t, 3.0 * (1.0 - t), 0.0)));
+        controls.push((p, mm(-3.5 + 2.5 * t, 2.0 * (1.0 - t), 0.0)));
     }
     // The cheek hollow (inward along the cheek's outward direction), the cheekbone, the zygion.
-    controls.push((malar.lerp(jaw_mid, 0.5), mm(-3.6, 0.0, -4.8)));
+    controls.push((malar.lerp(jaw_mid, 0.5), mm(-4.0, 0.0, -6.0)));
     // The lower cheek at the mouth's height, which makes the outline of the lower face.
     let jaw_2 = jaw.get(1).copied().unwrap_or(gonion);
-    controls.push((jaw_2 + mm(0.0, 15.0, 0.0), mm(-6.0, 0.0, -1.5)));
-    controls.push((malar, mm(0.5, 1.0, 1.0)));
+    controls.push((jaw_2 + mm(0.0, 15.0, 0.0), mm(-5.0, 0.0, -1.5)));
+    controls.push((malar, mm(1.0, 1.5, 2.0)));
     controls.push((l("L.zygion")?, Vec3::ZERO));
     // Under the jaw: lifted and drawn back.
     controls.push((jaw_mid + mm(-4.0, -12.0, -4.0), mm(-2.0, 4.0, -1.0)));
@@ -809,8 +809,10 @@ pub(crate) fn face_sculpt(kit: &Kit<'_, '_>) -> IdResult<Raw> {
             .zip(&weights)
             .fold(Vec3::ZERO, |acc, (&c, &w)| acc + w * wendland(pt.p.distance(c), SCULPT_RADIUS))
     });
-    s.smooth_field(&mut disp, 3, &FACE_SKIN)?;
-    Raw::confined(s, FACE_SKIN, Symmetry::Mirror, disp, Vec::new())
+    // Over the lids too (the controls hold them still): confined to the face without them, the
+    // cheekbone's lift creased the border of the lower lid.
+    s.smooth_field(&mut disp, 3, &HEAD_SKIN)?;
+    Raw::confined(s, HEAD_SKIN, Symmetry::Mirror, disp, Vec::new())
 }
 
 /// The head and neck without the eyeballs, tear lines and the inside of the mouth.

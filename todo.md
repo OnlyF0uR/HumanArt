@@ -78,7 +78,10 @@ side per unit outside the eyes; the woman at -2, bizygomatic 122.5 mm), with rel
 (**`brows_lashes.brows.thickness`**, **brow pencil** makeup), dark lash lines (**mascara**,
 `brows_lashes.lashes.thickness`), lighter irises (hazel), a mouth about 50 mm wide (the starter's
 had grown to 54), and a jaw at about 0.5 of the face breadth (the sculpt at 1.4 had taken it to
-0.43, gaunt; now 0.7). Still behind them: the forehead is bare and high (their hair falls across it;
+0.43, gaunt; the sculpt now narrows the jaw half as much and hollows the cheek and lifts the
+cheekbone more, so the three-quarter view shows a cheekbone over a hollow). A dewy finish
+(oiliness 0.75, wetness 0.15) shows under a key light, little under the soft studio rigs. Still
+behind them: the forehead is bare and high (their hair falls across it;
 a swept fringe from the guides alone gave a thin veil, it needs a denser styled preset), the ears
 show, the skin is matte (the highlight is stronger now), the eye framing is lighter than their
 heavy liner, hair strands in front of the cheek show dashed shading in three-quarter view (deep
