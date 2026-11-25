@@ -359,7 +359,9 @@ fn breast_mound(s: &Space<'_>) -> IdResult<Mound> {
         rx_in: (c.x - chest * 0.1).max(chest * 0.2),
         ry_up: (suprasternal.y - c.y) * 0.8,
         ry_down: (c.y - fold).max(chest * 0.2),
-        e_up: 1.6,
+        // A fuller, rounder upper pole than 1.6, which sloped in concavely to a point (lower
+        // exponents fold the lateral lower edge with the sex shape at +2).
+        e_up: 1.2,
         e_down: 0.8,
         facing: 1.0,
         depth: chest * 0.5,
