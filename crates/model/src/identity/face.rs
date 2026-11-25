@@ -23,6 +23,7 @@
 //! | jaw width / angle | 4 % across at the angle / 1.2 mm out and down at the angle |
 //! | chin projection / height / width | 2 mm forward / 6 % longer / 10 % across |
 //! | cheekbones / cheek fullness | 1.5 mm out / 2 mm out |
+//! | sculpted face | jaw angle 7 mm in and 3 mm up, jaw line 2 to 5 mm in, lower cheek 6 mm in, cheek hollow 6 mm in, cheekbone 1 mm forward and up, chin 1.5 mm forward and 2 mm longer, the skin under the jaw 4 mm up, alae 0.8 mm in, brow tail 1.2 mm up; one smooth field ([`face_sculpt`]) |
 //! | ear size / protrusion / lobe | scaled about the ear, one SD of ANSUR II `earlength` / 0.08 rad / lobe 12 % |
 //! | neck width / length | out all around, one SD of ANSUR II `neckcircumference` / neck bones 4.5 % longer |
 //! | eyeball size | 4 % about the eye centre, lids pushed with it |
@@ -30,6 +31,7 @@
 //! | asymmetry | nose 0.8 mm off centre, left eye 0.6 mm up and right 0.3 mm down, left mouth corner 0.7 mm up, chin 1 mm off centre, left ear 1.5 mm up and right 2 % smaller, left brow 1 mm up, left cheekbone 1 mm out |
 
 use humanart_math::Vec3;
+use humanart_math::solve::{DenseMatrix, Lu};
 
 use super::error::IdResult;
 use super::skeletal::{Stretch, skeletal};
@@ -183,6 +185,7 @@ pub fn recipe(kit: &Kit<'_, '_>, name: &str) -> IdResult<Option<IdentityComponen
         "semantic.chin-width" => (chin_width(kit)?, Symmetry::Mirror),
         "semantic.cheekbone-prominence" => (cheekbones(kit, true)?, Symmetry::Mirror),
         "semantic.cheek-fullness" => (cheek_fullness(kit)?, Symmetry::Mirror),
+        "semantic.face-sculpt" => (face_sculpt(kit)?, Symmetry::Mirror),
         "semantic.ear-size" => (ear_scale(kit, Vec3::splat(0.05))?, Symmetry::Mirror),
         "semantic.ear-protrusion" => (ear_protrusion(kit)?, Symmetry::Mirror),
         "semantic.earlobe-size" => (earlobes(kit)?, Symmetry::Mirror),
@@ -647,6 +650,132 @@ pub(crate) fn cheek_fullness(kit: &Kit<'_, '_>) -> IdResult<Raw> {
     let f = move |pt: &Point| pt.n * (0.002 * falloff(pt.p.distance(c), 0.008, 0.028));
     let disp = s.eval(|pt| s.sym(pt, &f));
     Raw::confined(s, CHEEKS, Symmetry::Mirror, disp, Vec::new())
+}
+
+/// One control of [`face_sculpt`]: a centre and its displacement per unit weight (metres),
+/// written for the left side.
+type Control = (Vec3, Vec3);
+
+/// Support radius of the sculpt's kernel, metres.
+const SCULPT_RADIUS: f32 = 0.035;
+/// Ridge added to the sculpt's kernel matrix (the kernel's peak is 1): the field approximates the
+/// controls instead of passing through them where two lie close.
+const SCULPT_RIDGE: f64 = 1e-3;
+
+/// Wendland's compactly supported C² kernel `(1 − r/R)⁴ (4 r/R + 1)` (positive definite in 3D).
+fn wendland(r: f32, radius: f32) -> f32 {
+    let t = r / radius;
+    if t >= 1.0 {
+        return 0.0;
+    }
+    (1.0 - t).powi(4) * (4.0 * t + 1.0)
+}
+
+/// `semantic.face-sculpt`: a lean, defined face, the direction the owner's reference faces share
+/// (todo 1, the quality bar): the jaw angle narrower and lifted, the jaw line slimmer toward the
+/// chin, the cheek below the cheekbone hollowed, the cheekbone a little forward and up, the chin
+/// forward, the skin under the jaw lifted (a crisp jaw line over the neck), the alae narrower and
+/// the brow tails raised. The eyes, nose root and bridge, mouth corners, philtrum, ears and neck
+/// hold still.
+///
+/// One smooth field instead of a sum of confined bumps (the cheek and jaw axes at large weights
+/// leave ridges where their regions end): a radial basis interpolation (Wendland kernel, 35 mm
+/// support, a small ridge) of the controls' displacements, mirrored, evaluated over the face and
+/// neck skin and smoothed. The amounts are an artistic model choice, not measurements `[ID-07]`.
+pub(crate) fn face_sculpt(kit: &Kit<'_, '_>) -> IdResult<Raw> {
+    let s = kit.space;
+    let l = |name: &str| s.landmark(name);
+    let mm = |x: f32, y: f32, z: f32| Vec3::new(x, y, z) * 0.001;
+    let jaw = s.landmark_series("jaw.L")?;
+    let (Some(&gonion), Some(&jaw_front)) = (jaw.first(), jaw.last()) else {
+        return Err(super::error::IdentityError::missing("landmark series", "jaw.L"));
+    };
+    let malar = l("L.cheek.malar")?;
+    let jaw_mid = jaw.get(jaw.len() / 2).copied().unwrap_or(gonion);
+    let brows = s.landmark_series("L.brow")?;
+    let brow_tail = brows.iter().copied().max_by(|a, b| a.x.total_cmp(&b.x)).unwrap_or(malar);
+    let mut controls: Vec<Control> = Vec::new();
+    // The jaw line, slimmer from the angle to the chin; the angle lifted.
+    let n = jaw.len().max(2) - 1;
+    for (i, &p) in jaw.iter().enumerate() {
+        let t = i as f32 / n as f32;
+        controls.push((p, mm(-7.0 + 5.0 * t, 3.0 * (1.0 - t), 0.0)));
+    }
+    // The cheek hollow (inward along the cheek's outward direction), the cheekbone, the zygion.
+    controls.push((malar.lerp(jaw_mid, 0.5), mm(-3.6, 0.0, -4.8)));
+    // The lower cheek at the mouth's height, which makes the outline of the lower face.
+    let jaw_2 = jaw.get(1).copied().unwrap_or(gonion);
+    controls.push((jaw_2 + mm(0.0, 15.0, 0.0), mm(-6.0, 0.0, -1.5)));
+    controls.push((malar, mm(0.5, 1.0, 1.0)));
+    controls.push((l("L.zygion")?, Vec3::ZERO));
+    // Under the jaw: lifted and drawn back.
+    controls.push((jaw_mid + mm(-4.0, -12.0, -4.0), mm(-2.0, 4.0, -1.0)));
+    controls.push((gonion.lerp(jaw_front, 0.75) + mm(0.0, -10.0, -6.0), mm(-1.0, 3.0, -0.5)));
+    // The nose: narrower alae.
+    controls.push((l("L.nose.alare")?, mm(-0.8, 0.0, 0.0)));
+    controls.push((l("L.nose.alar-base")?, mm(-0.5, 0.0, 0.0)));
+    // The brow tail up.
+    controls.push((brow_tail, mm(0.0, 1.2, 0.0)));
+    // Held still: the eyes, the mouth corner, the ear, the neck below the jaw.
+    for name in [
+        "L.eye.canthus.medial",
+        "L.eye.canthus.lateral",
+        "L.eye.upper.04",
+        "L.eye.lower.04",
+        "L.eye.crease.04",
+        "L.lip.corner",
+        "ear.L.tragion",
+        "ear.L.lobule",
+    ] {
+        controls.push((l(name)?, Vec3::ZERO));
+    }
+    controls.push((gonion + mm(0.0, -35.0, -5.0), Vec3::ZERO));
+    // On the midline: the chin forward, the rest still.
+    let mut mid: Vec<Control> = vec![
+        (l("chin.mid")?, mm(0.0, -1.0, 1.5)),
+        (l("chin.menton")?, mm(0.0, -2.0, 1.0)),
+        (l("chin.menton")? + mm(0.0, -35.0, -15.0), Vec3::ZERO),
+    ];
+    for name in ["nose.root", "nose.bridge.01", "nose.tip", "nose.subnasale", "philtrum.mid", "forehead.glabella"] {
+        mid.push((l(name)?, Vec3::ZERO));
+    }
+    let mirror = |v: Vec3| Vec3::new(-v.x, v.y, v.z);
+    let mut all: Vec<Control> = controls.iter().map(|&(p, d)| (p, d)).collect();
+    all.extend(controls.iter().map(|&(p, d)| (mirror(p), mirror(d))));
+    all.extend(mid);
+    let count = all.len();
+    let phi = DenseMatrix::from_fn(count, count, |i, j| {
+        let r = all[i].0.distance(all[j].0);
+        f64::from(wendland(r, SCULPT_RADIUS)) + if i == j { SCULPT_RIDGE } else { 0.0 }
+    });
+    let bad = || super::error::IdentityError::invalid("face sculpt", 0, "the control kernel cannot be solved");
+    let lu = Lu::new(&phi).map_err(|_| bad())?;
+    let mut weights = vec![Vec3::ZERO; count];
+    for axis in 0..3 {
+        let rhs: Vec<f64> = all.iter().map(|&(_, d)| f64::from(d.to_array()[axis])).collect();
+        let w = lu.solve(&rhs).map_err(|_| bad())?;
+        for (dst, &c) in weights.iter_mut().zip(&w) {
+            if !c.is_finite() {
+                return Err(bad());
+            }
+            #[allow(clippy::cast_possible_truncation)] // Weights are small.
+            let c = c as f32;
+            match axis {
+                0 => dst.x = c,
+                1 => dst.y = c,
+                _ => dst.z = c,
+            }
+        }
+    }
+    let centres: Vec<Vec3> = all.iter().map(|&(p, _)| p).collect();
+    let mut disp = s.eval(|pt| {
+        centres
+            .iter()
+            .zip(&weights)
+            .fold(Vec3::ZERO, |acc, (&c, &w)| acc + w * wendland(pt.p.distance(c), SCULPT_RADIUS))
+    });
+    s.smooth_field(&mut disp, 3, &FACE_SKIN)?;
+    Raw::confined(s, FACE_SKIN, Symmetry::Mirror, disp, Vec::new())
 }
 
 /// Scales the ears per axis by `k` about the tragion (both sides).

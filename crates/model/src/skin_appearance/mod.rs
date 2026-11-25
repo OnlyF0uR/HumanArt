@@ -26,6 +26,7 @@
 //! - [`feature_layers`]: the document's feature layers, their global settings and region masks
 //!   (todo 2.3).
 //! - [`noise`]: the PCG hash and periodic noise shared with the WGSL.
+//! - [`makeup`]: liner, shadow, lipstick, blush, contour and highlight from the landmarks (todo 1).
 //! - [`regional`]: measured regional specular and sebum per face zone (todo 1.4).
 //! - [`values`]: the document's global skin values and what they set (todo 1.4).
 //! - [`materials`]: the document's eye, mouth and hair-colour materials (todo 2.3).
@@ -42,6 +43,7 @@ pub mod error;
 pub mod feature_layers;
 pub mod features;
 pub mod layers;
+pub mod makeup;
 pub mod materials;
 pub mod microdetail;
 pub mod noise;

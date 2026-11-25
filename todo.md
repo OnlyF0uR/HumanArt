@@ -46,6 +46,21 @@ what closes the gap most:
 6. **Clothing and jewellery**: every reference wears them; HumanArt has attachments (rigid or skinned
    meshes) but no garments. For the owner: in scope, and how (imported garments, a cloth tool)?
 
+Done 2026-11-25 toward it (ADR-058, lavapipe renders): **makeup** (`skin.makeup.*`,
+`skin_appearance::makeup`): winged liner, lower lash line, smoked shadow, lipstick with liner and
+gloss, blush, contour and highlight, placed from the landmarks and generated into the skin
+compositor over the face and eyes tiles; the woman starter wears it (starters take colours now).
+**`face.shape.sculpt`**: one smooth field for a lean, tapered face (jaw angle 7 mm in and 3 mm up
+per unit, cheek hollowed, chin forward, a crisp line under the jaw), fold-free in -1 .. 2; the
+woman starter uses it at 1.3 instead of the cheek and jaw axes, whose large values left lumps over
+the jaw and a crease beside the nose. Her lashes are shorter and sparser (they read as false-lash
+brooms). Found on the way: the compositor draws every UV tile at 512² (`SKIN_TILE_SIZE`), so the
+face tile (8192² hero texels over 819 mm) is coloured at **1.6 mm per texel**: lip liner, contour,
+freckles and moles are blurred by it (the lids, on the eyes tile, get 0.4 mm); a per-tile size or a
+denser face tile is the fix. Still wrong in the renders: vertical stripes across the lips (the lip
+lines), small eyes under puffy lids, the liner mostly hidden under the lash roots, lashes that turn
+pale at portrait distance (dark in a close-up), a round, childlike face overall.
+
 Done 2026-11-24 toward it: starter characters (`data/template/characters.json`, `humanart_doc::starter`):
 a new character is the `woman` starter (the references' build and face direction, medium straight
 hair; the CLI's `--character woman|man|average`, the editor's sample character, the agent host);

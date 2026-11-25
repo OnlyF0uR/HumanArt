@@ -16,7 +16,8 @@
 //! acne, stretch marks, veins, wrinkles, under-eye darkness, sun spots, lip lines, each parameter the
 //! layer does not set taken from the global `skin.features.*` value) are generated into the
 //! compositor's layer stack over the layer's region ([`SkinLook::sync`]), as are the neck's resting
-//! lines (`skin.wrinkles.neck`, level lines of the rest height around the neck) and the age spots.
+//! lines (`skin.wrinkles.neck`, level lines of the rest height around the neck), the age spots and
+//! the makeup (`skin.makeup.*`, `skin_appearance::makeup`: two layers on top of the stack).
 //!
 //! The expression wrinkles `[SKN-30]` ([`SkinWrinkles`]): the template's procedurally authored
 //! maps for the brow, forehead, crow's feet and nasolabial folds, folded every frame by the wrinkle
@@ -35,6 +36,7 @@ use humanart_model::skin_appearance::feature_layers::{
 };
 use humanart_model::skin_appearance::features::{GeneratorKind, GeneratorParams, Target, generate};
 use humanart_model::skin_appearance::layers::{LayerId, LayerStack};
+use humanart_model::skin_appearance::makeup::{FACE_TILE, Makeup, MakeupCanvas};
 use humanart_model::skin_appearance::microdetail::ExemplarPlan;
 use humanart_model::skin_appearance::pigment::Mapping;
 use humanart_model::skin_appearance::values::{RestingWrinkle, SkinValues};
@@ -335,6 +337,15 @@ pub struct SkinLook {
     features_seen: u64,
     /// The layers of the neck's resting lines.
     neck: Vec<LayerId>,
+    /// The lips zone weight of every texel of the face tile (row-major, `tile_size`²), empty
+    /// without a face tile.
+    lips: Vec<f32>,
+    /// The face tile (the lips' tile).
+    face_tile: Option<u32>,
+    /// The rest surface of the face and lids for the makeup, made on the first makeup.
+    canvas: Option<MakeupCanvas>,
+    /// The makeup's layers (none while bare).
+    makeup: Vec<LayerId>,
 }
 
 /// The region whose skin takes the neck's resting lines.
@@ -443,12 +454,22 @@ impl SkinLook {
         let mesh = template.mesh();
         let triangles = mesh.triangulate();
         let mut spot_area = None;
+        let mut lips = Vec::new();
+        let mut face_tile = None;
         let (weights, report) = vertex_weights(template, &TEMPLATE_ZONES)?;
         let baked = baked_inputs_cached(gpu, template, tile_size)?;
         for (tile, layer) in (0..count).zip(baked.iter()) {
             let index = u16::try_from(tile).map_err(|_| EngineError::Invalid { what: "skin tile index" })?;
             let masks = bake_tile(mesh, &triangles, &weights, index, tile_size, ZONE_DILATE)?;
             compositor.upload_inputs(gpu, tile, layer, masks.layers()).map_err(skin_gpu)?;
+            if tiles.get(tile as usize).is_some_and(|t| t.name == FACE_TILE) {
+                let slot = Zone::Lips.slot();
+                face_tile = Some(tile);
+                lips = (0..tile_size)
+                    .flat_map(|y| (0..tile_size).map(move |x| (x, y)))
+                    .map(|(x, y)| masks.weight(slot, x, y))
+                    .collect();
+            }
             if spot_area.is_none()
                 && let Some(t) = tiles.get(tile as usize).filter(|t| t.name == "face")
             {
@@ -491,9 +512,14 @@ impl SkinLook {
             feature_ids: Vec::new(),
             features_seen: 0,
             neck: Vec::new(),
+            lips,
+            face_tile,
+            canvas: None,
+            makeup: Vec::new(),
         };
         look.set_age_spots(values.age_spots)?;
         look.set_neck(values.neck_wrinkles)?;
+        look.set_makeup(&values.makeup)?;
         look.compositor.sync_layers(gpu, &look.stack).map_err(skin_gpu)?;
         Self::resolve(gpu, &mut look.compositor, &mut look.stack, values)?;
         Ok(look)
@@ -553,6 +579,36 @@ impl SkinLook {
         if let Some(layer) = lines {
             self.stack.push(layer)?;
             self.neck.push(id);
+        }
+        Ok(())
+    }
+
+    /// Puts the makeup's two layers on top of the layer stack, or takes them out while it is
+    /// bare (the face tile's canvas is made on the first makeup). Sync and resolve afterwards.
+    fn set_makeup(&mut self, makeup: &Makeup) -> Result<(), EngineError> {
+        for id in self.makeup.drain(..) {
+            self.stack.remove(id);
+        }
+        if makeup.is_bare() {
+            return Ok(());
+        }
+        if self.canvas.is_none() {
+            let (lips, size, face) = (&self.lips, self.tile_size as usize, self.face_tile);
+            let weight = |tile: u32, x: u32, y: u32| {
+                if Some(tile) != face {
+                    return 0.0;
+                }
+                lips.get(y as usize * size + x as usize).copied().unwrap_or(0.0)
+            };
+            self.canvas = MakeupCanvas::new(&self.template, self.tile_size, weight)?;
+        }
+        let Some(canvas) = &self.canvas else { return Ok(()) };
+        let ids = [self.stack.allocate_id(), self.stack.allocate_id()];
+        if let Some(layers) = canvas.layers(makeup, ids)? {
+            for layer in layers {
+                self.makeup.push(layer.id);
+                self.stack.push(layer)?;
+            }
         }
         Ok(())
     }
@@ -645,6 +701,11 @@ impl SkinLook {
             self.set_neck(next.neck_wrinkles)?;
             layers = true;
         }
+        // Makeup stays on top of every other generated layer.
+        if next.makeup_differs(&self.values) || (layers && !self.makeup.is_empty()) {
+            self.set_makeup(&next.makeup)?;
+            layers = true;
+        }
         if layers {
             self.compositor.sync_layers(gpu, &self.stack).map_err(skin_gpu)?;
         }
@@ -663,8 +724,8 @@ impl SkinLook {
         Ok(true)
     }
 
-    /// The generated layers in the compositor's stack (the age spots, the neck lines and the
-    /// document's feature layers, one per UV tile they touch).
+    /// The generated layers in the compositor's stack (the age spots, the neck lines, the
+    /// document's feature layers, one per UV tile they touch, and the makeup's two).
     pub fn layer_count(&self) -> usize {
         self.stack.layers().len()
     }

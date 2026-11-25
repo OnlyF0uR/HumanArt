@@ -1,8 +1,9 @@
 //! Starter characters (todo 1.3): the parameter values a new character starts from, read from
 //! `data/template/characters.json` (embedded, [`CHARACTERS_JSON`]).
 //!
-//! A starter names registry parameters and their values, and the scalp hair style a viewer shows
-//! the character with (hair style is a view option, not a document parameter). [`DEFAULT`] is the
+//! A starter names registry parameters and their values (a number for a scalar parameter, three
+//! numbers for a colour), and the scalp hair style a viewer shows the character with (hair style is
+//! a view option, not a document parameter). [`DEFAULT`] is the
 //! woman whose look the owner's reference images share; `average` keeps every registry default.
 //! [`Starter::apply`] writes the values into a document's parameters, each checked against the
 //! registry (an unknown id is an error, a value outside the parameter's range is clamped to it).
@@ -42,8 +43,10 @@ pub struct Starter {
     pub name: String,
     /// The scalp hair style a viewer shows it with (`short`, `medium-straight`, ...).
     pub hair: String,
-    /// Registry ids and values, in file order.
+    /// Registry ids and values of scalar parameters, in file order.
     pub params: Vec<(String, f64)>,
+    /// Registry ids and linear Rec.709 values of colour parameters, in file order.
+    pub colors: Vec<(String, [f64; 3])>,
 }
 
 /// The starters of a file.
@@ -97,11 +100,20 @@ impl Starters {
                 return Err(DocError::Limit { what: "values of a starter", limit: MAX_VALUES as u64 });
             }
             let mut params = Vec::with_capacity(members.entries().len());
+            let mut colors = Vec::new();
             for (id, v) in members.entries() {
+                if let Some(items) = v.as_array() {
+                    let rgb: Option<Vec<f64>> = items.iter().map(|c| c.as_f64().filter(|c| c.is_finite())).collect();
+                    let rgb = rgb
+                        .and_then(|c| <[f64; 3]>::try_from(c).ok())
+                        .ok_or_else(|| bad("a starter colour is not three numbers"))?;
+                    colors.push((id.clone(), rgb));
+                    continue;
+                }
                 let v = v.as_f64().filter(|v| v.is_finite()).ok_or_else(|| bad("a starter value is not a number"))?;
                 params.push((id.clone(), v));
             }
-            starters.push(Starter { name, hair, params });
+            starters.push(Starter { name, hair, params, colors });
         }
         Ok(Self { starters })
     }
@@ -120,17 +132,19 @@ impl Starters {
 }
 
 impl Starter {
-    /// Checks every value against `registry`: the id must name a scalar parameter that can be set.
+    /// Checks every value against `registry`: the id must name a parameter of the value's kind
+    /// (scalar or colour) that can be set.
     pub fn check(&self, registry: &Registry) -> Result<(), DocError> {
-        for (id, _) in &self.params {
+        let ids = self.params.iter().map(|(id, _)| (id, ParamKind::Scalar));
+        for (id, kind) in ids.chain(self.colors.iter().map(|(id, _)| (id, ParamKind::Color))) {
             let p = registry.get(id).ok_or_else(|| DocError::Registry {
                 id: id.clone(),
                 what: format!("starter `{}` sets a parameter the registry lacks", self.name),
             })?;
-            if p.read_only || !matches!(p.kind, ParamKind::Scalar) {
+            if p.read_only || p.kind != kind {
                 return Err(DocError::Registry {
                     id: id.clone(),
-                    what: format!("starter `{}` sets a read-only or non-scalar parameter", self.name),
+                    what: format!("starter `{}` sets a read-only parameter or one of another kind", self.name),
                 });
             }
         }
@@ -146,6 +160,15 @@ impl Starter {
             let Some(p) = registry.get(id) else { continue };
             let v = p.range.map_or(*v, |r| v.clamp(r.min, r.max));
             let value = ParamValue::Scalar(v);
+            if value == p.default {
+                doc.params.remove(id);
+            } else {
+                doc.params.insert(id.clone(), value);
+            }
+        }
+        for (id, rgb) in &self.colors {
+            let Some(p) = registry.get(id) else { continue };
+            let value = ParamValue::Color(rgb.map(|c| p.range.map_or(c, |r| c.clamp(r.min, r.max))));
             if value == p.default {
                 doc.params.remove(id);
             } else {
@@ -185,13 +208,39 @@ mod tests {
         let mut doc = Document::new(humanart_core::id::Id128::from_u128(1), "t", "generated", 1, 0, me);
         woman.apply(&mut doc, &reg).unwrap();
         // Every value but `identity.sex` -1, the registry default, is stored.
-        assert_eq!(doc.params.len(), woman.params.len() - 1);
+        assert_eq!(doc.params.len(), woman.params.len() + woman.colors.len() - 1);
         assert!(!doc.params.contains_key("identity.sex"));
-        let wild = Starter { name: "x".into(), hair: "short".into(), params: vec![("identity.mass".into(), 99.0)] };
+        let wild = Starter {
+            name: "x".into(),
+            hair: "short".into(),
+            params: vec![("identity.mass".into(), 99.0)],
+            colors: Vec::new(),
+        };
         wild.apply(&mut doc, &reg).unwrap();
         assert_eq!(doc.params.get("identity.mass"), Some(&ParamValue::Scalar(3.0)));
-        let unknown = Starter { name: "x".into(), hair: "short".into(), params: vec![("no.such".into(), 1.0)] };
+        let unknown = Starter {
+            name: "x".into(),
+            hair: "short".into(),
+            params: vec![("no.such".into(), 1.0)],
+            colors: Vec::new(),
+        };
         assert!(unknown.apply(&mut doc, &reg).is_err());
+        // Colours set colour parameters, clamped; a colour for a scalar parameter is refused.
+        let paint = Starter {
+            name: "x".into(),
+            hair: "short".into(),
+            params: Vec::new(),
+            colors: vec![("skin.makeup.lips.color".into(), [2.0, 0.1, 0.1])],
+        };
+        paint.apply(&mut doc, &reg).unwrap();
+        assert_eq!(doc.params.get("skin.makeup.lips.color"), Some(&ParamValue::Color([1.0, 0.1, 0.1])));
+        let wrong = Starter { colors: vec![("identity.mass".into(), [0.5; 3])], ..paint };
+        assert!(wrong.check(&reg).is_err());
+        let parsed = Starters::parse(
+            br#"{"format":"humanart-characters","version":1,"characters":[{"name":"a","hair":"s","params":{"c":[0.1,0.2,0.3]}}]}"#,
+        )
+        .unwrap();
+        assert_eq!(parsed.all()[0].colors, vec![("c".to_owned(), [0.1, 0.2, 0.3])]);
     }
 
     #[test]
@@ -202,6 +251,8 @@ mod tests {
             br#"{"format":"humanart-characters","version":2,"characters":[]}"#,
             br#"{"format":"humanart-characters","version":1}"#,
             br#"{"format":"humanart-characters","version":1,"characters":[{"name":"a","hair":"short","params":{"x":"y"}}]}"#,
+            br#"{"format":"humanart-characters","version":1,"characters":[{"name":"a","hair":"short","params":{"x":[1,2]}}]}"#,
+            br#"{"format":"humanart-characters","version":1,"characters":[{"name":"a","hair":"short","params":{"x":[1,"a",2]}}]}"#,
             br#"{"format":"humanart-characters","version":1,"characters":[{"name":"","hair":"short","params":{}}]}"#,
             br#"{"format":"humanart-characters","version":1,"characters":[{"name":"a","hair":"s","params":{}},{"name":"a","hair":"s","params":{}}]}"#,
         ] {

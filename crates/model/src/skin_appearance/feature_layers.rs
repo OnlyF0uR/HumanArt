@@ -292,17 +292,28 @@ const MIN_SLOPE: f32 = 0.25;
 const LEVEL_WAVE_MM: f32 = 1.5;
 
 /// The rest surface under the texels of one region mask, row-major over its rectangle.
-struct Surface {
+pub(crate) struct Surface {
     /// Rest position `(x, y, z)` in metres and the slope of the height along the surface (1 on a
     /// wall, 0 on a floor) per texel.
-    texels: Vec<[f32; 4]>,
+    pub(crate) texels: Vec<[f32; 4]>,
     /// Whether a triangle or the dilation reached the texel.
-    covered: Vec<bool>,
+    pub(crate) covered: Vec<bool>,
 }
 
 /// Rasterises the rest positions of the triangles on `m`'s tile into the texels of its rectangle
 /// (texel centres, as [`bake_tile`]) and grows them [`MASK_DILATE`] texels past the islands.
-fn surface_under(mesh: &Mesh, triangles: &Triangulation, m: &RegionMask, tile_size: u32) -> Surface {
+pub(crate) fn surface_under(mesh: &Mesh, triangles: &Triangulation, m: &RegionMask, tile_size: u32) -> Surface {
+    surface_under_where(mesh, triangles, m, tile_size, |_| true)
+}
+
+/// [`surface_under`] with only the triangles of the faces `keep` accepts.
+pub(crate) fn surface_under_where(
+    mesh: &Mesh,
+    triangles: &Triangulation,
+    m: &RegionMask,
+    tile_size: u32,
+    keep: impl Fn(u32) -> bool,
+) -> Surface {
     let (positions, uvs, face_tiles) = (mesh.positions(), mesh.uvs(), mesh.face_tiles());
     let r = m.rect;
     let (w, h) = (r.w as usize, r.h as usize);
@@ -312,7 +323,7 @@ fn surface_under(mesh: &Mesh, triangles: &Triangulation, m: &RegionMask, tile_si
     let edge = |a: Vec2, b: Vec2, c: Vec2| (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
     for t in 0..triangles.len() {
         let (Some(corners), Some(&face)) = (triangles.triangle(t), triangles.triangle_faces.get(t)) else { continue };
-        if face_tiles.get(face as usize).map(|&tile| u32::from(tile)) != Some(m.tile) {
+        if face_tiles.get(face as usize).map(|&tile| u32::from(tile)) != Some(m.tile) || !keep(face) {
             continue;
         }
         let corner = |k: usize| {

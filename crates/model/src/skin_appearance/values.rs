@@ -4,7 +4,7 @@
 //! [`SkinTarget::from_target`] names the destination of a registry material target;
 //! [`SkinValues`] holds the base attributes (pigment, tissue, oiliness, wetness), the micro-detail
 //! inputs (pores, fine lines), the animated flush, the surface's moisture, the vellus density, the
-//! lips' colour and moisture and the neck's resting lines. [`SkinValues::resolved_globals`] turns
+//! lips' colour and moisture, the neck's resting lines and the makeup ([`super::makeup`]). [`SkinValues::resolved_globals`] turns
 //! them into what the compositor reads: the base values and the zone table with the measured
 //! regional surface ([`super::regional`]), the moisture's roughness and the lip colour's pigment
 //! offsets; [`SkinValues::micro_detail`] into the micro-detail generator's settings;
@@ -25,6 +25,7 @@
 use humanart_math::color::lab::rgb_to_lab;
 
 use super::channels::{ATTRIBUTE_COUNT, Attribute, BaseValues};
+use super::makeup::{Makeup, MakeupColor, MakeupInput};
 use super::microdetail::MicroDetailParams;
 use super::pigment::{Mapping, PigmentModel};
 use super::regional::apply_measured_surface;
@@ -110,6 +111,10 @@ pub enum SkinTarget {
     LipColor,
     /// The lips' moisture `lips.moisture`.
     LipMoisture,
+    /// A makeup amount or shape (`makeup.liner`, ...; a generated layer).
+    Makeup(MakeupInput),
+    /// A makeup colour (`makeup.lips-color`, ...; [`SkinValues::set_color`]).
+    MakeupColor(MakeupColor),
 }
 
 impl SkinTarget {
@@ -118,6 +123,12 @@ impl SkinTarget {
     pub fn from_target(target: &str) -> Option<Self> {
         if let Some(a) = BaseValues::attribute_of_target(target) {
             return Some(Self::Base(a));
+        }
+        if let Some(i) = MakeupInput::from_target(target) {
+            return Some(Self::Makeup(i));
+        }
+        if let Some(c) = MakeupColor::from_target(target) {
+            return Some(Self::MakeupColor(c));
         }
         Some(match target {
             "skin.pore-density" => Self::Detail(DetailInput::PoreDensity),
@@ -167,6 +178,8 @@ pub struct SkinValues {
     pub lips: [f32; 3],
     /// Lip moisture, 0..1.
     pub lip_moisture: f32,
+    /// Makeup (bare by default).
+    pub makeup: Makeup,
 }
 
 /// The registry's default lip colour (`mouth.lips.color`), which leaves the zone table as it is.
@@ -189,6 +202,7 @@ impl Default for SkinValues {
             neck_wrinkles: 0.0,
             lips: DEFAULT_LIPS,
             lip_moisture: 0.5,
+            makeup: Makeup::default(),
         }
     }
 }
@@ -209,13 +223,19 @@ impl SkinValues {
             SkinTarget::Vellus => self.vellus = value.clamp(0.0, 1.0),
             SkinTarget::NeckWrinkles => self.neck_wrinkles = value.clamp(0.0, 1.0),
             SkinTarget::LipMoisture => self.lip_moisture = value.clamp(0.0, 1.0),
-            SkinTarget::LipColor => {}
+            SkinTarget::Makeup(i) => self.makeup.set(i, value),
+            SkinTarget::LipColor | SkinTarget::MakeupColor(_) => {}
         }
     }
 
     /// Sets a colour (channels clamped to 0..1; a non-finite channel leaves it as it is). Only
-    /// [`SkinTarget::LipColor`] takes one; false for every other target.
+    /// [`SkinTarget::LipColor`] and [`SkinTarget::MakeupColor`] take one; false for every other
+    /// target.
     pub fn set_color(&mut self, target: SkinTarget, rgb: [f32; 3]) -> bool {
+        if let SkinTarget::MakeupColor(c) = target {
+            self.makeup.set_color(c, rgb);
+            return true;
+        }
         if target != SkinTarget::LipColor {
             return false;
         }
@@ -285,6 +305,11 @@ impl SkinValues {
     /// Whether the surface's settings differ (flush, vellus sheen, lip coat).
     pub fn surface_differs(&self, other: &Self) -> bool {
         self.flush != other.flush || self.vellus != other.vellus || self.lip_moisture != other.lip_moisture
+    }
+
+    /// Whether the makeup differs (its layers must be generated anew).
+    pub fn makeup_differs(&self, other: &Self) -> bool {
+        self.makeup != other.makeup
     }
 
     /// Whether the micro-detail inputs differ (the exemplar must be regenerated).

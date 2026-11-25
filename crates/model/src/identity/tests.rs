@@ -83,7 +83,7 @@ fn reg_01_bindings_match_the_registry_files() {
     let ours: BTreeSet<(String, String)> =
         BINDINGS.iter().chain(scan::SCAN_BINDINGS).map(|&(p, c)| (p.to_owned(), c.to_owned())).collect();
     assert_eq!(ours, registry, "BINDINGS and SCAN_BINDINGS differ from data/template/params");
-    assert_eq!(BINDINGS.len(), 73);
+    assert_eq!(BINDINGS.len(), 74);
     assert_eq!(scan::SCAN_BINDINGS.len(), 7);
 }
 
@@ -268,6 +268,8 @@ fn id_02_no_normal_discontinuity_at_region_borders() {
     let rest = tri_normals(t.mesh().positions(), &tris);
     let index: Vec<usize> = BINDINGS.iter().map(|&(_, c)| t.deltas().find(c).unwrap() as usize).collect();
     let mut rng = Rng::new(0x1d02);
+    // Its own sequence, so the other components' draws stay those of the samples before it.
+    let mut sculpt_rng = Rng::new(0x5c01);
     let mut lines = Vec::new();
     let mut failures = Vec::new();
     // The head (fine face mesh, lip and alar folds) and the rest of the body are compared
@@ -288,12 +290,18 @@ fn id_02_no_normal_discontinuity_at_region_borders() {
         for (&i, &(_, name)) in index.iter().zip(BINDINGS) {
             w[i] = match name {
                 "asymmetry.global" => rng.range_f32(0.0, 1.0),
+                // Drawn below from its own sequence.
+                "semantic.face-sculpt" => 0.0,
                 sex::SWITCH => {
                     alone[i] = if rng.range_f32(-1.0, 1.0) < 0.0 { -1.0 } else { 1.0 };
                     alone[i]
                 }
                 _ => rng.range_f32(-2.0, 2.0),
             };
+        }
+        // The sculpt within its registry range.
+        if let Some(c) = t.deltas().find("semantic.face-sculpt") {
+            w[c as usize] = sculpt_rng.range_f32(-1.0, 2.0);
         }
         let rest = tri_normals(&t.deformed_positions(&alone), &tris);
         let now = tri_normals(&t.deformed_positions(&w), &tris);
@@ -1636,4 +1644,31 @@ fn diag_face_axes_change_height_and_width() {
         base.face * 1e3,
         base.bizygomatic * 1e3
     );
+}
+
+/// todo 1 (the quality bar): `semantic.face-sculpt` narrows the jaw angle and hollows the cheek
+/// while the eyes, the mouth corners and the ears stay, and folds no triangle in the registry's
+/// range.
+#[test]
+fn todo_1_face_sculpt_narrows_the_jaw_and_holds_the_features() {
+    let t = &*fixture().full;
+    let tris = t.mesh().triangulate().indices;
+    let rest = t.mesh().positions();
+    let shift = |w: f32, name: &str| {
+        let now = posed(t, &[("semantic.face-sculpt", w)]);
+        landmark_shift(t, &now, name)
+    };
+    let gonion = shift(1.0, "jaw.L.01");
+    assert!(gonion.x < -2.0e-3 && gonion.y > 0.5e-3, "the jaw angle moves in and up: {gonion:?}");
+    for name in ["L.eye.canthus.medial", "L.eye.canthus.lateral", "L.eye.upper.04", "L.lip.corner", "ear.L.tragion"] {
+        let d = shift(1.0, name).length();
+        assert!(d < 0.4e-3, "{name} moves {d} m");
+    }
+    let chin = shift(1.0, "chin.mid");
+    assert!(chin.z > 0.5e-3, "the chin comes forward: {chin:?}");
+    let (lo, hi) = registry_range("face.shape.sculpt");
+    for w in [lo, -0.5, 0.5, 1.0, 1.5, hi] {
+        let now = posed(t, &[("semantic.face-sculpt", w)]);
+        assert_eq!(folded(rest, &now, &tris), 0, "folds at {w}");
+    }
 }

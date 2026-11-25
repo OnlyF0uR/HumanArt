@@ -908,3 +908,38 @@ Amends ADR-002 (profiles).
   sculpt tools can refine; twist joints (`upper-arm.twist`, `forearm.twist`) still carry no skin
   weights, so a rolled forearm still wraps.
 - Source: the lead, 2026-11-23 (todo 1.3, overnight run).
+
+## ADR-058: Makeup is generated into the skin compositor; the lean face is one smooth field
+
+- **Context.** The owner's reference images (2026-11-24) all show made-up faces (liner, shadow,
+  lipstick, blush, contour) with lean, tapered lower faces. HumanArt had no makeup, and the lean
+  face was made of the semantic cheek and jaw axes at large weights (`cheeks.fullness` -2.5,
+  `cheekbone_prominence` 2.2, `jaw.width` -1.2): each is a bump confined to its regions, and summed
+  at those weights they left ridges where the regions end (lavapipe renders, 2026-11-25: lumps over
+  the jaw, a crease beside the nose).
+- **Decision.** (1) Makeup (`humanart_model::skin_appearance::makeup`, registry `skin.makeup.*`)
+  is placed from the template's landmarks as coverage functions of the rest position: liner along
+  the upper lash line with a wing, a lower lash line, shadow on the lid, lipstick on the
+  compositor's lips zone with a liner and a gloss, blush, contour and highlight. The products are
+  composited per texel over the skin of the face and eyes tiles (the lids lie on the eyes tile)
+  and written as two content layers on top of the layer stack: the colour override mixed in fully
+  wherever makeup is, the override coverage, roughness and specular mixed by the makeup's
+  coverage. The view regenerates them when the makeup changes (editor-time work). (2)
+  `face.shape.sculpt` (`semantic.face-sculpt`) is one displacement field: a radial basis
+  interpolation (Wendland kernel, 35 mm support, a small ridge) of about 40 mirrored controls
+  (the jaw line narrower and lifted, the cheek hollowed, the chin forward, the skin under the jaw
+  lifted; the eyes, nose root, mouth corners, ears and neck held still), smoothed over the face
+  and neck skin. The woman starter uses it (1.3) instead of the cheek and jaw axes.
+- **Alternatives.** Makeup as a shading-time layer (a second albedo texture and its own masks in
+  the skin shader): more GPU memory and a second path for what the compositor already does;
+  makeup painted by hand (nobody here can paint and judge it on screen; the paint tools can refine
+  it). For the face: retuning the confined axes (the ridges come from the confinement, not the
+  amounts) or a scanned or sculpted target (none exists).
+- **Consequences.** Makeup follows the face through identity, expressions and the UV layout and
+  costs nothing per frame. It is drawn at the compositor's resolution: 512² per tile, which is
+  0.4 mm per texel on the eyes tile but 1.6 mm on the face tile (its hero texture is 8192² at
+  10 texels per millimetre), so the lip liner and the contour edges are soft; a colour override
+  below the makeup (a tattoo) shows only through the makeup's coverage. Shapes and colours are
+  artistic, nothing is measured. The sculpt's amounts are an authored model choice `[ID-07]`;
+  it folds no triangle in its range (-1 .. 2, test `todo_1_face_sculpt_narrows_the_jaw_and_holds_the_features`).
+- Source: the lead, 2026-11-25 (todo 1, the quality bar).
