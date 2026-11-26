@@ -14,6 +14,7 @@ mod batch;
 mod bench;
 mod error;
 mod export;
+mod face_detail;
 mod fontbake;
 mod host;
 mod render;
@@ -38,7 +39,7 @@ static ALLOCATOR: humanart_core::alloc::CountingAllocator = humanart_core::alloc
 
 fn usage() -> String {
     format!(
-        "{PROGRAM}: the headless HumanArt command line.\n\nUsage: {PROGRAM} <command> [options]\n\nCommands:\n  render  {}\n  turntable  {}\n  serve  {}\n  batch  {}\n  validate  {}\n  export  {}\n  bench  {}\n  fontbake  {}\n  render-mesh  {}\n  pick-landmarks  {}\n  fit-scan  {}\n  face-model  {}\n  skin-detail  {}\n\n{PROGRAM} <command> --help lists a command's options.\nExit codes: 0 success, 2 usage, 3 data, 4 GPU, 5 render, 6 file, 7 project, 8 job file,\n9 failed steps or checks, 10 agent server.\n",
+        "{PROGRAM}: the headless HumanArt command line.\n\nUsage: {PROGRAM} <command> [options]\n\nCommands:\n  render  {}\n  turntable  {}\n  serve  {}\n  batch  {}\n  validate  {}\n  export  {}\n  bench  {}\n  fontbake  {}\n  render-mesh  {}\n  pick-landmarks  {}\n  fit-scan  {}\n  face-model  {}\n  skin-detail  {}\n  face-detail  {}\n\n{PROGRAM} <command> --help lists a command's options.\nExit codes: 0 success, 2 usage, 3 data, 4 GPU, 5 render, 6 file, 7 project, 8 job file,\n9 failed steps or checks, 10 agent server.\n",
         render::RENDER.summary,
         turntable::TURNTABLE.summary,
         serve::SERVE.summary,
@@ -51,7 +52,8 @@ fn usage() -> String {
         scan::PICK_LANDMARKS.summary,
         scan::FIT_SCAN.summary,
         scan::FACE_MODEL.summary,
-        skin_detail::SKIN_DETAIL.summary
+        skin_detail::SKIN_DETAIL.summary,
+        face_detail::FACE_DETAIL.summary
     )
 }
 
@@ -141,6 +143,21 @@ fn run(args: &[String]) -> Result<(), CliError> {
         Some("pick-landmarks") => scan::pick_command(PROGRAM, args.get(1..).unwrap_or(&[])),
         Some("fit-scan") => scan::fit_command(PROGRAM, args.get(1..).unwrap_or(&[])),
         Some("face-model") => scan::face_model_command(PROGRAM, args.get(1..).unwrap_or(&[])),
+        Some("face-detail") => {
+            let Some(parsed) = command(&face_detail::FACE_DETAIL, args)? else { return Ok(()) };
+            let job = face_detail::FaceDetailJob::from_args(&parsed)?;
+            let (share, sd) = face_detail::run(&job)?;
+            println!(
+                "wrote {} ({}²; {:.1} % of the tile used; log-ratio SD r {:.3}, g {:.3}, b {:.3})",
+                job.out.display(),
+                job.size,
+                100.0 * share,
+                sd[0],
+                sd[1],
+                sd[2]
+            );
+            Ok(())
+        }
         Some("skin-detail") => {
             let Some(parsed) = command(&skin_detail::SKIN_DETAIL, args)? else { return Ok(()) };
             let job = skin_detail::SkinDetailJob::from_args(&parsed)?;

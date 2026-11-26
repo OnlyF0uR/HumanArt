@@ -77,6 +77,9 @@ pub struct SurfaceSettings {
     /// Strength of the photographed skin colour detail, 0..=2 (1, the default: the tile as
     /// photographed; 1.5 read as speckles at portrait distance; [`SkinSurface::set_albedo_detail`]).
     pub albedo_detail: f32,
+    /// Strength of the regional colour detail, 0..=2 (1: as captured;
+    /// [`SkinSurface::set_regional_detail`]).
+    pub regional_detail: f32,
 }
 
 impl Default for SurfaceSettings {
@@ -95,6 +98,7 @@ impl Default for SurfaceSettings {
             fuzz_width: 0.4,
             seed: 0x5eed_0001,
             albedo_detail: 1.0,
+            regional_detail: 1.0,
         }
     }
 }
@@ -119,6 +123,7 @@ impl SurfaceSettings {
         }
         if !(0.0..=2.0).contains(&self.detail_strength)
             || !(0.0..=2.0).contains(&self.albedo_detail)
+            || !(0.0..=2.0).contains(&self.regional_detail)
             || ![
                 self.micro_shadowing,
                 self.flush,
@@ -139,13 +144,25 @@ impl SurfaceSettings {
     }
 
     /// `SurfaceParams` of `render/skin_surface.wgsl`.
-    fn bytes(&self, exemplar_mm: f32, albedo_mm: f32, resolved_tiles: u32, wrinkles: bool) -> [u8; PARAMS_BYTES] {
+    fn bytes(
+        &self,
+        exemplar_mm: f32,
+        albedo_mm: f32,
+        regional: Option<u32>,
+        resolved_tiles: u32,
+        wrinkles: bool,
+    ) -> [u8; PARAMS_BYTES] {
         let mut out = [0_u8; PARAMS_BYTES];
         let mut words = [0_u32; PARAMS_BYTES / 4];
         for (t, mm) in self.mm_per_uv.iter().enumerate() {
             let resolved = if (t as u32) < resolved_tiles { t as f32 } else { NO_TILE };
             words[t * 4] = mm.to_bits();
             words[t * 4 + 1] = resolved.to_bits();
+            // The regional colour detail on this tile: z 1 (bound), w its strength.
+            if regional == Some(t as u32) {
+                words[t * 4 + 2] = 1.0_f32.to_bits();
+                words[t * 4 + 3] = self.regional_detail.to_bits();
+            }
         }
         let reference = crate::sss::reference_radius_mm();
         let mean = (reference[0] + reference[1] + reference[2]) / 3.0;
@@ -198,6 +215,7 @@ struct Sources {
     detail: wgpu::TextureView,
     wrinkle_maps: wgpu::TextureView,
     albedo_detail: wgpu::TextureView,
+    regional_detail: wgpu::TextureView,
     activations: wgpu::Buffer,
     tile_slots: wgpu::Buffer,
 }
@@ -221,6 +239,9 @@ pub struct SkinSurface {
     /// Side of the bound colour detail tile, mm (0: none).
     albedo_mm: f32,
     albedo_texture: Option<wgpu::Texture>,
+    /// The UV tile the regional colour detail covers (none bound: `None`).
+    regional_tile: Option<u32>,
+    regional_texture: Option<wgpu::Texture>,
 }
 
 impl std::fmt::Debug for SkinSurface {
@@ -323,6 +344,7 @@ impl SkinSurface {
                     },
                 ),
                 layout_entry(10, texture_type(d2)),
+                layout_entry(11, texture_type(d2)),
             ],
         });
         let mut cache = PipelineCache::new(gpu);
@@ -434,6 +456,14 @@ impl SkinSurface {
                 &[128, 128, 128, 255],
                 d2,
             ),
+            regional_detail: neutral_texture(
+                gpu,
+                "skin surface regional detail",
+                wgpu::TextureFormat::Rgba8Unorm,
+                1,
+                &[128, 128, 128, 255],
+                d2,
+            ),
             activations: storage("skin surface activations", &[0, 0]),
             tile_slots: storage("skin surface wrinkle slots", &[u32::MAX; MAX_UV_TILES]),
         };
@@ -455,6 +485,8 @@ impl SkinSurface {
             detail_texture: None,
             albedo_mm: 0.0,
             albedo_texture: None,
+            regional_tile: None,
+            regional_texture: None,
         };
         surface.write_params(gpu);
         Ok(surface)
@@ -484,6 +516,7 @@ impl SkinSurface {
                 wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::Sampler(repeat) },
                 wgpu::BindGroupEntry { binding: 9, resource: params.as_entire_binding() },
                 wgpu::BindGroupEntry { binding: 10, resource: view(&s.albedo_detail) },
+                wgpu::BindGroupEntry { binding: 11, resource: view(&s.regional_detail) },
             ],
         })
     }
@@ -497,7 +530,13 @@ impl SkinSurface {
         gpu.queue.write_buffer(
             &self.params,
             0,
-            &self.settings.bytes(self.exemplar_mm, self.albedo_mm, self.resolved_tiles, self.wrinkles),
+            &self.settings.bytes(
+                self.exemplar_mm,
+                self.albedo_mm,
+                self.regional_tile,
+                self.resolved_tiles,
+                self.wrinkles,
+            ),
         );
     }
 
@@ -673,47 +712,39 @@ impl SkinSurface {
         side_mm: f32,
         levels: &[Vec<u8>],
     ) -> Result<(), RenderError> {
-        let bad = RenderError::InvalidParameter { what: "skin surface: colour detail mips do not match the side" };
-        if !side.is_power_of_two() || side > 4096 || !(side_mm > 0.0 && side_mm.is_finite()) {
-            return Err(bad);
+        if !(side_mm > 0.0 && side_mm.is_finite()) {
+            return Err(RenderError::InvalidParameter { what: "skin surface: colour detail size must be positive" });
         }
-        let count = 32 - side.leading_zeros();
-        if levels.len() != count as usize {
-            return Err(bad);
-        }
-        for (mip, level) in levels.iter().enumerate() {
-            let s = (side >> mip).max(1) as usize;
-            if level.len() != s * s * 4 {
-                return Err(bad);
-            }
-        }
-        let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("skin colour detail"),
-            size: wgpu::Extent3d { width: side, height: side, depth_or_array_layers: 1 },
-            mip_level_count: count,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
-            view_formats: &[],
-        });
-        for (mip, level) in levels.iter().enumerate() {
-            let s = (side >> mip).max(1);
-            gpu.queue.write_texture(
-                wgpu::TexelCopyTextureInfo {
-                    texture: &texture,
-                    mip_level: mip as u32,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                level,
-                wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(s * 4), rows_per_image: Some(s) },
-                wgpu::Extent3d { width: s, height: s, depth_or_array_layers: 1 },
-            );
-        }
+        let texture = upload_mips(gpu, "skin colour detail", side, levels)?;
         self.sources.albedo_detail = texture.create_view(&wgpu::TextureViewDescriptor::default());
         self.albedo_texture = Some(texture);
         self.albedo_mm = side_mm;
+        self.rebind(gpu);
+        Ok(())
+    }
+
+    /// Binds the regional colour detail of UV tile `tile`
+    /// (`humanart_model::skin_appearance::albedo_detail::regional_detail`): `levels` is its RGBA8
+    /// mip chain (level 0 `side`² over the whole tile, each next level half, down to 1 × 1) of
+    /// encoded log ratios. Editor-time: allocates the texture.
+    ///
+    /// # Errors
+    /// [`RenderError::InvalidParameter`] for a tile outside the table, a side that is not a power
+    /// of two or levels that do not halve to 1 × 1.
+    pub fn set_regional_detail(
+        &mut self,
+        gpu: &Gpu,
+        tile: u32,
+        side: u32,
+        levels: &[Vec<u8>],
+    ) -> Result<(), RenderError> {
+        if tile as usize >= MAX_UV_TILES {
+            return Err(RenderError::InvalidParameter { what: "skin surface: regional detail tile outside the table" });
+        }
+        let texture = upload_mips(gpu, "skin regional detail", side, levels)?;
+        self.sources.regional_detail = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        self.regional_texture = Some(texture);
+        self.regional_tile = Some(tile);
         self.rebind(gpu);
         Ok(())
     }
@@ -725,6 +756,49 @@ impl SkinSurface {
         self.exemplar_mm = 0.0;
         self.rebind(gpu);
     }
+}
+
+/// An RGBA8 texture of `side`² with the mip chain `levels` (each level half the last, down to 1 × 1).
+fn upload_mips(gpu: &Gpu, label: &str, side: u32, levels: &[Vec<u8>]) -> Result<wgpu::Texture, RenderError> {
+    let bad = RenderError::InvalidParameter { what: "skin surface: detail mips do not match the side" };
+    if !side.is_power_of_two() || side > 8192 {
+        return Err(bad);
+    }
+    let count = 32 - side.leading_zeros();
+    if levels.len() != count as usize {
+        return Err(bad);
+    }
+    for (mip, level) in levels.iter().enumerate() {
+        let s = (side >> mip).max(1) as usize;
+        if level.len() != s * s * 4 {
+            return Err(bad);
+        }
+    }
+    let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some(label),
+        size: wgpu::Extent3d { width: side, height: side, depth_or_array_layers: 1 },
+        mip_level_count: count,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    for (mip, level) in levels.iter().enumerate() {
+        let s = (side >> mip).max(1);
+        gpu.queue.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &texture,
+                mip_level: mip as u32,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            level,
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(s * 4), rows_per_image: Some(s) },
+            wgpu::Extent3d { width: s, height: s, depth_or_array_layers: 1 },
+        );
+    }
+    Ok(texture)
 }
 
 /// IEEE half-precision bits of `v` (round to nearest even; finite inputs in the half range).
@@ -783,13 +857,17 @@ mod tests {
         let mut s = SurfaceSettings::default();
         s.mm_per_uv[1] = 500.0;
         s.seed = 7;
-        let bytes = s.bytes(10.24, 19.2, 2, true);
+        let bytes = s.bytes(10.24, 19.2, Some(1), 2, true);
         let word = |i: usize| u32::from_le_bytes([bytes[4 * i], bytes[4 * i + 1], bytes[4 * i + 2], bytes[4 * i + 3]]);
         let float = |i: usize| f32::from_bits(word(i));
         // tiles[1] = (500, 1, 0, 0); tiles[2] has no resolved tile.
         assert_eq!(float(4), 500.0);
         assert_eq!(float(5), 1.0);
         assert_eq!(float(9), NO_TILE);
+        // tiles[1].zw: the regional detail is bound there, at its strength.
+        assert_eq!(float(6), 1.0);
+        assert_eq!(float(7), s.regional_detail);
+        assert_eq!(float(10), 0.0);
         // detail, coat, fuzz, misc after the 16 tiles.
         assert_eq!(float(64), 10.24);
         assert_eq!(float(65), s.detail_strength);

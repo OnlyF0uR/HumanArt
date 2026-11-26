@@ -38,7 +38,8 @@ const COAT_F0: f32 = 0.03;
 const BAKED_THICKNESS_RANGE_MM: f32 = 25.5;
 
 struct SurfaceParams {
-    // Per UV tile: x mm of skin per UV unit (0: not surfaced), y the resolved-set tile (< 0: none).
+    // Per UV tile: x mm of skin per UV unit (0: not surfaced), y the resolved-set tile (< 0: none),
+    // z 1 where the regional colour detail covers the tile, w its strength.
     tiles: array<vec4<f32>, 16>,
     // Exemplar side mm (0: no micro-detail), detail strength, micro-shadowing strength, flush 0..1.
     detail: vec4<f32>,
@@ -328,6 +329,14 @@ fn skin_surface(
     if (albedo_side > 0.0 && albedo_strength > 0.0) {
         s.albedo = s.albedo
             * albedo_detail(local * info.x, duvx * info.x, duvy * info.x, albedo_side, albedo_strength, surface.misc.x);
+    }
+    // Regional colour detail (todo 1, ADR-060): a captured face's medium-scale skin structure,
+    // mapped to the tile's UVs.
+    if (info.z > 0.5 && info.w > 0.0) {
+        let size = f32(textureDimensions(skin_regional_detail).x);
+        let lod = mip_level(duvx * size, duvy * size);
+        let c = textureSampleLevel(skin_regional_detail, clamp_sampler, local, lod).rgb;
+        s.albedo = s.albedo * exp((c - vec3<f32>(0.5)) * (ALBEDO_DETAIL_LOG_RANGE * info.w));
     }
     if (frame.valid) {
         let bent = n - slope.x * frame.t - slope.y * frame.b;

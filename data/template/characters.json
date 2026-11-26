@@ -50,7 +50,7 @@
     "skin.makeup.lips.gloss": 0.7,
     "skin.makeup.lips.liner": 0.35,
     "skin.makeup.blush.amount": 0.4,
-    "skin.makeup.contour.amount": 0.55,
+    "skin.makeup.contour.amount": 0.3,
     "skin.makeup.highlight.amount": 0.5,
     "brows_lashes.lashes.thickness": 0.8,
     "face.nose.bridge_height": 1.0,
@@ -71,7 +71,10 @@
     "face.mouth.protrusion": -0.8,
     "face.cheeks.cheekbone_prominence": 1.0,
     "body.proportions.shoulder_width": 0.6,
-    "eyes.sclera.tint": [0.66, 0.6, 0.56]
+    "eyes.sclera.tint": [0.66, 0.6, 0.56],
+    "skin.pigment.haemoglobin": 0.42,
+    "skin.pigment.carotene": 0.18,
+    "skin.pigment.melanin": 0.26
    }
   },
   {

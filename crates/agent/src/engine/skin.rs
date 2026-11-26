@@ -77,9 +77,21 @@ const ALBEDO_DETAIL_PNG: &[u8] = include_bytes!("../../../../data/template/skin/
 /// Skin the tile covers, mm (256 texels of the scan's 0.075 mm).
 pub const ALBEDO_DETAIL_MM: f32 = 19.2;
 
+/// The regional colour detail of the face tile (`skin_appearance::albedo_detail::regional_detail`,
+/// made by `humanart-cli face-detail` from the fit of HSRD-100 HSR0015-Body-023, CC BY 4.0;
+/// ADR-060).
+const FACE_DETAIL_PNG: &[u8] = include_bytes!("../../../../data/template/skin/face-detail.png");
+/// The UV tile the face detail covers.
+pub const FACE_DETAIL_TILE: &str = "face";
+
 /// The colour detail tile's side and mip chain, decoded once.
 fn albedo_detail_levels() -> Result<(u32, Vec<Vec<u8>>), EngineError> {
-    let image = humanart_io::png::decode(ALBEDO_DETAIL_PNG, &humanart_io::Limits::DEFAULT)
+    detail_levels(ALBEDO_DETAIL_PNG)
+}
+
+/// The side and mip chain of a square RGB(A)8 detail PNG.
+fn detail_levels(png: &[u8]) -> Result<(u32, Vec<Vec<u8>>), EngineError> {
+    let image = humanart_io::png::decode(png, &humanart_io::Limits::DEFAULT)
         .map_err(|_| EngineError::Invalid { what: "the skin colour detail tile does not decode" })?;
     let samples = image.as_u8().ok_or(EngineError::Invalid { what: "the skin colour detail tile is not 8-bit" })?;
     let rgba: Vec<u8> = match image.channels {
@@ -697,6 +709,11 @@ impl SkinLook {
         surface.set_micro_detail(gpu, &self.plan)?;
         let (side, levels) = albedo_detail_levels()?;
         surface.set_albedo_detail(gpu, side, ALBEDO_DETAIL_MM, &levels)?;
+        if let Some(tile) = self.template.tiles().iter().position(|t| t.name == FACE_DETAIL_TILE) {
+            let (side, levels) = detail_levels(FACE_DETAIL_PNG)?;
+            let tile = u32::try_from(tile).map_err(|_| EngineError::Invalid { what: "skin tile index" })?;
+            surface.set_regional_detail(gpu, tile, side, &levels)?;
+        }
         Ok(())
     }
 
@@ -1242,8 +1259,8 @@ mod tests {
         assert!(side.is_power_of_two());
         assert_eq!(levels.len(), (32 - side.leading_zeros()) as usize);
         let top = levels.last().unwrap();
-        for c in 0..3 {
-            let l = humanart_model::skin_appearance::albedo_detail::decode(top[c]);
+        for (c, &code) in top.iter().take(3).enumerate() {
+            let l = humanart_model::skin_appearance::albedo_detail::decode(code);
             assert!(l.abs() < 0.05, "channel {c} mean log ratio {l}");
         }
     }

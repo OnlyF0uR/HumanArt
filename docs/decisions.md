@@ -967,3 +967,20 @@ Amends ADR-002 (profiles).
   own textures in reality): region-specific tiles (forehead, nose, lips, body) are the next step.
   The tile is a piece of one consenting person's skin under CC BY 4.0 (ADR-056).
 - Source: the lead, 2026-11-25.
+
+## ADR-060: The face takes a captured face's fine skin structure, mapped to its UVs
+
+- **Context.** ADR-059's tile repeats one 19 mm patch everywhere: real faces differ by region
+  (nose pores, forehead texture, the fine mottling of the cheeks).
+- **Decision.** `humanart-cli face-detail` makes a regional colour detail map of the face UV tile
+  from a fitted scan's transferred albedo (`fit-scan`): log ratio over a masked blur of 3 mm,
+  soft-limited (±0.12), only where the fit reached the scan within 1.5 mm, on the forehead, nose,
+  cheeks, malar, chin and philtrum, and not on texels much darker (0.75 of the median, 0.78 of the
+  surroundings) or redder (1.3) than the skin (hair, liner, lipstick). The skin shader multiplies
+  it in on that tile (`render/skin_surface.wgsl`, binding 11, `tiles[t].zw`), on top of the
+  periodic tile. Larger scales were tried and refused: at 20 mm and 8 mm the map carried the
+  capture's leftover shading and the shadow of her hair as dirty blotches on the cheek and jaw.
+- **Consequences.** One scan (HSR0015-Body-023, CC BY 4.0), so the map covers the parts of the face
+  her hair did not (about 4 % of the tile's texels, the face's front); the other side of the face
+  and the eyes tile get the periodic tile only. More scans would fill the gaps.
+- Source: the lead, 2026-11-26.

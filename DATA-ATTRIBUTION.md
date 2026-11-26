@@ -25,6 +25,12 @@ so the capture's light and the person's base colour drop out), made periodic and
 ratios (`humanart-cli skin-detail`). It holds no face, feature or name; HSRD-100's licence applies to
 it.
 
+`data/template/skin/face-detail.png`, the regional skin colour detail of the face (embedded in
+`humanart-agent`), is derived from the same scan: its colour texture transferred onto HumanArt's
+template layout by a template-to-scan fit, then high-passed below 3 mm (only the fine mottling
+stays) on the forehead, nose, cheeks, chin and philtrum, with makeup, brows, lips, eyes and hair
+left out. It holds no base colour, feature or name.
+
 ## ISSA (CC BY 4.0)
 
 `data/test-scenes/skin-reference.json` holds summary values computed from: Lu Y. et al. 2025, "The
