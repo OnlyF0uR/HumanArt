@@ -224,9 +224,35 @@ fn voxel_tau(p: vec3<f32>, d: vec3<f32>) -> f32 {
     return tau;
 }
 
+// The optical depth of deep opacity map `m` at map coordinate `uv` for a point at reversed light
+// depth `z`: bilinear over the four nearest texels of the optical depth itself (a nearest lookup
+// of the first-fibre depth shows the map's texels as steps where the hair's edge crosses).
+fn dom_tau_at(m: u32, uv: vec2<f32>, z: f32, params: vec4<f32>) -> f32 {
+    let dims = vec2<i32>(textureDimensions(dom_depth).xy);
+    let x = uv * vec2<f32>(dims) - vec2<f32>(0.5);
+    let base = vec2<i32>(floor(x));
+    let f = x - floor(x);
+    var taus = vec4<f32>(0.0);
+    for (var k = 0; k < 4; k++) {
+        let texel = clamp(base + vec2<i32>(k & 1, k >> 1u), vec2<i32>(0), dims - vec2<i32>(1));
+        let first = textureLoad(dom_depth, texel, i32(m), 0);
+        if (first > 0.0) {
+            let behind = (first - z) * 2.0 * params.x - params.w;
+            let layers = textureLoad(dom_opacity, texel, i32(m), 0);
+            taus[k] = hair_dom_tau(layers, view.dom_layers, behind);
+        }
+    }
+    return mix(mix(taus.x, taus.y, f.x), mix(taus.z, taus.w, f.x), f.y);
+}
+
 // The expected fibres crossed from `p` towards light slot `slot`: its deep opacity map, or the
-// density grid along `l`.
-fn hair_tau(slot: u32, p: vec3<f32>, l: vec3<f32>) -> f32 {
+// density grid along `l`. `soft` takes a 4 x 4 grid of bilinear lookups one texel apart (weights
+// 1-2-2-1 per axis, texel weights 1-3-4-3-1): the shadow the hair casts on the skin. The weights
+// cancel a pattern that flips from texel to texel exactly (hair lying on the skin, a strand just in
+// front of it in one texel and just behind in the next). With a single bilinear lookup the
+// shadow's edge kept the map's texel steps, dark square stairs on the temple beside the hairline in
+// three-quarter views (2026-11-26); taps two texels apart aliased that flip into a checkerboard.
+fn hair_tau_filtered(slot: u32, p: vec3<f32>, l: vec3<f32>, soft: bool) -> f32 {
     for (var m = 0u; m < min(view.counts.y, HAIR_MAX_DOMS); m++) {
         let params = view.dom_params[m];
         if (u32(params.y) != slot) {
@@ -237,25 +263,26 @@ fn hair_tau(slot: u32, p: vec3<f32>, l: vec3<f32>) -> f32 {
         if (any(uv <= vec2<f32>(0.0)) || any(uv >= vec2<f32>(1.0))) {
             return 0.0;
         }
-        // Bilinear over the four nearest texels of the optical depth itself (a nearest lookup of
-        // the first-fibre depth shows the map's texels as steps where the hair's edge crosses).
-        let dims = vec2<i32>(textureDimensions(dom_depth).xy);
-        let x = uv * vec2<f32>(dims) - vec2<f32>(0.5);
-        let base = vec2<i32>(floor(x));
-        let f = x - floor(x);
-        var taus = vec4<f32>(0.0);
-        for (var k = 0; k < 4; k++) {
-            let texel = clamp(base + vec2<i32>(k & 1, k >> 1u), vec2<i32>(0), dims - vec2<i32>(1));
-            let first = textureLoad(dom_depth, texel, i32(m), 0);
-            if (first > 0.0) {
-                let behind = (first - local.z) * 2.0 * params.x - params.w;
-                let layers = textureLoad(dom_opacity, texel, i32(m), 0);
-                taus[k] = hair_dom_tau(layers, view.dom_layers, behind);
+        if (!soft) {
+            return dom_tau_at(m, uv, local.z, params);
+        }
+        let texel = 1.0 / vec2<f32>(textureDimensions(dom_depth).xy);
+        var tau = 0.0;
+        for (var j = 0; j < 4; j++) {
+            for (var i = 0; i < 4; i++) {
+                let o = vec2<f32>(f32(i) - 1.5, f32(j) - 1.5);
+                let w = f32((1 + min(i, 3 - i)) * (1 + min(j, 3 - j)));
+                tau += w * dom_tau_at(m, uv + o * texel, local.z, params);
             }
         }
-        return mix(mix(taus.x, taus.y, f.x), mix(taus.z, taus.w, f.x), f.y);
+        return tau / 36.0;
     }
     return voxel_tau(p, l);
+}
+
+// The hair's own shadowing (one bilinear lookup).
+fn hair_tau(slot: u32, p: vec3<f32>, l: vec3<f32>) -> f32 {
+    return hair_tau_filtered(slot, p, l, false);
 }
 
 // The six axis directions of the ambient occlusion estimate.
@@ -295,7 +322,7 @@ fn skin_factor(position: vec2<f32>, z: f32) -> f32 {
         }
         let lit = e * scene_visibility(light, p, inc.l);
         total += lit;
-        shadowed += lit * (1.0 - exp(-hair_tau(i, p, inc.l)));
+        shadowed += lit * (1.0 - exp(-hair_tau_filtered(i, p, inc.l, true)));
     }
     if (total <= 0.0) {
         return 1.0;
